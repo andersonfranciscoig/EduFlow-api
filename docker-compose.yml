@@ -1,0 +1,30 @@
+# Nome do projeto fixo: o contentor e o volume existentes pertencem ao projeto "eduflow".
+name: eduflow
+
+services:
+  # PostgreSQL de desenvolvimento.
+  #  - BD "eduflow_platform": Módulo 1 (plataforma).
+  #  - BDs "tenant_*": uma por colégio (Módulo 2), criadas pelo provisioner.
+  # O utilizador "eduflow" (superutilizador) só é usado para administração
+  # (scripts/setup-dev.sh). Os serviços usam utilizadores de privilégios mínimos.
+  # Em produção: cluster separado para as BDs dos colégios e sem porta exposta.
+  platform-db:
+    image: postgres:16-alpine
+    container_name: eduflow-platform-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: eduflow
+      POSTGRES_PASSWORD: eduflow
+      POSTGRES_DB: eduflow_platform
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - eduflow-platform-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eduflow -d eduflow_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  eduflow-platform-data:

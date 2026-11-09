@@ -1,0 +1,31 @@
+// =============================================================================
+//  EduFlow — Base de dados de CADA COLÉGIO (Módulo 2)
+//  Uma base de dados por colégio, com o seu próprio utilizador PostgreSQL.
+//  As migrações (prisma/tenant/migrations) são aplicadas pelo provisioner.
+//  Gerar o SQL de uma nova migração: pnpm db:tenant-sql
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/tenant-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Só usado pelo CLI; em runtime o URL é montado a partir do diretório.
+  url      = env("TENANT_DATABASE_URL")
+}
+
+/// Identidade do colégio dentro da sua própria base de dados (linha única).
+model TenantInfo {
+  id        Int      @id @default(1)
+  schoolId  String   @map("school_id") @db.Uuid
+  slug      String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("tenant_info")
+}
+
+// A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
+// diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

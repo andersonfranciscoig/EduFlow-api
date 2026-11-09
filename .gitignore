@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-test
+generated
+storage
+*.tsbuildinfo
+coverage
+
+# segredos e ambientes — nunca no repositório
+secrets/
+.env
+apps/*/.env
+!**/.env.example

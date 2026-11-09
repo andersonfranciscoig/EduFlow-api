@@ -1,0 +1,299 @@
+// =============================================================================
+//  EduFlow — Base de dados da PLATAFORMA (Módulo 1)
+//  Contém apenas dados da empresa: equipa interna, clientes (colégios), planos…
+//  Os dados de cada colégio vivem numa base de dados própria (Módulo 2).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/platform-client"
+}
+
+// O CLI (migrações) liga-se como "migrator". As apps ligam-se cada uma com o
+// seu próprio utilizador de privilégios mínimos (URL passado em runtime).
+datasource db {
+  provider = "postgresql"
+  url      = env("PLATFORM_MIGRATOR_URL")
+}
+
+enum StaffRole {
+  ADMIN
+  GESTOR
+}
+
+enum StaffStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+}
+
+model StaffMember {
+  id                  String      @id @db.Uuid
+  fullName            String      @map("full_name")
+  email               String?     @unique
+  phone               String?     @unique
+  passwordHash        String      @map("password_hash")
+  role                StaffRole
+  status              StaffStatus
+  /// Permissões atribuídas individualmente (além das do papel)
+  extraPermissions    String[]    @default([]) @map("extra_permissions")
+  failedLoginAttempts Int         @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?   @map("locked_until")
+  lastLoginAt         DateTime?   @map("last_login_at")
+
+  /// 2FA (TOTP). Segredos cifrados com AES-256-GCM (chave só no platform-api).
+  mfaSecretCiphertext        String?   @map("mfa_secret_ciphertext")
+  mfaPendingSecretCiphertext String?   @map("mfa_pending_secret_ciphertext")
+  mfaEnabledAt               DateTime? @map("mfa_enabled_at")
+  /// Último intervalo TOTP aceite — impede reutilizar o mesmo código.
+  mfaLastUsedStep            Int?      @map("mfa_last_used_step")
+  /// Hashes SHA-256 dos códigos de recuperação ainda por usar.
+  mfaRecoveryCodeHashes      String[]  @default([]) @map("mfa_recovery_code_hashes")
+
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+
+  activities      StaffActivity[] @relation("ActivitySubject")
+  actedActivities StaffActivity[] @relation("ActivityActor")
+  sessions        StaffSession[]
+
+  @@map("staff_members")
+}
+
+/// Sessões da equipa: cada login cria uma; os tokens só valem enquanto a
+/// sessão estiver ativa (revogável a qualquer momento).
+model StaffSession {
+  id            String      @id @db.Uuid
+  staffId       String      @map("staff_id") @db.Uuid
+  staff         StaffMember @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  ip            String?
+  userAgent     String?     @map("user_agent")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  lastSeenAt    DateTime    @map("last_seen_at")
+  expiresAt     DateTime    @map("expires_at")
+  /// Última verificação 2FA (login ou confirmação de ação sensível).
+  mfaVerifiedAt DateTime    @map("mfa_verified_at")
+  revokedAt     DateTime?   @map("revoked_at")
+  revokedReason String?     @map("revoked_reason")
+
+  @@index([staffId, revokedAt])
+  @@map("staff_sessions")
+}
+
+/// Histórico de atividade da equipa (eventos de domínio do StaffMember).
+model StaffActivity {
+  id         String       @id @db.Uuid
+  type       String
+  subjectId  String       @map("subject_id") @db.Uuid
+  subject    StaffMember  @relation("ActivitySubject", fields: [subjectId], references: [id], onDelete: Cascade)
+  actorId    String?      @map("actor_id") @db.Uuid
+  actor      StaffMember? @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  details    Json?
+  occurredAt DateTime     @map("occurred_at")
+
+  @@index([subjectId, occurredAt(sort: Desc)])
+  @@index([actorId, occurredAt(sort: Desc)])
+  @@map("staff_activity")
+}
+
+// =============================================================================
+//  FATURAÇÃO — planos, definições, contas bancárias
+//  Valores monetários em Kwanzas (AOA), inteiros.
+// =============================================================================
+
+model Plan {
+  id           String   @id @db.Uuid
+  code         String   @unique
+  name         String
+  description  String
+  monthlyPrice Int      @map("monthly_price")
+  maxStudents  Int?     @map("max_students")
+  features     String[] @default([])
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("plans")
+}
+
+/// Linha única (id = 1) com as definições de faturação.
+model BillingSettings {
+  id                    Int      @id @default(1)
+  quarterlyDiscountPct  Int      @map("quarterly_discount_pct")
+  annualDiscountPct     Int      @map("annual_discount_pct")
+  referenceEntity       String   @map("reference_entity")
+  referenceProvider     String   @map("reference_provider")
+  referenceValidityDays Int      @map("reference_validity_days")
+  transferInstructions  String?  @map("transfer_instructions")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("billing_settings")
+}
+
+model BankAccount {
+  id        String   @id @db.Uuid
+  bankName  String   @map("bank_name")
+  holder    String
+  iban      String   @unique
+  swift     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("bank_accounts")
+}
+
+// =============================================================================
+//  COLÉGIOS (clientes) — registo, subscrição e ciclo de pagamento
+// =============================================================================
+
+enum SchoolStatus {
+  PENDING_REVIEW
+  AWAITING_PAYMENT
+  PAYMENT_UNDER_REVIEW
+  ACTIVE
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING_REVIEW
+  AWAITING_PAYMENT
+  PROOF_SUBMITTED
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  REFERENCE
+  TRANSFER
+}
+
+model School {
+  id                 String       @id @db.Uuid
+  /// Identificador público (subdomínio do portal do colégio)
+  slug               String?      @unique
+  name               String
+  nif                String       @unique
+  phone              String
+  province           String
+  municipality       String
+  address            String
+  ownerName          String       @map("owner_name")
+  ownerEmail         String       @unique @map("owner_email")
+  ownerPasswordHash  String       @map("owner_password_hash")
+  status             SchoolStatus
+  rejectionReason    String?      @map("rejection_reason")
+  subscriptionEndsAt DateTime?    @map("subscription_ends_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  orders     SubscriptionOrder[]
+  activities SchoolActivity[]
+  provisioning TenantProvisioningJob?
+  database     TenantDatabase?
+
+  @@index([status])
+  @@map("schools")
+}
+
+// =============================================================================
+//  PROVISIONAMENTO — base de dados própria de cada colégio
+// =============================================================================
+
+enum ProvisioningStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Outbox: escrito pela plataforma (na mesma transação da ativação) e
+/// processado pelo "provisioner". Leva consigo o que o provisioner precisa,
+/// para que este não tenha acesso à tabela de colégios.
+model TenantProvisioningJob {
+  id         String             @id @db.Uuid
+  schoolId   String             @unique @map("school_id") @db.Uuid
+  school     School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  slug       String
+  schoolName String             @map("school_name")
+  status     ProvisioningStatus @default(PENDING)
+  attempts   Int                @default(0)
+  lastError  String?            @map("last_error")
+  createdAt  DateTime           @default(now()) @map("created_at")
+  updatedAt  DateTime           @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("tenant_provisioning_jobs")
+}
+
+/// Diretório de colégios — a ÚNICA tabela da plataforma que o school-api lê.
+/// A senha da BD do colégio está cifrada com a chave pública do school-api.
+model TenantDatabase {
+  schoolId           String   @id @map("school_id") @db.Uuid
+  school             School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  slug               String   @unique
+  schoolName         String   @map("school_name")
+  dbHost             String   @map("db_host")
+  dbPort             Int      @map("db_port")
+  dbName             String   @unique @map("db_name")
+  dbUser             String   @map("db_user")
+  passwordCiphertext String   @map("password_ciphertext")
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@map("tenant_databases")
+}
+
+model SubscriptionOrder {
+  id               String      @id @db.Uuid
+  number           String      @unique
+  schoolId         String      @map("school_id") @db.Uuid
+  school           School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  planId           String      @map("plan_id") @db.Uuid
+  planName         String      @map("plan_name")
+  planMonthlyPrice Int         @map("plan_monthly_price")
+  cycle            String
+  months           Int
+  subtotal         Int
+  discountPct      Int         @map("discount_pct")
+  total            Int
+  status           OrderStatus
+  paymentMethod    PaymentMethod? @map("payment_method")
+
+  referenceEntity    String?   @map("reference_entity")
+  referenceNumber    String?   @unique @map("reference_number")
+  referenceExpiresAt DateTime? @map("reference_expires_at")
+
+  bankName   String? @map("bank_name")
+  bankHolder String? @map("bank_holder")
+  bankIban   String? @map("bank_iban")
+
+  transactionNumber    String?   @map("transaction_number")
+  proofKey             String?   @map("proof_key")
+  proofFileName        String?   @map("proof_file_name")
+  proofMimeType        String?   @map("proof_mime_type")
+  proofSubmittedAt     DateTime? @map("proof_submitted_at")
+  proofRejectionReason String?   @map("proof_rejection_reason")
+
+  paidAt    DateTime? @map("paid_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([schoolId, createdAt(sort: Desc)])
+  @@map("subscription_orders")
+}
+
+/// Histórico do colégio (eventos de domínio do agregado School).
+model SchoolActivity {
+  id           String   @id @db.Uuid
+  schoolId     String   @map("school_id") @db.Uuid
+  school       School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  type         String
+  actorStaffId String?  @map("actor_staff_id") @db.Uuid
+  details      Json?
+  occurredAt   DateTime @map("occurred_at")
+
+  @@index([schoolId, occurredAt(sort: Desc)])
+  @@map("school_activity")
+}
