@@ -39,12 +39,23 @@ export const signUpSchema = z
       .meta({ example: "Ana Paula Domingos" }),
     password: password.meta({ description: "8+ caracteres, com letras e números", example: "Senha1234" }),
     emailProof: z
-      .string({ error: "Confirme primeiro o seu email." })
+      .string()
       .min(20, "Confirme primeiro o seu email.")
       .max(200)
-      .meta({ description: "Devolvido por POST sign-up/code/verify (30 min, uso único)" }),
+      .optional()
+      .meta({ description: "Devolvido por POST sign-up/code/verify (30 min, uso único). Não é preciso com inviteToken." }),
+    inviteToken: z.string().min(20).max(200).optional().meta({ description: "Token do link do convite (o link prova o email)" }),
   })
   .meta({ title: "SignUpRequest" });
+
+export const invitationLookupSchema = z.object({ token: z.string({ error: "Convite inválido." }).min(20, "Convite inválido.").max(200) }).meta({ title: "InvitationLookup" });
+export const inviteSchema = z
+  .object({
+    email: z.string({ error: "Indique o email." }).trim().min(1, "Indique o email.").max(254).meta({ example: "maria@eduflow.ao" }),
+    role: z.enum(STAFF_ROLES, { error: "Escolha o papel." }),
+  })
+  .meta({ title: "StaffInvite" });
+export type InviteBody = z.infer<typeof inviteSchema>;
 
 // ------------------------------------------------------------------ códigos por email
 

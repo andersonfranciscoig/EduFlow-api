@@ -8,9 +8,15 @@ import { SecretBox } from "../../../../../../libs/kernel/src/infrastructure/secr
 import { systemClock, uuidGenerator } from "../../../../../../libs/kernel/src/infrastructure/system";
 import { generateRecoveryCodes, hashRecoveryCode, totp } from "../../../../../../libs/kernel/src/infrastructure/totp";
 import { PlatformDatabaseModule } from "../infrastructure/platform-database.module";
+import type { Mailer } from "../../../../../../libs/kernel/src/infrastructure/mail";
+import { generateProof, hashProof } from "../../../../../../libs/kernel/src/infrastructure/otp";
 import { EmailVerificationService } from "../verification/application/EmailVerificationService";
-import { VerificationModule } from "../verification/verification.module";
+import { PLATFORM_MAILER, VerificationModule } from "../verification/verification.module";
 import { StaffEmailAccess } from "./application/use-cases/StaffEmailAccess";
+import { StaffInvitations } from "./application/use-cases/StaffInvitations";
+import { EmailInvitationMailer } from "./infrastructure/invitation-mailer";
+import { PrismaStaffInvitationRepository } from "./infrastructure/PrismaStaffInvitationRepository";
+import { InvitationsController } from "./presentation/http/invitations.controller";
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
 import {
   type AccessTokenService,
@@ -68,7 +74,7 @@ import { StaffController } from "./presentation/http/staff.controller";
       }),
     }),
   ],
-  controllers: [AuthController, StaffController],
+  controllers: [AuthController, StaffController, InvitationsController],
   providers: [
     // --- portas → adaptadores
     { provide: T.Clock, useValue: systemClock },
@@ -146,9 +152,32 @@ import { StaffController } from "./presentation/http/staff.controller";
       inject: [T.StaffMemberRepository, T.IdentitySettings],
       useFactory: (repo: StaffMemberRepository, settings: IdentitySettings) => new IdentifyStaffMember(repo, settings),
     },
+    // --- convites (só quem é convidado cria conta)
+    {
+      provide: StaffInvitations,
+      inject: [PlatformPrismaService, T.StaffMemberRepository, PLATFORM_MAILER, T.IdGenerator, T.Clock, T.IdentitySettings, ConfigService],
+      useFactory: (
+        prisma: PlatformPrismaService,
+        repo: StaffMemberRepository,
+        mailer: Mailer,
+        ids: IdGenerator,
+        clock: Clock,
+        settings: IdentitySettings,
+        config: ConfigService<Env, true>,
+      ) =>
+        new StaffInvitations(
+          new PrismaStaffInvitationRepository(prisma),
+          repo,
+          new EmailInvitationMailer(mailer),
+          { generate: generateProof, hash: hashProof },
+          ids,
+          clock,
+          { ...settings, signUpUrl: `${config.get("FRONTEND_URL", { infer: true }).replace(/\/$/, "")}/criar-conta` },
+        ),
+    },
     {
       provide: RegisterStaffMember,
-      inject: [T.StaffMemberRepository, T.PasswordHasher, T.IdGenerator, T.Clock, T.IdentitySettings, EmailVerificationService],
+      inject: [T.StaffMemberRepository, T.PasswordHasher, T.IdGenerator, T.Clock, T.IdentitySettings, EmailVerificationService, StaffInvitations],
       useFactory: (
         repo: StaffMemberRepository,
         hasher: PasswordHasher,
@@ -156,11 +185,21 @@ import { StaffController } from "./presentation/http/staff.controller";
         clock: Clock,
         settings: IdentitySettings,
         verification: EmailVerificationService,
-      ) => new RegisterStaffMember(repo, hasher, ids, clock, settings, verification),
+        invitations: StaffInvitations,
+      ) => new RegisterStaffMember(repo, hasher, ids, clock, settings, verification, invitations),
     },
     {
       provide: StaffEmailAccess,
-      inject: [T.StaffMemberRepository, T.StaffSessionRepository, EmailVerificationService, T.PasswordHasher, StaffSecurity, T.Clock, T.IdentitySettings],
+      inject: [
+        T.StaffMemberRepository,
+        T.StaffSessionRepository,
+        EmailVerificationService,
+        T.PasswordHasher,
+        StaffSecurity,
+        T.Clock,
+        T.IdentitySettings,
+        StaffInvitations,
+      ],
       useFactory: (
         repo: StaffMemberRepository,
         sessions: StaffSessionRepository,
@@ -169,7 +208,8 @@ import { StaffController } from "./presentation/http/staff.controller";
         security: StaffSecurity,
         clock: Clock,
         settings: IdentitySettings,
-      ) => new StaffEmailAccess(repo, sessions, verification, hasher, security, clock, settings),
+        invitations: StaffInvitations,
+      ) => new StaffEmailAccess(repo, sessions, verification, hasher, security, clock, settings, invitations),
     },
     {
       provide: AuthenticateStaffMember,

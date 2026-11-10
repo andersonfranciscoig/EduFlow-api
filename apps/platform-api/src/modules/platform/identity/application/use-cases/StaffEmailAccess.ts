@@ -10,6 +10,7 @@ import { EmailAddress } from "../../domain/value-objects/EmailAddress";
 import { parseLoginIdentifier } from "../../domain/value-objects/LoginIdentifier";
 import { PlainPassword } from "../../domain/value-objects/Password";
 import type { IdentitySettings, PasswordHasher } from "../ports";
+import type { StaffInvitations } from "./StaffInvitations";
 import type { LoginStep, StaffSecurity } from "./StaffSecurity";
 
 type Err = IdentityError | VerificationError;
@@ -29,6 +30,7 @@ export class StaffEmailAccess {
     private readonly security: StaffSecurity,
     private readonly clock: Clock,
     private readonly settings: IdentitySettings,
+    private readonly invitations: StaffInvitations,
   ) {}
 
   // ================================================================ criar conta
@@ -39,6 +41,10 @@ export class StaffEmailAccess {
     const identifier = parseLoginIdentifier(email.value.value, this.settings.defaultPhoneCountryCode);
     if (identifier.ok && (await this.members.findByIdentifier(identifier.value))) {
       return fail(identityError("ACCOUNT_ALREADY_EXISTS", "Já existe uma conta com este email. Inicie sessão."));
+    }
+    // o painel da equipa é só para quem foi convidado (exceto o primeiro membro)
+    if ((await this.members.count()) > 0 && !(await this.invitations.forSignUp(email.value.value))) {
+      return fail(identityError("STAFF_NOT_INVITED", "Apenas pessoas autorizadas têm acesso a este painel."));
     }
     return this.verification.send({ purpose: "STAFF_SIGN_UP", email: email.value.value });
   }

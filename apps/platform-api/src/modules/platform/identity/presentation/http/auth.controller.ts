@@ -45,6 +45,8 @@ import {
 import { unwrap } from "../../../../../../../../libs/kernel/src/presentation/domain-http";
 import { VERIFICATION_HTTP } from "../../../verification/verification.module";
 import { StaffEmailAccess } from "../../application/use-cases/StaffEmailAccess";
+import { StaffInvitations } from "../../application/use-cases/StaffInvitations";
+import { invitationLookupSchema } from "./auth.schemas";
 import { Client } from "./client-info";
 import { STATUS_BY_CODE, toHttpException } from "./identity-http-error";
 import { CurrentStaff, RequireRecentMfa, StaffAuth } from "./staff-auth";
@@ -72,6 +74,7 @@ export class AuthController {
     private readonly getProfile: GetStaffProfile,
     private readonly security: StaffSecurity,
     private readonly emailAccess: StaffEmailAccess,
+    private readonly invitations: StaffInvitations,
   ) {}
 
   // ================================================================ 1.º fator
@@ -111,8 +114,9 @@ export class AuthController {
   @Post("sign-up")
   @Throttle({ default: { limit: 5, ttl: 15 * MINUTE } })
   @ApiOperation({
-    summary: "Criar conta da equipa",
-    description: "O primeiro membro torna-se ADMIN e segue para a configuração da 2FA. Os seguintes aguardam aprovação.",
+    summary: "Criar conta da equipa (só com convite)",
+    description:
+      "O primeiro membro torna-se ADMIN. Depois disso só quem foi convidado: com o link do convite (inviteToken) ou com o email confirmado por código (emailProof). Entra ativo, com o papel do convite, e segue para a 2FA.",
   })
   @ApiBody({ schema: openApi(signUpSchema) })
   @ApiResponse({ status: 201, description: "Conta criada", schema: openApi(signUpResponseSchema, "output") })
@@ -124,6 +128,18 @@ export class AuthController {
     if (status !== "ACTIVE") return { role, status, firstName };
     const step = await this.security.afterPassword({ id: principal.id, mfaEnabled: false });
     return { role, status: step.status, challengeToken: step.challengeToken, firstName };
+  }
+
+  // ================================================================ convites
+
+  @Post("invitation")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Abrir um convite (link do email)", description: "Devolve o email e o papel do convite, se ainda for válido." })
+  @ApiBody({ schema: openApi(invitationLookupSchema) })
+  @ApiResponse({ status: 410, description: "Convite expirado, usado ou cancelado", schema: error })
+  async invitation(@Body(new ZodValidationPipe(invitationLookupSchema)) body: { token: string }) {
+    return unwrap(await this.invitations.lookup(body.token), ERRORS);
   }
 
   // ================================================================ códigos por email

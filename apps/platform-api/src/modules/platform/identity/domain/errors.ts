@@ -12,6 +12,9 @@ export type IdentityErrorCode =
   | "ACCOUNT_PENDING_APPROVAL"
   | "ACCOUNT_SUSPENDED"
   | "ACCOUNT_NOT_FOUND"
+  // convites
+  | "STAFF_NOT_INVITED"
+  | "INVITATION_INVALID"
   // gestão da equipa
   | "MEMBER_NOT_FOUND"
   | "CANNOT_MANAGE_SELF"

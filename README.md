@@ -142,6 +142,15 @@ Regras de segurança:
   partilhado" local em `secrets/dev-tenant-server.url`, pronto a registar no painel. Com `LOCAL_FALLBACK_SERVER=true`
   (proibido em produção), os colégios sem servidor usam o cluster local.
 
+### Equipa só por convite
+
+- O painel da equipa não está aberto ao público: só o **primeiro membro** cria conta sozinho (fica ADMIN).
+  Depois disso, um admin/gestor com `staff.manage` **convida** pelo email (`POST /v1/platform/staff-invitations`, 2FA recente).
+- A pessoa recebe um email com o link `…/criar-conta?convite=<token>` (7 dias, uso único; na BD só o hash).
+  O link prova o email → cria a conta sem código, já **ativa** com o papel do convite, e segue para a 2FA.
+- Quem escrever um email sem convite recebe `403 STAFF_NOT_INVITED` ("Apenas pessoas autorizadas…").
+- No frontend, a raiz `/` sem sessão abre o registo de colégios (o painel da equipa não é anunciado).
+
 ### Códigos por email (OTP)
 
 - **Criar conta** (equipa e colégios): o email é confirmado com um código de 6 dígitos ANTES de a conta existir

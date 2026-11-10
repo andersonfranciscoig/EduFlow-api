@@ -80,16 +80,19 @@ export class StaffMember {
     identifier: LoginIdentifier;
     passwordHash: string;
     isFirstMember: boolean;
+    /** Convidado por um admin: entra já ativo, com o papel do convite. */
+    invitation?: { role: StaffRole; invitedById: string } | null;
     now: Date;
   }): StaffMember {
+    const invited = input.invitation ?? null;
     const member = new StaffMember({
       id: input.id,
       fullName: input.fullName,
       email: input.identifier.kind === "email" ? input.identifier.email : null,
       phone: input.identifier.kind === "phone" ? input.identifier.phone : null,
       passwordHash: input.passwordHash,
-      role: input.isFirstMember ? "ADMIN" : "GESTOR",
-      status: input.isFirstMember ? "ACTIVE" : "PENDING_APPROVAL",
+      role: input.isFirstMember ? "ADMIN" : (invited?.role ?? "GESTOR"),
+      status: input.isFirstMember || invited ? "ACTIVE" : "PENDING_APPROVAL",
       extraPermissions: [],
       failedLoginAttempts: 0,
       lockedUntil: null,
@@ -97,7 +100,11 @@ export class StaffMember {
       createdAt: input.now,
       mfa: { ...NO_MFA },
     });
-    member.record("MEMBER_REGISTERED", input.id, input.now, { role: member.role, status: member.status });
+    member.record("MEMBER_REGISTERED", input.id, input.now, {
+      role: member.role,
+      status: member.status,
+      ...(invited && { invitedById: invited.invitedById }),
+    });
     return member;
   }
 
