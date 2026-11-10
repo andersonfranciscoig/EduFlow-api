@@ -154,6 +154,8 @@ enum SchoolStatus {
   PAYMENT_UNDER_REVIEW
   ACTIVE
   REJECTED
+  /// Desativado pela equipa ou por não ter passado a email corporativo no prazo
+  SUSPENDED
 }
 
 enum OrderStatus {
@@ -185,6 +187,11 @@ model School {
   status             SchoolStatus
   rejectionReason    String?      @map("rejection_reason")
   subscriptionEndsAt DateTime?    @map("subscription_ends_at")
+  /// Email pessoal: prazo para passar a corporativo (null = já é corporativo)
+  ownerEmailDeadline  DateTime?     @map("owner_email_deadline")
+  suspendedAt         DateTime?     @map("suspended_at")
+  suspensionReason    String?       @map("suspension_reason")
+  suspendedFromStatus SchoolStatus? @map("suspended_from_status")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 
@@ -218,6 +225,13 @@ model TenantProvisioningJob {
   school     School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   slug       String
   schoolName String             @map("school_name")
+  /// Responsável: o provisioner cria-lhe a conta (por ativar) na BD do colégio.
+  /// Copiado aqui para o provisioner não precisar de ler a tabela schools.
+  ownerName  String?            @map("owner_name")
+  ownerEmail String?            @map("owner_email")
+  /// Primeira vez que a BD ficou pronta. Depois disto, voltar a PENDING só
+  /// atualiza (migrações) — nunca se pode mudar o colégio de servidor por aqui.
+  provisionedAt DateTime?       @map("provisioned_at")
   /// Servidor onde criar a BD. NULL = ainda sem servidor atribuído (à espera).
   serverId   String?            @map("server_id") @db.Uuid
   server     DatabaseServer?    @relation(fields: [serverId], references: [id], onDelete: Restrict)
@@ -407,6 +421,37 @@ model DatabaseServerActivity {
 
   @@index([serverId, occurredAt(sort: Desc)])
   @@map("database_server_activity")
+}
+
+// =============================================================================
+//  VERIFICAÇÃO POR EMAIL — códigos de 6 dígitos (criar conta, repor senha)
+//  Só se guardam hashes. Limites por email/finalidade: ver libs/kernel email-otp.
+// =============================================================================
+
+enum EmailVerificationPurpose {
+  STAFF_SIGN_UP
+  STAFF_PASSWORD_RESET
+  SCHOOL_SIGN_UP
+  SCHOOL_PASSWORD_RESET
+  SCHOOL_EMAIL_CHANGE
+}
+
+model EmailVerification {
+  id             String                   @id @db.Uuid
+  purpose        EmailVerificationPurpose
+  email          String
+  codeHash       String                   @map("code_hash")
+  attempts       Int                      @default(0)
+  expiresAt      DateTime                 @map("expires_at")
+  verifiedAt     DateTime?                @map("verified_at")
+  /// Prova de que o código foi confirmado (hash de um token de 256 bits, uso único)
+  proofHash      String?                  @unique @map("proof_hash")
+  proofExpiresAt DateTime?                @map("proof_expires_at")
+  proofUsedAt    DateTime?                @map("proof_used_at")
+  createdAt      DateTime                 @map("created_at")
+
+  @@index([purpose, email, createdAt(sort: Desc)])
+  @@map("email_verifications")
 }
 
 model SubscriptionOrder {

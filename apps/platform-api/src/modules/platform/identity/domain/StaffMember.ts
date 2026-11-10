@@ -141,6 +141,24 @@ export class StaffMember {
     }
   }
 
+  /** Pode recuperar a senha por email? (só contas ativas com email) */
+  get canRecoverPassword(): boolean {
+    return this.props.status === "ACTIVE" && this.props.email !== null;
+  }
+
+  /**
+   * Nova senha depois de confirmar um código enviado para o email.
+   * A 2FA continua a ser pedida no login: o email sozinho não dá acesso.
+   */
+  resetPassword(passwordHash: string, now: Date): Result<void, IdentityError> {
+    if (!this.canRecoverPassword) return fail(identityError("INVALID_STATE", "Não é possível repor a senha desta conta."));
+    this.props.passwordHash = passwordHash;
+    this.props.failedLoginAttempts = 0;
+    this.props.lockedUntil = null;
+    this.record("PASSWORD_RESET", this.id, now, null);
+    return ok(undefined);
+  }
+
   recordSuccessfulLogin(now: Date): void {
     this.props.failedLoginAttempts = 0;
     this.props.lockedUntil = null;

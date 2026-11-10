@@ -55,6 +55,14 @@ export interface CodeGenerator {
 
 export interface SchoolSettings {
   defaultPhoneCountryCode: string;
+  /** Endereço do portal de cada colégio ({slug}). */
+  portalUrlTemplate: string;
+}
+
+/** Avisos por email ao responsável (melhor esforço: nunca falha a operação). */
+export interface SchoolNotifier {
+  schoolActivated(input: { to: { email: string; name: string }; schoolName: string; portalUrl: string; subscriptionEndsAt: Date | null }): Promise<void>;
+  schoolSuspended(input: { to: { email: string; name: string }; schoolName: string; reason: string }): Promise<void>;
 }
 
 export const SCHOOL_TOKENS = {
@@ -64,4 +72,5 @@ export const SCHOOL_TOKENS = {
   CodeGenerator: Symbol("CodeGenerator"),
   SchoolSettings: Symbol("SchoolSettings"),
   SchoolDatabases: Symbol("SchoolDatabases"),
+  SchoolNotifier: Symbol("SchoolNotifier"),
 } as const;

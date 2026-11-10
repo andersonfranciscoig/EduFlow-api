@@ -79,8 +79,8 @@ class Abort extends Error {
  *   sem reserva → escolha automática. Devolve o servidor (ou null: fica à espera).
  */
 export async function assignOnActivation(tx: Prisma.TransactionClient, schoolId: string): Promise<string | null> {
-  const job = await tx.tenantProvisioningJob.findUnique({ where: { schoolId }, select: { status: true, serverId: true } });
-  if (job?.status === "DONE") return job.serverId; // renovação: a BD já existe
+  const job = await tx.tenantProvisioningJob.findUnique({ where: { schoolId }, select: { status: true, serverId: true, provisionedAt: true } });
+  if (job && (job.status === "DONE" || job.provisionedAt)) return job.serverId; // renovação: a BD já existe
 
   const assigned = await tx.databaseAllocation.findFirst({ where: { schoolId, status: "ASSIGNED" }, select: { serverId: true } });
   if (assigned) return assigned.serverId;
@@ -128,7 +128,7 @@ export class PrismaPlacementStore implements PlacementStore {
     const [job, allocation] = await Promise.all([
       this.prisma.tenantProvisioningJob.findUnique({
         where: { schoolId },
-        select: { status: true, attempts: true, lastError: true, server: { select: { id: true, name: true, kind: true } } },
+        select: { status: true, attempts: true, lastError: true, provisionedAt: true, server: { select: { id: true, name: true, kind: true } } },
       }),
       this.prisma.databaseAllocation.findFirst({
         where: { schoolId, status: { in: ["RESERVED", "ASSIGNED"] } },
@@ -138,11 +138,15 @@ export class PrismaPlacementStore implements PlacementStore {
     ]);
     const view = allocation ? allocationView(allocation) : null;
     const server = job?.server ?? view?.server ?? null;
-    const provisioning = job ? { status: job.status, attempts: job.attempts, lastError: job.lastError } : null;
+    const provisioning = job
+      ? { status: job.status, attempts: job.attempts, lastError: job.lastError, provisioned: job.provisionedAt !== null }
+      : null;
 
     let state: SchoolDatabaseStatus["state"] = "NONE";
     if (job) {
       if (job.status === "DONE") state = "READY";
+      // a BD já existe: voltar à fila só aplica migrações (nunca muda de servidor)
+      else if (job.provisionedAt) state = job.status === "FAILED" ? "FAILED" : "UPDATING";
       else if (!job.server) state = "WAITING_SERVER";
       else if (job.status === "FAILED") state = "FAILED";
       else state = "PROVISIONING";
@@ -223,6 +227,10 @@ export class PrismaPlacementStore implements PlacementStore {
         const job = await tx.tenantProvisioningJob.findUnique({ where: { schoolId: input.schoolId } });
         if (!job || job.status === "DONE" || (job.serverId && job.status !== "FAILED")) {
           throw new Abort(databaseError("INVALID_STATE", "Este colégio não está à espera de servidor."));
+        }
+        // a BD do colégio já foi criada (tem dados): mudar de servidor criaria uma BD vazia
+        if (job.provisionedAt) {
+          throw new Abort(databaseError("SERVER_IN_USE", "A base de dados deste colégio já existe — não é possível mudá-lo de servidor por aqui."));
         }
         const server = await lockCandidate(tx, input.serverId);
         if (!server) throw new Abort(databaseError("SERVER_NOT_FOUND", "Servidor não encontrado."));

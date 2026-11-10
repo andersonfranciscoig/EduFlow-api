@@ -1,16 +1,18 @@
 import { randomBytes } from "node:crypto";
+import type { Client } from "pg";
 import type { PrismaClient as PlatformClient } from ".prisma/platform-client";
-import { PrismaClient as TenantClient } from ".prisma/tenant-client";
 import type { PostgresUrl, SslMode } from "../../../libs/kernel/src/domain/postgres-url";
 import { encryptSecret } from "../../../libs/kernel/src/infrastructure/keys";
-import { pgClient, prismaUrl } from "./pg-target";
-import { migrateTenant } from "./tenant-migrator";
+import { pgClient } from "./pg-target";
+import { migrateTenant, seedTenant } from "./tenant-migrator";
 
 export interface Job {
   id: string;
   school_id: string;
   slug: string;
   school_name: string;
+  owner_name: string | null;
+  owner_email: string | null;
   attempts: number;
   server_id: string | null;
 }
@@ -29,20 +31,11 @@ interface Placement {
   serverId: string | null;
 }
 
-/** Migrações + identidade do colégio, ligado como o PRÓPRIO colégio. */
-async function migrateAs(job: Job, url: string, ctx: ProvisionContext) {
-  const tenant = new TenantClient({ datasources: { db: { url } }, log: ["warn", "error"] });
-  try {
-    const applied = await migrateTenant(tenant);
-    await tenant.tenantInfo.upsert({
-      where: { id: 1 },
-      create: { id: 1, schoolId: job.school_id, slug: job.slug, name: job.school_name },
-      update: { slug: job.slug, name: job.school_name },
-    });
-    if (applied.length) ctx.log(`${job.slug}: migrações aplicadas → ${applied.join(", ")}`);
-  } finally {
-    await tenant.$disconnect();
-  }
+/** Migrações + identidade + conta do responsável, com um cliente já "como o colégio". */
+async function migrateAndSeed(db: Client, job: Job, ctx: ProvisionContext) {
+  const applied = await migrateTenant(db);
+  if (applied.length) ctx.log(`${job.slug}: migrações aplicadas → ${applied.join(", ")}`);
+  await seedTenant(db, job, ctx.log);
 }
 
 async function register(job: Job, at: Placement, db: { name: string; user: string; password: string }, ctx: ProvisionContext) {
@@ -63,34 +56,60 @@ async function register(job: Job, at: Placement, db: { name: string; user: strin
 }
 
 /**
- * SERVIDOR PARTILHADO: cria um utilizador e uma BD próprios do colégio.
- * O provisioner só tem acesso ao utilizador do colégio DURANTE a criação e
+ * SERVIDOR PARTILHADO: um utilizador e uma BD próprios do colégio.
+ *
+ * Criação: utilizador com senha aleatória → BD (dono = colégio) → migrações →
+ * senha cifrada no diretório.
+ * Atualização (a BD já existe e está no diretório): SÓ migrações — a senha NÃO
+ * muda, por isso o school-api não perde ligações. As migrações correm como o
+ * colégio (SET ROLE) com a ligação de administração do servidor.
+ *
+ * O provisioner só é membro do utilizador do colégio DURANTE o trabalho e
  * retira-o a si próprio no fim (mantém só a gestão, não os dados).
  */
 export async function provisionOnSharedServer(job: Job, admin: PostgresUrl, at: Placement, ctx: ProvisionContext) {
   // nomes derivados do id (sem dados pessoais) e validados — nunca vêm do utilizador
   const name = `tenant_${job.school_id.replace(/-/g, "").slice(0, 12)}`;
   if (!/^tenant_[0-9a-f]{12}$/.test(name)) throw new Error(`Nome inválido: ${name}`);
-  const password = randomBytes(24).toString("hex"); // hex: seguro dentro de '…'
+
+  const listed = await ctx.platform.tenantDatabase.findUnique({
+    where: { schoolId: job.school_id },
+    select: { dbName: true, dbHost: true, dbPort: true },
+  });
+  const inDirectory = listed?.dbName === name && listed.dbHost === at.host && listed.dbPort === at.port;
 
   const client = pgClient(admin);
   await client.connect();
+  let newPassword: string | null = null;
   try {
     const version = Number((await client.query<{ v: string }>(`SELECT current_setting('server_version_num') AS v`)).rows[0]!.v);
-    const exists = (await client.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [name])).rowCount;
-    await client.query(
-      exists
-        ? `ALTER ROLE "${name}" WITH LOGIN PASSWORD '${password}'`
-        : `CREATE ROLE "${name}" WITH LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT CONNECTION LIMIT 30`,
-    );
+    const roleExists = (await client.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [name])).rowCount;
 
-    // PG16+: a pertença precisa de SET (para CREATE DATABASE … OWNER) — retirada no fim
+    if (!roleExists || !inDirectory) {
+      // primeira vez (ou o registo no diretório não chegou a ser feito): senha nova
+      newPassword = randomBytes(24).toString("hex"); // hex: seguro dentro de '…'
+      await client.query(
+        roleExists
+          ? `ALTER ROLE "${name}" WITH LOGIN PASSWORD '${newPassword}'`
+          : `CREATE ROLE "${name}" WITH LOGIN PASSWORD '${newPassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT CONNECTION LIMIT 30`,
+      );
+    }
+
+    // PG16+: a pertença precisa de SET (CREATE DATABASE … OWNER e SET ROLE) — retirada no fim
     await client.query(version >= 160000 ? `GRANT "${name}" TO CURRENT_USER WITH INHERIT TRUE, SET TRUE` : `GRANT "${name}" TO CURRENT_USER`);
     try {
       const dbExists = (await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [name])).rowCount;
       if (!dbExists) await client.query(`CREATE DATABASE "${name}" OWNER "${name}"`);
       await client.query(`REVOKE ALL ON DATABASE "${name}" FROM PUBLIC`);
-      await migrateAs(job, prismaUrl(at, name, password, name), ctx);
+
+      const tenantDb = pgClient(admin, name);
+      await tenantDb.connect();
+      try {
+        await tenantDb.query(`SET ROLE "${name}"`); // tudo o que for criado fica do colégio
+        await migrateAndSeed(tenantDb, job, ctx);
+      } finally {
+        await tenantDb.end().catch(() => undefined);
+      }
     } finally {
       await client.query(`REVOKE "${name}" FROM CURRENT_USER`);
     }
@@ -98,8 +117,12 @@ export async function provisionOnSharedServer(job: Job, admin: PostgresUrl, at: 
     await client.end().catch(() => undefined);
   }
 
-  await register(job, at, { name, user: name, password }, ctx);
-  ctx.log(`✓ ${job.slug} → base de dados ${name} pronta em ${at.host}:${at.port}`);
+  if (newPassword) {
+    await register(job, at, { name, user: name, password: newPassword }, ctx);
+    ctx.log(`✓ ${job.slug} → base de dados ${name} pronta em ${at.host}:${at.port}`);
+  } else {
+    ctx.log(`✓ ${job.slug} → base de dados ${name} atualizada (senha mantida)`);
+  }
 }
 
 /**
@@ -121,12 +144,12 @@ export async function provisionOnDedicatedDatabase(job: Job, url: PostgresUrl, s
       const owner = (await client.query<{ school: string }>(`SELECT school_id::text AS school FROM tenant_info WHERE id = 1`)).rows[0];
       if (owner && owner.school !== job.school_id) throw new Error("Esta base de dados já pertence a outro colégio.");
     }
+    await migrateAndSeed(client, job, ctx);
   } finally {
     await client.end().catch(() => undefined);
   }
 
   const at: Placement = { host: url.host, port: url.port, sslMode: url.sslMode, serverId };
-  await migrateAs(job, prismaUrl(at, url.user, url.password, url.database), ctx);
   await register(job, at, { name: url.database, user: url.user, password: url.password }, ctx);
   ctx.log(`✓ ${job.slug} → base de dados dedicada ${url.database} pronta em ${url.host}:${url.port}`);
 }

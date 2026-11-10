@@ -1,23 +1,23 @@
 import { Controller, Get, UseGuards } from "@nestjs/common";
 import { ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { SkipThrottle } from "@nestjs/throttler";
 import { CurrentTenant, type TenantContext, TenantGuard } from "./tenant-context";
 
 @ApiTags("Colégio")
 @Controller("v1/tenant")
 @UseGuards(TenantGuard)
-@ApiHeader({ name: "X-Tenant", required: false, description: "Slug do colégio (em produção vem do subdomínio)" })
+@ApiHeader({ name: "X-Tenant", required: false, description: "Slug do colégio (enviado pelo servidor do portal)" })
 export class TenantController {
   @Get()
+  @SkipThrottle()
   @ApiOperation({
-    summary: "Identidade do colégio",
-    description: "Lida da base de dados PRÓPRIA do colégio, com o utilizador PostgreSQL do próprio colégio.",
+    summary: "Identidade pública do colégio",
+    description:
+      "Nome e slug, lidos da BD PRÓPRIA do colégio (com o utilizador PostgreSQL do colégio). " +
+      "Rota pública: não expõe nada sobre a infraestrutura (servidor, BD, utilizador).",
   })
   async info(@CurrentTenant() tenant: TenantContext) {
-    const info = await tenant.db.tenantInfo.findUnique({ where: { id: 1 } });
-    return {
-      slug: tenant.entry.slug,
-      name: info?.name ?? tenant.entry.schoolName,
-      database: { name: tenant.entry.dbName, user: tenant.entry.dbUser, connected: !!info },
-    };
+    const info = await tenant.db.tenantInfo.findUnique({ where: { id: 1 }, select: { name: true } });
+    return { slug: tenant.entry.slug, name: info?.name ?? tenant.entry.schoolName };
   }
 }

@@ -38,8 +38,37 @@ export const signUpSchema = z
       .max(120)
       .meta({ example: "Ana Paula Domingos" }),
     password: password.meta({ description: "8+ caracteres, com letras e números", example: "Senha1234" }),
+    emailProof: z
+      .string({ error: "Confirme primeiro o seu email." })
+      .min(20, "Confirme primeiro o seu email.")
+      .max(200)
+      .meta({ description: "Devolvido por POST sign-up/code/verify (30 min, uso único)" }),
   })
   .meta({ title: "SignUpRequest" });
+
+// ------------------------------------------------------------------ códigos por email
+
+const email = z.string({ error: "Indique o email." }).trim().min(1, "Indique o email.").max(254).meta({ example: "ana@eduflow.ao" });
+const emailCode = z.string({ error: "Indique o código." }).trim().regex(/^\d{6}$/, "O código tem 6 dígitos.").meta({ example: "482913" });
+const ticket = z.string({ error: "Pedido inválido." }).min(20, "Pedido inválido.").max(200);
+
+export const signUpCodeSchema = z.object({ email }).meta({ title: "SignUpCodeRequest" });
+export const signUpCodeVerifySchema = z.object({ email, code: emailCode }).meta({ title: "SignUpCodeVerify" });
+export const resetCodeSchema = z.object({ identifier }).meta({ title: "PasswordResetCodeRequest" });
+export const resetVerifySchema = z.object({ identifier, code: emailCode }).meta({ title: "PasswordResetCodeVerify" });
+export const resetPasswordSchema = z
+  .object({ identifier, ticket, password: password.min(1, "Indique a nova senha.") })
+  .meta({ title: "PasswordReset" });
+
+export const codeSentSchema = z
+  .object({ destination: z.string().nullable().meta({ description: "Email mascarado (null: resposta igual se a conta não existir)" }) })
+  .meta({ title: "EmailCodeSent" });
+
+export type SignUpCodeBody = z.infer<typeof signUpCodeSchema>;
+export type SignUpCodeVerifyBody = z.infer<typeof signUpCodeVerifySchema>;
+export type ResetCodeBody = z.infer<typeof resetCodeSchema>;
+export type ResetVerifyBody = z.infer<typeof resetVerifySchema>;
+export type ResetPasswordBody = z.infer<typeof resetPasswordSchema>;
 
 const challengeToken = z
   .string({ error: "Pedido inválido. Volte a introduzir a senha." })

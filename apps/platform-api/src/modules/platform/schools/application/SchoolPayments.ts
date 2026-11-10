@@ -3,7 +3,7 @@ import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/doma
 import { schoolError, type SchoolError } from "../domain/errors";
 import type { PaymentMethod, School } from "../domain/School";
 import type { SchoolRepository } from "../domain/SchoolRepository";
-import type { CodeGenerator, PlanCatalog, SchoolDatabasePort } from "./ports";
+import type { CodeGenerator, PlanCatalog, SchoolDatabasePort, SchoolNotifier, SchoolSettings } from "./ports";
 import { toPortalView, toSchoolDetail, toSchoolSummary } from "./school-dto";
 
 const ALLOWED_PROOF_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
@@ -21,6 +21,8 @@ export class SchoolPayments {
     private readonly codes: CodeGenerator,
     private readonly clock: Clock,
     private readonly databases: SchoolDatabasePort,
+    private readonly notifier: SchoolNotifier,
+    private readonly settings: SchoolSettings,
   ) {}
 
   private async load(id: string): Promise<Result<School, SchoolError>> {
@@ -28,9 +30,28 @@ export class SchoolPayments {
     return school ? ok(school) : fail(schoolError("SCHOOL_NOT_FOUND", "Colégio não encontrado."));
   }
 
+  private portalUrl(school: School) {
+    return school.slug ? this.settings.portalUrlTemplate.replace("{slug}", school.slug) : null;
+  }
+
   private async view(school: School) {
     const [activity, database] = await Promise.all([this.schools.activity(school.id), this.databases.status(school.id)]);
-    return { ...toSchoolDetail(school, activity), database };
+    return { ...toSchoolDetail(school, activity), database, portalUrl: this.portalUrl(school) };
+  }
+
+  /**
+   * Grava; se o colégio acabou de ficar ATIVO pela primeira vez, avisa o
+   * responsável com o endereço do portal (melhor esforço).
+   */
+  private async saveAndNotify(school: School, wasActive: boolean) {
+    await this.schools.save(school);
+    const url = this.portalUrl(school);
+    if (!wasActive && school.status === "ACTIVE" && url) {
+      const s = school.snapshot;
+      await this.notifier
+        .schoolActivated({ to: { email: s.ownerEmail, name: s.ownerName }, schoolName: s.name, portalUrl: url, subscriptionEndsAt: s.subscriptionEndsAt })
+        .catch(() => undefined);
+    }
   }
 
   private async persist(school: School) {
@@ -43,13 +64,17 @@ export class SchoolPayments {
   async portalView(schoolId: string) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
-    const settings = await this.catalog.getSettings();
-    return ok(
-      toPortalView(school.value, await this.schools.activity(schoolId), {
+    const [settings, database] = await Promise.all([this.catalog.getSettings(), this.databases.status(schoolId)]);
+    const ready = (database as { state?: string } | null)?.state === "READY";
+    const url = this.portalUrl(school.value);
+    return ok({
+      ...toPortalView(school.value, await this.schools.activity(schoolId), {
         transferInstructions: settings.transferInstructions,
         referenceProvider: settings.referenceProvider,
       }),
-    );
+      // o portal do colégio (Módulo 2): endereço e se já está pronto a usar
+      portal: url && school.value.status === "ACTIVE" ? { url, ready } : null,
+    });
   }
 
   async submitTransferProof(
@@ -88,9 +113,10 @@ export class SchoolPayments {
   async confirmReferencePayment(reference: string, amount: number): Promise<Result<{ schoolId: string }, SchoolError>> {
     const school = await this.schools.findByReference(reference);
     if (!school) return fail(schoolError("REFERENCE_NOT_FOUND", "Referência não encontrada."));
+    const wasActive = school.status === "ACTIVE";
     const result = school.confirmReferencePayment({ reference, amount }, this.clock.now());
     if (!result.ok) return result;
-    await this.schools.save(school);
+    await this.saveAndNotify(school, wasActive);
     return ok({ schoolId: school.id });
   }
 
@@ -168,9 +194,48 @@ export class SchoolPayments {
   async confirmTransfer(schoolId: string, staffId: string) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
+    const wasActive = school.value.status === "ACTIVE";
     const result = school.value.confirmTransferPayment(staffId, this.clock.now());
     if (!result.ok) return result;
+    await this.saveAndNotify(school.value, wasActive);
+    return ok(await this.view(school.value));
+  }
+
+  // ================================================================ desativar / reativar
+
+  async suspend(schoolId: string, staffId: string, reason: string) {
+    const school = await this.load(schoolId);
+    if (!school.ok) return school;
+    const result = school.value.suspend(reason, staffId, this.clock.now());
+    if (!result.ok) return result;
     return ok(await this.persist(school.value));
+  }
+
+  async reactivate(schoolId: string, staffId: string) {
+    const school = await this.load(schoolId);
+    if (!school.ok) return school;
+    const result = school.value.reactivate(staffId, this.clock.now());
+    if (!result.ok) return result;
+    return ok(await this.persist(school.value));
+  }
+
+  /**
+   * Desativa os colégios que não passaram a um email corporativo no prazo de
+   * 30 dias (corre periodicamente). Devolve quantos foram desativados.
+   */
+  async sweepEmailDeadlines(): Promise<number> {
+    const now = this.clock.now();
+    let count = 0;
+    for (const school of await this.schools.listPastEmailDeadline(now)) {
+      if (!school.emailDeadlinePassed(now)) continue;
+      const result = school.suspend("Não passou a usar um email corporativo no prazo de 30 dias.", null, now);
+      if (!result.ok) continue;
+      await this.schools.save(school);
+      const s = school.snapshot;
+      await this.notifier.schoolSuspended({ to: { email: s.ownerEmail, name: s.ownerName }, schoolName: s.name, reason: s.suspensionReason! }).catch(() => undefined);
+      count++;
+    }
+    return count;
   }
 
   async rejectProof(schoolId: string, staffId: string, reason: string) {

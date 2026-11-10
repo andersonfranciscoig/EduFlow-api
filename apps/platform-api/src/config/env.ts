@@ -23,6 +23,16 @@ export const envSchema = z.object({
   DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
   /** Pasta onde se guardam ficheiros enviados (ex.: comprovativos). */
   STORAGE_DIR: z.string().default("./storage/platform"),
+
+  // ---------------------------------------------------------------- email (Brevo)
+  /** Sem chave (console): os emails aparecem no terminal. */
+  EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),
+  EMAIL_FROM: z.email().default("noreply@eduflow.ao"),
+  EMAIL_FROM_NAME: z.string().min(1).default("EduFlow"),
+  EMAIL_REPLY_TO: z.email().default("noreply@eduflow.ao"),
+  EMAIL_API_KEY_FILE: z.string().min(1).optional(),
+  /** Endereço do portal de cada colégio ({slug}) — vai no email de ativação. */
+  PORTAL_URL_TEMPLATE: z.string().includes("{slug}").default("http://{slug}.localhost:3002"),
 });
 
 export type Env = z.infer<typeof envSchema>;

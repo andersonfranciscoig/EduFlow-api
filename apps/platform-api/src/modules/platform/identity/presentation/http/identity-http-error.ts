@@ -2,7 +2,7 @@ import { HttpException, HttpStatus } from "@nestjs/common";
 import type { IdentityError, IdentityErrorCode } from "../../domain/errors";
 
 /** Tradução erro de domínio → HTTP. O corpo é sempre { code, message, meta }. */
-const STATUS_BY_CODE: Record<IdentityErrorCode, HttpStatus> = {
+export const STATUS_BY_CODE: Record<IdentityErrorCode, HttpStatus> = {
   INVALID_IDENTIFIER: HttpStatus.UNPROCESSABLE_ENTITY,
   INVALID_EMAIL: HttpStatus.UNPROCESSABLE_ENTITY,
   INVALID_PHONE: HttpStatus.UNPROCESSABLE_ENTITY,

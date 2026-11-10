@@ -9,6 +9,7 @@ export const SCHOOL_STATUS_LABELS: Record<SchoolStatus, string> = {
   PAYMENT_UNDER_REVIEW: "Pagamento por verificar",
   ACTIVE: "Ativo",
   REJECTED: "Rejeitado",
+  SUSPENDED: "Desativado",
 };
 
 const CYCLE_LABELS: Record<string, string> = { MONTHLY: "Mensal", QUARTERLY: "Trimestral", ANNUAL: "Anual" };
@@ -69,6 +70,10 @@ export function toSchoolSummary(school: School) {
     cycleLabel: order ? cycleLabel(order.cycle, order.months) : null,
     subscriptionEndsAt: s.subscriptionEndsAt?.toISOString() ?? null,
     slug: s.slug,
+    // email pessoal: prazo para passar a corporativo (null = corporativo)
+    ownerEmailDeadline: s.ownerEmailDeadline?.toISOString() ?? null,
+    suspendedAt: s.suspendedAt?.toISOString() ?? null,
+    suspensionReason: s.suspensionReason,
     createdAt: s.createdAt.toISOString(),
   };
 }

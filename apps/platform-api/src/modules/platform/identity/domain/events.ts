@@ -16,6 +16,7 @@ export const STAFF_ACTIVITY_TYPES = [
   "MFA_RECOVERY_REGENERATED",
   "MFA_RESET",
   "SESSIONS_REVOKED",
+  "PASSWORD_RESET",
 ] as const;
 
 export type StaffActivityType = (typeof STAFF_ACTIVITY_TYPES)[number];

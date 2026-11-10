@@ -8,6 +8,9 @@ import { SecretBox } from "../../../../../../libs/kernel/src/infrastructure/secr
 import { systemClock, uuidGenerator } from "../../../../../../libs/kernel/src/infrastructure/system";
 import { generateRecoveryCodes, hashRecoveryCode, totp } from "../../../../../../libs/kernel/src/infrastructure/totp";
 import { PlatformDatabaseModule } from "../infrastructure/platform-database.module";
+import { EmailVerificationService } from "../verification/application/EmailVerificationService";
+import { VerificationModule } from "../verification/verification.module";
+import { StaffEmailAccess } from "./application/use-cases/StaffEmailAccess";
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
 import {
   type AccessTokenService,
@@ -53,6 +56,7 @@ import { StaffController } from "./presentation/http/staff.controller";
 @Module({
   imports: [
     PlatformDatabaseModule,
+    VerificationModule,
     // Tokens da equipa: par de chaves ES256 próprio (diferente do dos colégios).
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -144,14 +148,28 @@ import { StaffController } from "./presentation/http/staff.controller";
     },
     {
       provide: RegisterStaffMember,
-      inject: [T.StaffMemberRepository, T.PasswordHasher, T.IdGenerator, T.Clock, T.IdentitySettings],
+      inject: [T.StaffMemberRepository, T.PasswordHasher, T.IdGenerator, T.Clock, T.IdentitySettings, EmailVerificationService],
       useFactory: (
         repo: StaffMemberRepository,
         hasher: PasswordHasher,
         ids: IdGenerator,
         clock: Clock,
         settings: IdentitySettings,
-      ) => new RegisterStaffMember(repo, hasher, ids, clock, settings),
+        verification: EmailVerificationService,
+      ) => new RegisterStaffMember(repo, hasher, ids, clock, settings, verification),
+    },
+    {
+      provide: StaffEmailAccess,
+      inject: [T.StaffMemberRepository, T.StaffSessionRepository, EmailVerificationService, T.PasswordHasher, StaffSecurity, T.Clock, T.IdentitySettings],
+      useFactory: (
+        repo: StaffMemberRepository,
+        sessions: StaffSessionRepository,
+        verification: EmailVerificationService,
+        hasher: PasswordHasher,
+        security: StaffSecurity,
+        clock: Clock,
+        settings: IdentitySettings,
+      ) => new StaffEmailAccess(repo, sessions, verification, hasher, security, clock, settings),
     },
     {
       provide: AuthenticateStaffMember,

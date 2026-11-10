@@ -32,18 +32,6 @@ export function pgClient(url: PostgresUrl, database = url.database) {
   });
 }
 
-/** URL para o Prisma (migrações do colégio). */
-export function prismaUrl(target: { host: string; port: number; sslMode: SslMode }, user: string, password: string, database: string) {
-  const ssl =
-    target.sslMode === "disable"
-      ? "sslmode=disable"
-      : target.sslMode === "require"
-        ? "sslmode=require&sslaccept=accept_invalid_certs"
-        : "sslmode=require&sslaccept=strict";
-  const host = target.host.includes(":") ? `[${target.host}]` : target.host;
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${target.port}/${encodeURIComponent(database)}?schema=public&connection_limit=2&${ssl}`;
-}
-
 /** Mensagem compreensível para os erros de ligação mais comuns (nunca inclui a senha). */
 export function friendlyError(error: unknown): string {
   const e = error as { code?: string; message?: string };

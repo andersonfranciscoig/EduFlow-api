@@ -63,6 +63,10 @@ function toDomain(row: SchoolRow & { orders: OrderRow[] }): School {
     status: row.status,
     rejectionReason: row.rejectionReason,
     subscriptionEndsAt: row.subscriptionEndsAt,
+    ownerEmailDeadline: row.ownerEmailDeadline,
+    suspendedAt: row.suspendedAt,
+    suspensionReason: row.suspensionReason,
+    suspendedFromStatus: row.suspendedFromStatus,
     createdAt: row.createdAt,
     orders: row.orders.map(orderToDomain),
   });
@@ -138,6 +142,15 @@ export class PrismaSchoolRepository implements SchoolRepository {
     return (await this.prisma.school.count({ where: { slug } })) > 0;
   }
 
+  async listPastEmailDeadline(now: Date) {
+    const rows = await this.prisma.school.findMany({
+      where: { ownerEmailDeadline: { lte: now }, status: { notIn: ["SUSPENDED", "REJECTED"] } },
+      include: withOrders,
+      take: 200,
+    });
+    return rows.map(toDomain);
+  }
+
   async list(filter: { status?: SchoolStatus } = {}) {
     const rows = await this.prisma.school.findMany({
       where: { status: filter.status },
@@ -155,6 +168,7 @@ export class PrismaSchoolRepository implements SchoolRepository {
       PAYMENT_UNDER_REVIEW: 0,
       ACTIVE: 0,
       REJECTED: 0,
+      SUSPENDED: 0,
     };
     for (const g of groups) counts[g.status] = g._count._all;
     return counts;
@@ -196,9 +210,15 @@ export class PrismaSchoolRepository implements SchoolRepository {
       status: s.status,
       rejectionReason: s.rejectionReason,
       subscriptionEndsAt: s.subscriptionEndsAt,
+      ownerEmailDeadline: s.ownerEmailDeadline,
+      suspendedAt: s.suspendedAt,
+      suspensionReason: s.suspensionReason,
+      suspendedFromStatus: s.suspendedFromStatus,
     };
     const events = school.pullEvents();
     const activated = events.some((e) => e.type === "SCHOOL_ACTIVATED");
+    const accessChanged = events.some((e) => e.type === "SCHOOL_SUSPENDED" || e.type === "SCHOOL_REACTIVATED");
+    const emailChanged = events.some((e) => e.type === "OWNER_EMAIL_CHANGED");
 
     await this.prisma.$transaction(async (tx) => {
       await tx.school.upsert({
@@ -232,9 +252,31 @@ export class PrismaSchoolRepository implements SchoolRepository {
         const serverId = await this.placement(tx, s.id);
         await tx.tenantProvisioningJob.upsert({
           where: { schoolId: s.id },
-          create: { id: randomUUID(), schoolId: s.id, slug: s.slug ?? `colegio-${s.id.slice(0, 8)}`, schoolName: s.name, serverId },
+          create: {
+            id: randomUUID(),
+            schoolId: s.id,
+            slug: s.slug ?? `colegio-${s.id.slice(0, 8)}`,
+            schoolName: s.name,
+            ownerName: s.ownerName,
+            ownerEmail: s.ownerEmail,
+            serverId,
+          },
           // um pedido que estava à espera de servidor fica com o que agora foi atribuído
-          update: serverId ? { serverId } : {},
+          update: { ownerName: s.ownerName, ownerEmail: s.ownerEmail, ...(serverId ? { serverId } : {}) },
+        });
+      }
+      // Desativar/reativar fecha/abre o portal do colégio: o school-api só serve
+      // entradas "active" do diretório (efeito em ≤ 60 s, pela cache).
+      // A plataforma só pode escrever ESTA coluna (ver infra/db/grants.sql).
+      if (accessChanged) {
+        await tx.$executeRaw`UPDATE tenant_databases SET active = ${s.status !== "SUSPENDED"} WHERE school_id = ${s.id}::uuid`;
+      }
+      // Novo email do responsável → o provisioner atualiza a conta (ainda por
+      // ativar) no portal do colégio. Volta à fila só para isso (sem mudar a senha da BD).
+      if (emailChanged) {
+        await tx.tenantProvisioningJob.updateMany({
+          where: { schoolId: s.id },
+          data: { ownerEmail: s.ownerEmail, ownerName: s.ownerName, status: "PENDING", attempts: 0, lastError: null },
         });
       }
     });

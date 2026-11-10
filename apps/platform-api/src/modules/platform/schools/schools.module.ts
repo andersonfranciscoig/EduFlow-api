@@ -20,13 +20,18 @@ import {
   type PlanCatalog,
   SCHOOL_TOKENS as T,
   type SchoolDatabasePort,
+  type SchoolNotifier,
   type SchoolSettings,
   type SchoolTokenService,
 } from "./application/ports";
 import { SchoolOnboarding } from "./application/SchoolOnboarding";
 import { SchoolPayments } from "./application/SchoolPayments";
 import type { SchoolRepository } from "./domain/SchoolRepository";
-import { JwtSchoolTokenService, randomCodes } from "./infrastructure/adapters";
+import { EmailSchoolNotifier, JwtSchoolTokenService, randomCodes } from "./infrastructure/adapters";
+import type { Mailer } from "../../../../../../libs/kernel/src/infrastructure/mail";
+import { EmailVerificationService } from "../verification/application/EmailVerificationService";
+import { PLATFORM_MAILER, VerificationModule } from "../verification/verification.module";
+import { EmailDeadlineSweeper } from "./infrastructure/email-deadline-sweeper";
 import { PrismaSchoolRepository } from "./infrastructure/PrismaSchoolRepository";
 import { SchoolOwnerGuard } from "./presentation/http/school-auth";
 import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminController } from "./presentation/http/school.controllers";
@@ -41,6 +46,7 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
     IdentityModule,
     BillingModule,
     DatabasesModule,
+    VerificationModule,
     // Tokens dos responsáveis dos colégios: par de chaves ES256 próprio.
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -69,8 +75,10 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
       inject: [ConfigService],
       useFactory: (config: ConfigService<Env, true>): SchoolSettings => ({
         defaultPhoneCountryCode: config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true }),
+        portalUrlTemplate: config.get("PORTAL_URL_TEMPLATE", { infer: true }),
       }),
     },
+    { provide: T.SchoolNotifier, inject: [PLATFORM_MAILER], useFactory: (mailer: Mailer) => new EmailSchoolNotifier(mailer) },
     {
       provide: T.SchoolRepository,
       inject: [PlatformPrismaService, ACTIVATION_PLACEMENT],
@@ -94,6 +102,7 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
         T.CodeGenerator,
         SHARED_TOKENS.Clock,
         T.SchoolSettings,
+        EmailVerificationService,
       ],
       useFactory: (
         repo: SchoolRepository,
@@ -104,11 +113,21 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
         codes: CodeGenerator,
         clock: Clock,
         settings: SchoolSettings,
-      ) => new SchoolOnboarding(repo, catalog, hasher, tokens, ids, codes, clock, settings),
+        verification: EmailVerificationService,
+      ) => new SchoolOnboarding(repo, catalog, hasher, tokens, ids, codes, clock, settings, verification),
     },
     {
       provide: SchoolPayments,
-      inject: [T.SchoolRepository, T.PlanCatalog, SHARED_TOKENS.FileStorage, T.CodeGenerator, SHARED_TOKENS.Clock, T.SchoolDatabases],
+      inject: [
+        T.SchoolRepository,
+        T.PlanCatalog,
+        SHARED_TOKENS.FileStorage,
+        T.CodeGenerator,
+        SHARED_TOKENS.Clock,
+        T.SchoolDatabases,
+        T.SchoolNotifier,
+        T.SchoolSettings,
+      ],
       useFactory: (
         repo: SchoolRepository,
         catalog: PlanCatalog,
@@ -116,9 +135,12 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
         codes: CodeGenerator,
         clock: Clock,
         databases: SchoolDatabasePort,
-      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases),
+        notifier: SchoolNotifier,
+        settings: SchoolSettings,
+      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings),
     },
     SchoolOwnerGuard,
+    EmailDeadlineSweeper,
   ],
 })
 export class SchoolsModule {}

@@ -156,7 +156,7 @@ async function claimJob(): Promise<Job | null> {
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, school_id, slug, school_name, attempts, server_id`;
+    RETURNING id, school_id, slug, school_name, owner_name, owner_email, attempts, server_id`;
   return rows[0] ?? null;
 }
 
@@ -179,7 +179,11 @@ async function provision(job: Job) {
       await provisionOnDedicatedDatabase(job, url, server.id, ctx);
     }
   }
-  await platform.tenantProvisioningJob.update({ where: { id: job.id }, data: { status: "DONE", lastError: null } });
+  // provisioned_at: a 1.ª vez fica registada (depois disto, voltar a PENDING só atualiza)
+  await platform.$executeRaw`
+    UPDATE tenant_provisioning_jobs
+    SET status = 'DONE', last_error = NULL, provisioned_at = COALESCE(provisioned_at, now()), updated_at = now()
+    WHERE id = ${job.id}::uuid`;
 }
 
 // ======================================================================= ciclo

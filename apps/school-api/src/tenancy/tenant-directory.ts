@@ -12,9 +12,16 @@ export interface TenantEntry {
   dbName: string;
   dbUser: string;
   passwordCiphertext: string;
+  /** disable | require | verify-ca | verify-full */
+  sslMode: string;
 }
 
-const TTL_MS = 60_000;
+/** Colégio encontrado: revalidado a cada minuto (desativar tem efeito em ≤ 60 s). */
+const FOUND_TTL_MS = 60_000;
+/** "Não existe": guardado pouco tempo, para um colégio novo aparecer depressa. */
+const MISSING_TTL_MS = 10_000;
+/** Limite de entradas: slugs inventados não fazem crescer a memória sem fim. */
+const MAX_ENTRIES = 2_000;
 
 /**
  * Diretório de colégios. Liga-se à BD da plataforma com um utilizador que SÓ
@@ -24,7 +31,10 @@ const TTL_MS = 60_000;
 @Injectable()
 export class TenantDirectory implements OnModuleDestroy {
   private readonly db: PlatformClient;
-  private readonly cache = new Map<string, { entry: TenantEntry | null; at: number }>();
+  /** LRU: o Map mantém a ordem de inserção (a mais antiga sai primeiro). */
+  private readonly cache = new Map<string, { entry: TenantEntry | null; expiresAt: number }>();
+  /** Pedidos em curso: muitos pedidos ao mesmo slug fazem UMA consulta. */
+  private readonly inflight = new Map<string, Promise<TenantEntry | null>>();
 
   constructor(config: ConfigService<Env, true>) {
     this.db = new PlatformClient({
@@ -35,11 +45,53 @@ export class TenantDirectory implements OnModuleDestroy {
 
   async findBySlug(slug: string): Promise<TenantEntry | null> {
     const hit = this.cache.get(slug);
-    if (hit && Date.now() - hit.at < TTL_MS) return hit.entry;
+    if (hit && hit.expiresAt > Date.now()) {
+      this.cache.delete(slug);
+      this.cache.set(slug, hit);
+      return hit.entry;
+    }
 
-    const row = await this.db.tenantDatabase.findUnique({ where: { slug } });
-    const entry = row && row.active ? row : null;
-    this.cache.set(slug, { entry, at: Date.now() });
+    const pending = this.inflight.get(slug);
+    if (pending) return pending;
+
+    const lookup = this.lookup(slug).finally(() => this.inflight.delete(slug));
+    this.inflight.set(slug, lookup);
+    return lookup;
+  }
+
+  private async lookup(slug: string) {
+    const row = await this.db.tenantDatabase.findUnique({
+      where: { slug },
+      select: {
+        schoolId: true,
+        slug: true,
+        schoolName: true,
+        dbHost: true,
+        dbPort: true,
+        dbName: true,
+        dbUser: true,
+        passwordCiphertext: true,
+        sslMode: true,
+        active: true,
+      },
+    });
+    const entry: TenantEntry | null = row?.active
+      ? {
+          schoolId: row.schoolId,
+          slug: row.slug,
+          schoolName: row.schoolName,
+          dbHost: row.dbHost,
+          dbPort: row.dbPort,
+          dbName: row.dbName,
+          dbUser: row.dbUser,
+          passwordCiphertext: row.passwordCiphertext,
+          sslMode: row.sslMode,
+        }
+      : null;
+
+    this.cache.delete(slug);
+    this.cache.set(slug, { entry, expiresAt: Date.now() + (entry ? FOUND_TTL_MS : MISSING_TTL_MS) });
+    while (this.cache.size > MAX_ENTRIES) this.cache.delete(this.cache.keys().next().value!);
     return entry;
   }
 

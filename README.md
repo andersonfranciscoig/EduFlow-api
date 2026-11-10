@@ -62,8 +62,26 @@ e `libs/` nunca importa de `apps/`.
 | `mfa` | AES-256 | platform-api (cifra os segredos da 2FA guardados na BD) |
 | `server-credentials` | RSA-3072 + AES-256-GCM | **pública** no platform-api (sela os URLs dos servidores), **privada** só no provisioner |
 | `tenant-credentials` | RSA-3072 | **pública** no provisioner (cifra), **privada** só no school-api (decifra) |
+| `school-jwt` | ES256 | school-api (tokens do portal dos colégios) |
+| `school-mfa` | AES-256 | school-api (segredos da 2FA guardados nas BDs dos colégios) |
+| `email-api` | chave Brevo | school-api (códigos por email). Opcional em dev: sem ela os emails vão para a consola |
 
-Tokens com chave errada, de outro tipo (equipa ↔ responsável) ou assinados com o antigo segredo partilhado são rejeitados.
+Tokens com chave errada, de outro tipo (equipa ↔ responsável ↔ portal) ou assinados com o antigo segredo partilhado são rejeitados.
+
+### Portal do colégio (Módulo 2 · school-api + EduFlow-portal)
+
+- **Contas vivem na BD do colégio** (`school_users`), nunca na plataforma.
+- **Primeiro acesso:** ao criar a BD, o provisioner cria a conta do responsável (DIRETOR) **por ativar e sem senha**.
+  Ele ativa-a no portal: identifica-se → recebe um código de 6 dígitos por email → define a senha → configura a 2FA.
+- **Login em 3 passos** (igual à equipa): identificar → senha → código da app. 2FA obrigatória.
+- **Recuperar a senha:** código por email → nova senha → **continua a pedir a 2FA** (quem só controla o email não entra)
+  e todas as sessões anteriores são terminadas.
+- **Códigos por email:** só o hash é guardado; 15 min; 5 tentativas; 1 por minuto; só vale o mais recente.
+- **Um token nunca serve noutro colégio:** leva `tid` (colégio) e `sid` (sessão); o `SchoolAuthGuard` compara o `tid`
+  com o colégio do pedido e confirma a sessão na BD do colégio a cada pedido.
+- **Que colégio é?** `X-Tenant` (enviado pelo servidor do portal) ou o subdomínio de `TENANT_BASE_DOMAIN`; se vierem os dois
+  e forem diferentes, o pedido é recusado. Escolher o colégio não dá acesso a nada sem um token desse colégio.
+- **Ligações às BDs dos colégios** com o TLS registado para o servidor; trocam-se sozinhas quando o provisioner roda a senha.
 
 ### Ciclo de criação da BD de um colégio
 
@@ -124,7 +142,31 @@ Regras de segurança:
   partilhado" local em `secrets/dev-tenant-server.url`, pronto a registar no painel. Com `LOCAL_FALLBACK_SERVER=true`
   (proibido em produção), os colégios sem servidor usam o cluster local.
 
+### Códigos por email (OTP)
+
+- **Criar conta** (equipa e colégios): o email é confirmado com um código de 6 dígitos ANTES de a conta existir
+  (`sign-up/code` → `sign-up/code/verify` → prova de uso único, 30 min → `sign-up`). A equipa só cria conta com email.
+- **Esqueci a senha** (equipa, responsáveis, portal): código → nova senha. Na equipa e no portal **continua a pedir a 2FA**
+  e as sessões antigas terminam.
+- **Limites por conta** (não dependem do IP — `libs/kernel/src/domain/email-otp.ts`): 1 código/min, 5 por dia,
+  10 tentativas erradas por dia; cada código: 15 min, 5 tentativas, uso único. Só se guardam hashes.
+
+### Colégios com email pessoal
+
+- O registo aceita email pessoal (gmail, hotmail…), com **30 dias** para passar a um email corporativo
+  (`POST /v1/schools/me/email/code` + `/email`, com código enviado para o novo email).
+- O platform-api verifica de hora a hora: prazo ultrapassado → colégio **desativado** (`SUSPENDED`), portal fechado
+  (`tenant_databases.active = false`; a plataforma só pode escrever essa coluna) e pagamentos bloqueados.
+- A equipa pode **desativar** e **reativar** (2FA recente). Reativar repõe o estado anterior e, se ainda for email
+  pessoal, dá novo prazo de 30 dias.
+
 ### Antes de produção
+
+- **nginx à frente dos frontends** a acrescentar o IP real (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`)
+  e `TRUSTED_PROXY_HOPS=1` nos dois Next. Sem isso não se reencaminha IP (o cliente podia falsificá-lo).
+  As APIs nunca acessíveis diretamente da internet.
+- Portal: `PORTAL_BASE_DOMAIN` obrigatório (o servidor não arranca sem ele).
+- Remetente dos emails num domínio próprio verificado no Brevo (não um Gmail).
 
 - Cluster PostgreSQL separado para as BDs dos colégios; nenhuma porta de BD exposta.
 - Chaves e senhas num gestor de segredos (Vault, Docker secrets…) em vez de `secrets/` e `.env`.

@@ -8,6 +8,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO eduflow_p
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO eduflow_platform_app;
 -- …mas não as credenciais (cifradas) das BDs dos colégios nem o histórico de migrações
 REVOKE ALL ON public.tenant_databases FROM eduflow_platform_app;
+-- …exceto ligar/desligar o portal de um colégio (desativar/reativar): só a coluna "active"
+GRANT SELECT (school_id), UPDATE (active) ON public.tenant_databases TO eduflow_platform_app;
 REVOKE ALL ON public._prisma_migrations FROM eduflow_platform_app;
 -- URLs dos servidores de BD: a plataforma ESCREVE mas não LÊ (write-only).
 -- (SELECT só na chave, necessário para UPDATE/DELETE … WHERE server_id = …)

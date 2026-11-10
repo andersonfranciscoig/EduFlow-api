@@ -27,5 +27,107 @@ model TenantInfo {
   @@map("tenant_info")
 }
 
+// =============================================================================
+//  IDENTIDADE — pessoas do colégio que entram no portal (direção, secretaria,
+//  professores). Vivem SÓ na BD do colégio: a plataforma não as vê.
+//  Fluxo: identificar → senha → código da app (2FA obrigatória).
+//  O responsável (DIRETOR, is_owner) é criado pelo provisioner como INVITED e
+//  ativa a conta com um código enviado para o seu email.
+// =============================================================================
+
+enum SchoolRole {
+  DIRETOR
+  SECRETARIA
+  PROFESSOR
+}
+
+enum SchoolUserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum EmailCodePurpose {
+  ACTIVATION
+  PASSWORD_RESET
+}
+
+model SchoolUser {
+  id                         String           @id @db.Uuid
+  fullName                   String           @map("full_name")
+  email                      String?          @unique
+  phone                      String?          @unique
+  /// NULL enquanto a conta não for ativada
+  passwordHash               String?          @map("password_hash")
+  role                       SchoolRole
+  status                     SchoolUserStatus
+  /// Responsável do colégio (só um — índice único parcial na migração)
+  isOwner                    Boolean          @default(false) @map("is_owner")
+  failedLoginAttempts        Int              @default(0) @map("failed_login_attempts")
+  lockedUntil                DateTime?        @map("locked_until")
+  lastLoginAt                DateTime?        @map("last_login_at")
+  /// Segredos TOTP cifrados (AES-256-GCM, chave só do school-api)
+  mfaSecretCiphertext        String?          @map("mfa_secret_ciphertext")
+  mfaPendingSecretCiphertext String?          @map("mfa_pending_secret_ciphertext")
+  mfaEnabledAt               DateTime?        @map("mfa_enabled_at")
+  mfaLastUsedStep            Int?             @map("mfa_last_used_step")
+  mfaRecoveryCodeHashes      String[]         @default([]) @map("mfa_recovery_code_hashes")
+  createdAt                  DateTime         @default(now()) @map("created_at")
+  updatedAt                  DateTime         @updatedAt @map("updated_at")
+
+  sessions SchoolSession[]
+  codes    EmailCode[]
+
+  @@map("school_users")
+}
+
+/// Sessão aberta depois da 2FA. Revogar invalida o token de imediato.
+model SchoolSession {
+  id            String     @id @db.Uuid
+  userId        String     @map("user_id") @db.Uuid
+  user          SchoolUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip            String?
+  userAgent     String?    @map("user_agent")
+  createdAt     DateTime   @map("created_at")
+  lastSeenAt    DateTime   @map("last_seen_at")
+  expiresAt     DateTime   @map("expires_at")
+  mfaVerifiedAt DateTime   @map("mfa_verified_at")
+  revokedAt     DateTime?  @map("revoked_at")
+  revokedReason String?    @map("revoked_reason")
+
+  @@index([userId])
+  @@map("school_sessions")
+}
+
+/// Códigos de 6 dígitos enviados por email (ativação e recuperação da senha).
+/// Guarda-se só o hash; expiram em 15 min e aceitam 5 tentativas.
+model EmailCode {
+  id         String           @id @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  user       SchoolUser       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose    EmailCodePurpose
+  codeHash   String           @map("code_hash")
+  attempts   Int              @default(0)
+  expiresAt  DateTime         @map("expires_at")
+  consumedAt DateTime?        @map("consumed_at")
+  createdAt  DateTime         @map("created_at")
+
+  @@index([userId, purpose, createdAt])
+  @@map("email_codes")
+}
+
+/// Histórico de segurança das contas do colégio.
+model SchoolActivity {
+  id         String   @id @db.Uuid
+  type       String
+  subjectId  String   @map("subject_id") @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  details    Json?
+  occurredAt DateTime @map("occurred_at")
+
+  @@index([subjectId, occurredAt])
+  @@map("school_activity")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

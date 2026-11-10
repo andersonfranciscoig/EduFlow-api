@@ -24,6 +24,7 @@ gen_ec() { # par ES256
 }
 gen_ec staff-jwt       # tokens da equipa EduFlow       → só platform-api
 gen_ec customer-jwt    # tokens dos responsáveis        → só platform-api
+gen_ec school-jwt      # tokens do portal dos colégios  → só school-api
 if [ ! -f secrets/tenant-credentials.key ] || [ "$FORCE" = "--force" ]; then
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out secrets/tenant-credentials.key 2>/dev/null
   openssl pkey -in secrets/tenant-credentials.key -pubout -out secrets/tenant-credentials.pub
@@ -38,7 +39,26 @@ if [ ! -f secrets/mfa.key ] || [ "$FORCE" = "--force" ]; then
   openssl rand -base64 32 > secrets/mfa.key
   echo "✓ chave mfa (AES-256) — cifra os segredos da 2FA; só platform-api"
 fi
+if [ ! -f secrets/school-mfa.key ] || [ "$FORCE" = "--force" ]; then
+  openssl rand -base64 32 > secrets/school-mfa.key
+  echo "✓ chave school-mfa (AES-256) — segredos da 2FA nas BDs dos colégios; só school-api"
+fi
 chmod 600 secrets/*.key
+
+# ---------------------------------------------------------------- email (Brevo)
+# Opcional. Sem secrets/email-api.key os emails aparecem na consola do school-api.
+#   secrets/email-api.key → chave da API do Brevo (nunca no git)
+#   secrets/email.env     → EMAIL_FROM / EMAIL_REPLY_TO (remetente validado no Brevo)
+EMAIL_PROVIDER=console
+EMAIL_FROM="noreply@eduflow.ao"
+EMAIL_REPLY_TO="noreply@eduflow.ao"
+[ -f secrets/email.env ] && source secrets/email.env
+if [ -s secrets/email-api.key ]; then
+  EMAIL_PROVIDER=brevo
+  echo "✓ email via Brevo (remetente $EMAIL_FROM)"
+else
+  echo "• email na consola (crie secrets/email-api.key para enviar via Brevo)"
+fi
 
 # ---------------------------------------------------------------- senhas
 if [ ! -f secrets/db-passwords.env ] || [ "$FORCE" = "--force" ]; then
@@ -76,6 +96,13 @@ SERVER_CREDENTIALS_PUBLIC_KEY_FILE=secrets/server-credentials.pub
 JWT_EXPIRES_IN_SECONDS=28800
 DEFAULT_PHONE_COUNTRY_CODE="244"
 STORAGE_DIR=./storage/platform
+# códigos por email (criar conta, repor senha) e aviso "portal pronto"
+PORTAL_URL_TEMPLATE="http://{slug}.localhost:3002"
+EMAIL_PROVIDER=$EMAIL_PROVIDER
+EMAIL_FROM="$EMAIL_FROM"
+EMAIL_FROM_NAME="EduFlow"
+EMAIL_REPLY_TO="$EMAIL_REPLY_TO"
+EMAIL_API_KEY_FILE=secrets/email-api.key
 EOF
 
 cat > apps/school-api/.env <<EOF
@@ -83,6 +110,18 @@ NODE_ENV=development
 PORT=4001
 DIRECTORY_DATABASE_URL="$(url eduflow_school_directory "$DIRECTORY_PW")"
 TENANT_CREDENTIALS_PRIVATE_KEY_FILE=secrets/tenant-credentials.key
+SCHOOL_JWT_PRIVATE_KEY_FILE=secrets/school-jwt.key
+SCHOOL_JWT_PUBLIC_KEY_FILE=secrets/school-jwt.pub
+SCHOOL_MFA_KEY_FILE=secrets/school-mfa.key
+JWT_EXPIRES_IN_SECONDS=28800
+DEFAULT_PHONE_COUNTRY_CODE="244"
+# portal (EduFlow-portal): cada colégio no seu subdomínio — em dev, <slug>.localhost:3002
+PORTAL_URL_TEMPLATE="http://{slug}.localhost:3002"
+EMAIL_PROVIDER=$EMAIL_PROVIDER
+EMAIL_FROM="$EMAIL_FROM"
+EMAIL_FROM_NAME="EduFlow"
+EMAIL_REPLY_TO="$EMAIL_REPLY_TO"
+EMAIL_API_KEY_FILE=secrets/email-api.key
 EOF
 
 cat > apps/provisioner/.env <<EOF

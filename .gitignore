@@ -6,6 +6,12 @@ storage
 *.tsbuildinfo
 coverage
 
+# compilados ao lado do código-fonte (o build vai sempre para dist/)
+apps/**/*.js
+apps/**/*.js.map
+libs/**/*.js
+libs/**/*.js.map
+
 # segredos e ambientes — nunca no repositório
 secrets/
 .env

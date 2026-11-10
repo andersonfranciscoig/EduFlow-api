@@ -14,6 +14,17 @@ import {
   type ChallengeCodeBody,
   challengeCodeSchema,
   challengeSchema,
+  codeSentSchema,
+  type ResetCodeBody,
+  resetCodeSchema,
+  type ResetPasswordBody,
+  resetPasswordSchema,
+  type ResetVerifyBody,
+  resetVerifySchema,
+  type SignUpCodeBody,
+  signUpCodeSchema,
+  type SignUpCodeVerifyBody,
+  signUpCodeVerifySchema,
   type IdentifyBody,
   identifyResponseSchema,
   identifySchema,
@@ -31,13 +42,18 @@ import {
   type StepUpBody,
   stepUpSchema,
 } from "./auth.schemas";
+import { unwrap } from "../../../../../../../../libs/kernel/src/presentation/domain-http";
+import { VERIFICATION_HTTP } from "../../../verification/verification.module";
+import { StaffEmailAccess } from "../../application/use-cases/StaffEmailAccess";
 import { Client } from "./client-info";
-import { toHttpException } from "./identity-http-error";
+import { STATUS_BY_CODE, toHttpException } from "./identity-http-error";
 import { CurrentStaff, RequireRecentMfa, StaffAuth } from "./staff-auth";
 import { staffDetailSchema } from "./staff.schemas";
 
 const MINUTE = 60_000;
 const error = openApi(apiErrorSchema);
+/** Erros da identidade + dos códigos por email. */
+const ERRORS: Partial<Record<string, HttpStatus>> = { ...STATUS_BY_CODE, ...VERIFICATION_HTTP };
 const tooMany = { status: 429, description: "Demasiados pedidos — aguarde e tente de novo" };
 
 /**
@@ -55,6 +71,7 @@ export class AuthController {
     private readonly authenticateStaff: AuthenticateStaffMember,
     private readonly getProfile: GetStaffProfile,
     private readonly security: StaffSecurity,
+    private readonly emailAccess: StaffEmailAccess,
   ) {}
 
   // ================================================================ 1.º fator
@@ -102,13 +119,72 @@ export class AuthController {
   @ApiResponse({ status: 409, description: "Já existe uma conta com este identificador", schema: error })
   @ApiResponse(tooMany)
   async signUp(@Body(new ZodValidationPipe(signUpSchema)) body: SignUpBody) {
-    const result = await this.registerStaff.execute(body);
-    if (!result.ok) throw toHttpException(result.error);
-    const { principal, role, status } = result.value;
+    const { principal, role, status } = unwrap(await this.registerStaff.execute(body), ERRORS);
     const firstName = principal.fullName.split(" ")[0];
     if (status !== "ACTIVE") return { role, status, firstName };
     const step = await this.security.afterPassword({ id: principal.id, mfaEnabled: false });
     return { role, status: step.status, challengeToken: step.challengeToken, firstName };
+  }
+
+  // ================================================================ códigos por email
+
+  @Post("sign-up/code")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({
+    summary: "Criar conta — enviar código para o email",
+    description: "Antes de criar a conta, o email é confirmado com um código de 6 dígitos. Limites por email: 1/min, 5 por dia, 10 erros por dia.",
+  })
+  @ApiBody({ schema: openApi(signUpCodeSchema) })
+  @ApiResponse({ status: 200, description: "Código enviado", schema: openApi(codeSentSchema, "output") })
+  @ApiResponse({ status: 409, description: "Já existe conta com este email", schema: error })
+  @ApiResponse(tooMany)
+  async signUpCode(@Body(new ZodValidationPipe(signUpCodeSchema)) body: SignUpCodeBody) {
+    return unwrap(await this.emailAccess.sendSignUpCode(body.email), ERRORS);
+  }
+
+  @Post("sign-up/code/verify")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Criar conta — confirmar o código", description: "Devolve a prova (emailProof, 30 min, uso único) a enviar no sign-up." })
+  @ApiBody({ schema: openApi(signUpCodeVerifySchema) })
+  @ApiResponse({ status: 401, description: "Código incorreto", schema: error })
+  @ApiResponse({ status: 410, description: "Código expirado ou esgotado", schema: error })
+  async signUpCodeVerify(@Body(new ZodValidationPipe(signUpCodeVerifySchema)) body: SignUpCodeVerifyBody) {
+    return unwrap(await this.emailAccess.verifySignUpCode(body.email, body.code), ERRORS);
+  }
+
+  @Post("password-reset/code")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({ summary: "Esqueci a senha — enviar código para o email da conta", description: "Resposta igual se a conta não existir." })
+  @ApiBody({ schema: openApi(resetCodeSchema) })
+  @ApiResponse({ status: 200, description: "Pedido aceite", schema: openApi(codeSentSchema, "output") })
+  @ApiResponse(tooMany)
+  async resetCode(@Body(new ZodValidationPipe(resetCodeSchema)) body: ResetCodeBody) {
+    return unwrap(await this.emailAccess.requestPasswordReset(body.identifier), ERRORS);
+  }
+
+  @Post("password-reset/verify")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Esqueci a senha — confirmar o código", description: "Devolve um bilhete (30 min, uso único) para definir a nova senha." })
+  @ApiBody({ schema: openApi(resetVerifySchema) })
+  async resetVerify(@Body(new ZodValidationPipe(resetVerifySchema)) body: ResetVerifyBody) {
+    return unwrap(await this.emailAccess.verifyPasswordReset(body.identifier, body.code), ERRORS);
+  }
+
+  @Post("password-reset")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({
+    summary: "Esqueci a senha — definir a nova senha",
+    description: "Termina todas as sessões e segue para a 2FA (quem só controla o email não entra).",
+  })
+  @ApiBody({ schema: openApi(resetPasswordSchema) })
+  @ApiResponse({ status: 200, description: "Falta a 2FA", schema: openApi(loginStepSchema, "output") })
+  async resetPassword(@Body(new ZodValidationPipe(resetPasswordSchema)) body: ResetPasswordBody) {
+    return unwrap(await this.emailAccess.resetPassword(body), ERRORS);
   }
 
   // ================================================================ 2.º fator

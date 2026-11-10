@@ -95,6 +95,7 @@ export const SCHOOL_DB_LABELS: Record<SchoolDatabaseStatus["state"], string> = {
   RESERVATION_EXPIRED: "Reserva expirada",
   WAITING_SERVER: "À espera de servidor",
   PROVISIONING: "A criar a base de dados",
+  UPDATING: "A atualizar a base de dados",
   READY: "Base de dados pronta",
   FAILED: "Falha ao criar a base de dados",
 };

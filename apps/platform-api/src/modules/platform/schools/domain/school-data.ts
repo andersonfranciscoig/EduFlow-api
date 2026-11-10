@@ -56,17 +56,30 @@ const PERSONAL_DOMAINS = new Set([
   "protonmail.com",
 ]);
 
-export function normalizeCorporateEmail(raw: string): Result<string, SchoolError> {
+/** Com email pessoal, o colégio tem este prazo para passar a um email corporativo. */
+export const CORPORATE_EMAIL_DEADLINE_DAYS = 30;
+
+export const isPersonalEmail = (email: string) => PERSONAL_DOMAINS.has(email.split("@")[1] ?? "");
+
+/** Email do responsável no registo: corporativo OU pessoal (com prazo de 30 dias para mudar). */
+export function normalizeOwnerEmail(raw: string): Result<string, SchoolError> {
   const email = raw.trim().toLowerCase();
   if (email.length > 254 || !EMAIL.test(email)) {
     return fail(schoolError("INVALID_OWNER", "Este email não parece válido."));
   }
-  if (PERSONAL_DOMAINS.has(email.split("@")[1])) {
+  return ok(email);
+}
+
+/** Só email corporativo (ex.: ao trocar o email pessoal pelo do colégio). */
+export function normalizeCorporateEmail(raw: string): Result<string, SchoolError> {
+  const email = normalizeOwnerEmail(raw);
+  if (!email.ok) return email;
+  if (isPersonalEmail(email.value)) {
     return fail(
       schoolError("INVALID_OWNER", "Use o email corporativo do colégio (ex.: direcao@seucolegio.ao), não um email pessoal."),
     );
   }
-  return ok(email);
+  return email;
 }
 
 export function normalizePhone(raw: string, defaultCountryCode: string): string | null {
@@ -127,11 +140,16 @@ export function validateOwner(input: OwnerData & { password: string }): Result<O
   if (name.length < 3 || !/\p{L}/u.test(name)) {
     return fail(schoolError("INVALID_OWNER", "Indique o nome do responsável."));
   }
-  const email = normalizeCorporateEmail(input.email);
+  const email = normalizeOwnerEmail(input.email);
   if (!email.ok) return email;
-  const p = input.password;
+  const password = validateOwnerPassword(input.password);
+  if (!password.ok) return password;
+  return ok({ name, email: email.value });
+}
+
+export function validateOwnerPassword(p: string): Result<string, SchoolError> {
   if (p.length < 8 || p.length > 128 || !/\p{L}/u.test(p) || !/\d/.test(p)) {
     return fail(schoolError("INVALID_OWNER", "A senha precisa de 8+ caracteres, com letras e números."));
   }
-  return ok({ name, email: email.value });
+  return ok(p);
 }

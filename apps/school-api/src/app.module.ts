@@ -4,10 +4,8 @@ import { APP_GUARD } from "@nestjs/core";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { validateEnv } from "./config/env";
-import { TenantConnections } from "./tenancy/tenant-connections";
-import { TenantGuard } from "./tenancy/tenant-context";
-import { TenantController } from "./tenancy/tenant.controller";
-import { TenantDirectory } from "./tenancy/tenant-directory";
+import { IdentityModule } from "./modules/identity/identity.module";
+import { TenancyModule } from "./tenancy/tenancy.module";
 
 @ApiTags("Sistema")
 @Controller("health")
@@ -35,8 +33,10 @@ class HealthController {
       validate: validateEnv,
     }),
     ThrottlerModule.forRoot([{ name: "default", ttl: 60_000, limit: 300 }]),
+    TenancyModule,
+    IdentityModule,
   ],
-  controllers: [HealthController, TenantController],
-  providers: [TenantDirectory, TenantConnections, TenantGuard, { provide: APP_GUARD, useClass: ThrottlerGuard }],
+  controllers: [HealthController],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

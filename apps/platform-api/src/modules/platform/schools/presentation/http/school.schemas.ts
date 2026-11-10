@@ -26,6 +26,11 @@ export const registerSchoolSchema = z
       name: text("Indique o nome do responsável.", 120),
       email: text("Indique o email.", 254).meta({ example: "direcao@colegioexemplo.ao" }),
       password: z.string({ error: "Indique a senha." }).max(128),
+      emailProof: z
+        .string({ error: "Confirme primeiro o email corporativo." })
+        .min(20, "Confirme primeiro o email corporativo.")
+        .max(200)
+        .meta({ description: "Devolvido por POST email-code/verify (30 min, uso único)" }),
     }),
     school: z.object({
       name: text("Indique o nome do colégio.", 160).meta({ example: "Colégio Exemplo" }),
@@ -64,10 +69,20 @@ export const approveSchema = paymentMethodSchema
   })
   .meta({ title: "ApproveSchool" });
 
+const emailCode = z.string({ error: "Indique o código." }).trim().regex(/^\d{6}$/, "O código tem 6 dígitos.").meta({ example: "482913" });
+export const emailCodeVerifySchema = z.object({ email: text("Indique o email.", 254), code: emailCode }).meta({ title: "SchoolEmailCodeVerify" });
+export const ownerResetSchema = z
+  .object({
+    email: text("Indique o email.", 254),
+    ticket: z.string({ error: "Pedido inválido." }).min(20, "Pedido inválido.").max(200),
+    password: z.string({ error: "Indique a nova senha." }).min(1, "Indique a nova senha.").max(128),
+  })
+  .meta({ title: "SchoolOwnerPasswordReset" });
+
 export const reasonSchema = z.object({ reason: text("Indique o motivo.", 500) }).meta({ title: "Reason" });
 
 export const schoolStatusQuery = z.object({
-  status: z.enum(["PENDING_REVIEW", "AWAITING_PAYMENT", "PAYMENT_UNDER_REVIEW", "ACTIVE", "REJECTED"]).optional(),
+  status: z.enum(["PENDING_REVIEW", "AWAITING_PAYMENT", "PAYMENT_UNDER_REVIEW", "ACTIVE", "REJECTED", "SUSPENDED"]).optional(),
 });
 
 export type RegisterSchoolBody = z.infer<typeof registerSchoolSchema>;

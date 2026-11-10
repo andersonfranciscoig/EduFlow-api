@@ -21,8 +21,9 @@ import { openApi } from "../../../../../../../../libs/kernel/src/presentation/op
 import { ZodValidationPipe } from "../../../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { BILLING_HTTP } from "../../../billing/presentation/http/billing.schemas";
 import { DATABASE_HTTP } from "../../../databases/presentation/http/database.schemas";
+import { VERIFICATION_HTTP } from "../../../verification/verification.module";
 import type { StaffAccess } from "../../../identity/application/ports";
-import { CurrentStaff, StaffAuth } from "../../../identity/presentation/http/staff-auth";
+import { CurrentStaff, RequireRecentMfa, StaffAuth } from "../../../identity/presentation/http/staff-auth";
 import { MAX_PROOF_BYTES, SchoolPayments } from "../../application/SchoolPayments";
 import { SchoolOnboarding } from "../../application/SchoolOnboarding";
 import { PROVINCES } from "../../domain/school-data";
@@ -31,7 +32,9 @@ import {
   type ApproveBody,
   approveSchema,
   emailCheckSchema,
+  emailCodeVerifySchema,
   nifCheckSchema,
+  ownerResetSchema,
   type PaymentMethodBody,
   paymentMethodSchema,
   proofSchema,
@@ -45,6 +48,8 @@ import {
 
 const MINUTE = 60_000;
 const uuid = new ZodValidationPipe(registerSchoolSchema.shape.subscription.shape.planId);
+/** Erros dos colégios + dos códigos por email. */
+const PUBLIC_HTTP: Partial<Record<string, HttpStatus>> = { ...SCHOOL_HTTP, ...VERIFICATION_HTTP };
 
 // =============================================================================
 //  Público — registo do colégio
@@ -78,6 +83,54 @@ export class SchoolOnboardingController {
     return this.onboarding.checkNif(body.nif);
   }
 
+  @Post("email-code")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({
+    summary: "Passo 1b — enviar código para o email corporativo",
+    description: "O email é confirmado antes do registo. Limites por email: 1/min, 5 por dia, 10 erros por dia.",
+  })
+  @ApiBody({ schema: openApi(emailCheckSchema) })
+  async emailCode(@Body(new ZodValidationPipe(emailCheckSchema)) body: { email: string }) {
+    return unwrap(await this.onboarding.sendSignUpCode(body.email), PUBLIC_HTTP);
+  }
+
+  @Post("email-code/verify")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Passo 1c — confirmar o código", description: "Devolve emailProof (30 min, uso único) a enviar no registo." })
+  @ApiBody({ schema: openApi(emailCodeVerifySchema) })
+  async emailCodeVerify(@Body(new ZodValidationPipe(emailCodeVerifySchema)) body: { email: string; code: string }) {
+    return unwrap(await this.onboarding.verifySignUpCode(body.email, body.code), PUBLIC_HTTP);
+  }
+
+  @Post("password-reset/code")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({ summary: "Esqueci a senha — enviar código para o email corporativo", description: "Resposta igual se o colégio não existir." })
+  @ApiBody({ schema: openApi(emailCheckSchema) })
+  async resetCode(@Body(new ZodValidationPipe(emailCheckSchema)) body: { email: string }) {
+    return unwrap(await this.onboarding.requestPasswordReset(body.email), PUBLIC_HTTP);
+  }
+
+  @Post("password-reset/verify")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Esqueci a senha — confirmar o código", description: "Devolve um bilhete (30 min, uso único)." })
+  @ApiBody({ schema: openApi(emailCodeVerifySchema) })
+  async resetVerify(@Body(new ZodValidationPipe(emailCodeVerifySchema)) body: { email: string; code: string }) {
+    return unwrap(await this.onboarding.verifyPasswordReset(body.email, body.code), PUBLIC_HTTP);
+  }
+
+  @Post("password-reset")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Esqueci a senha — definir a nova senha", description: "Devolve um token do responsável (já com sessão)." })
+  @ApiBody({ schema: openApi(ownerResetSchema) })
+  async resetPassword(@Body(new ZodValidationPipe(ownerResetSchema)) body: { email: string; ticket: string; password: string }) {
+    return unwrap(await this.onboarding.resetPassword(body), PUBLIC_HTTP);
+  }
+
   @Post("register")
   @Throttle({ default: { limit: 5, ttl: 15 * MINUTE } })
   @ApiOperation({
@@ -86,9 +139,8 @@ export class SchoolOnboardingController {
   })
   @ApiBody({ schema: openApi(registerSchoolSchema) })
   async register(@Body(new ZodValidationPipe(registerSchoolSchema)) body: RegisterSchoolBody) {
-    // o registo também valida o plano (erros do contexto de faturação)
-    const statuses: Partial<Record<string, HttpStatus>> = { ...BILLING_HTTP, ...SCHOOL_HTTP };
-    return unwrap(await this.onboarding.register(body), statuses);
+    // o registo também valida o plano (faturação) e a prova do email (verificação)
+    return unwrap(await this.onboarding.register(body), { ...BILLING_HTTP, ...PUBLIC_HTTP });
   }
 
   @Post("sign-in")
@@ -108,7 +160,29 @@ export class SchoolOnboardingController {
 @Controller("v1/schools/me")
 @SchoolOwnerAuth()
 export class SchoolPortalController {
-  constructor(private readonly payments: SchoolPayments) {}
+  constructor(
+    private readonly payments: SchoolPayments,
+    private readonly onboarding: SchoolOnboarding,
+  ) {}
+
+  @Post("email/code")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({ summary: "Trocar o email — enviar código para o novo email (corporativo)" })
+  @ApiBody({ schema: openApi(emailCheckSchema) })
+  async emailCode(@CurrentSchoolId() schoolId: string, @Body(new ZodValidationPipe(emailCheckSchema)) body: { email: string }) {
+    return unwrap(await this.onboarding.sendEmailChangeCode(schoolId, body.email), PUBLIC_HTTP);
+  }
+
+  @Post("email")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({ summary: "Trocar o email — confirmar o código", description: "O novo email passa a ser o acesso da conta e termina o prazo do email pessoal." })
+  @ApiBody({ schema: openApi(emailCodeVerifySchema) })
+  async changeEmail(@CurrentSchoolId() schoolId: string, @Body(new ZodValidationPipe(emailCodeVerifySchema)) body: { email: string; code: string }) {
+    unwrap(await this.onboarding.confirmEmailChange(schoolId, body.email, body.code), PUBLIC_HTTP);
+    return unwrap(await this.payments.portalView(schoolId), SCHOOL_HTTP);
+  }
 
   @Get()
   @ApiOperation({ summary: "Estado do colégio, subscrição, instruções de pagamento e histórico" })
@@ -202,6 +276,28 @@ export class SchoolsAdminController {
   @ApiBody({ schema: openApi(reasonSchema) })
   async reject(@Param("id", uuid) id: string, @Body(new ZodValidationPipe(reasonSchema)) body: { reason: string }, @CurrentStaff() staff: StaffAccess) {
     return unwrap(await this.payments.reject(id, staff.id, body.reason), SCHOOL_HTTP);
+  }
+
+  @Post(":id/suspend")
+  @HttpCode(HttpStatus.OK)
+  @StaffAuth("schools.manage")
+  @RequireRecentMfa()
+  @ApiOperation({ summary: "Desativar colégio (2FA recente)", description: "O portal do colégio deixa de estar acessível (≤ 60 s). Os dados ficam guardados." })
+  @ApiBody({ schema: openApi(reasonSchema) })
+  async suspend(@Param("id", uuid) id: string, @Body(new ZodValidationPipe(reasonSchema)) body: { reason: string }, @CurrentStaff() staff: StaffAccess) {
+    return unwrap(await this.payments.suspend(id, staff.id, body.reason), SCHOOL_HTTP);
+  }
+
+  @Post(":id/reactivate")
+  @HttpCode(HttpStatus.OK)
+  @StaffAuth("schools.manage")
+  @RequireRecentMfa()
+  @ApiOperation({
+    summary: "Reativar colégio desativado (2FA recente)",
+    description: "Volta ao estado anterior. Se ainda usa email pessoal com o prazo passado, recebe um novo prazo de 30 dias.",
+  })
+  async reactivate(@Param("id", uuid) id: string, @CurrentStaff() staff: StaffAccess) {
+    return unwrap(await this.payments.reactivate(id, staff.id), SCHOOL_HTTP);
   }
 
   @Post(":id/payment-method")

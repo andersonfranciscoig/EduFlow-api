@@ -23,9 +23,11 @@ async function bootstrap() {
         .setTitle("EduFlow · School API")
         .setDescription(
           "**Módulo 2 · Portal do colégio** — cada colégio tem a sua própria base de dados e o seu utilizador PostgreSQL.\n\n" +
-            "Serviço isolado da plataforma: só lê o diretório de colégios e não tem acesso à equipa nem à faturação.",
+            "Serviço isolado da plataforma: só lê o diretório de colégios e não tem acesso à equipa nem à faturação.\n\n" +
+            "Envie `X-Tenant: <slug>` (o servidor do portal fá-lo por si). Os tokens só valem para o colégio que os emitiu.",
         )
-        .setVersion("0.1.0")
+        .setVersion("0.2.0")
+        .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" })
         .build(),
     );
     SwaggerModule.setup("api/docs", app, document, {

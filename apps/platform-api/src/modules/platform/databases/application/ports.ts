@@ -70,6 +70,7 @@ export type SchoolDatabaseState =
   | "RESERVATION_EXPIRED"
   | "WAITING_SERVER"
   | "PROVISIONING"
+  | "UPDATING"
   | "READY"
   | "FAILED";
 
@@ -77,7 +78,7 @@ export interface SchoolDatabaseStatus {
   state: SchoolDatabaseState;
   server: { id: string; name: string; kind: DatabaseServer["kind"] } | null;
   allocation: AllocationView | null;
-  provisioning: { status: "PENDING" | "RUNNING" | "DONE" | "FAILED"; attempts: number; lastError: string | null } | null;
+  provisioning: { status: "PENDING" | "RUNNING" | "DONE" | "FAILED"; attempts: number; lastError: string | null; provisioned: boolean } | null;
 }
 
 /** Reservas/atribuições (com bloqueio de linhas para respeitar a capacidade). */
