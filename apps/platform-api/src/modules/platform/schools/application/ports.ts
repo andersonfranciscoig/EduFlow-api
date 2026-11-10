@@ -31,6 +31,16 @@ export interface PlanCatalog {
   findBankAccount(id: string): Promise<{ id: string; bankName: string; holder: string; iban: string; active: boolean } | null>;
 }
 
+/**
+ * Porta para o contexto "databases": onde fica a BD do colégio.
+ * choice: "auto" | id do servidor | null (decidir depois).
+ */
+export interface SchoolDatabasePort {
+  reserveOnApproval(schoolId: string, choice: string | null, staffId: string): Promise<Result<unknown, DomainError>>;
+  release(schoolId: string, reason: string, staffId: string | null): Promise<unknown>;
+  status(schoolId: string): Promise<unknown>;
+}
+
 export interface SchoolTokenService {
   issue(schoolId: string): Promise<{ accessToken: string; expiresIn: number }>;
   verify(token: string): Promise<string | null>;
@@ -53,4 +63,5 @@ export const SCHOOL_TOKENS = {
   SchoolTokenService: Symbol("SchoolTokenService"),
   CodeGenerator: Symbol("CodeGenerator"),
   SchoolSettings: Symbol("SchoolSettings"),
+  SchoolDatabases: Symbol("SchoolDatabases"),
 } as const;

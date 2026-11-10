@@ -3,7 +3,7 @@ import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/doma
 import { schoolError, type SchoolError } from "../domain/errors";
 import type { PaymentMethod, School } from "../domain/School";
 import type { SchoolRepository } from "../domain/SchoolRepository";
-import type { CodeGenerator, PlanCatalog } from "./ports";
+import type { CodeGenerator, PlanCatalog, SchoolDatabasePort } from "./ports";
 import { toPortalView, toSchoolDetail, toSchoolSummary } from "./school-dto";
 
 const ALLOWED_PROOF_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
@@ -20,6 +20,7 @@ export class SchoolPayments {
     private readonly storage: FileStorage,
     private readonly codes: CodeGenerator,
     private readonly clock: Clock,
+    private readonly databases: SchoolDatabasePort,
   ) {}
 
   private async load(id: string): Promise<Result<School, SchoolError>> {
@@ -27,9 +28,14 @@ export class SchoolPayments {
     return school ? ok(school) : fail(schoolError("SCHOOL_NOT_FOUND", "Colégio não encontrado."));
   }
 
+  private async view(school: School) {
+    const [activity, database] = await Promise.all([this.schools.activity(school.id), this.databases.status(school.id)]);
+    return { ...toSchoolDetail(school, activity), database };
+  }
+
   private async persist(school: School) {
     await this.schools.save(school);
-    return toSchoolDetail(school, await this.schools.activity(school.id));
+    return this.view(school);
   }
 
   // ================================================================ portal do colégio
@@ -119,13 +125,23 @@ export class SchoolPayments {
     return ok({ method: "TRANSFER" as const, bankName: account.bankName, holder: account.holder, iban: account.iban });
   }
 
-  async approve(schoolId: string, staffId: string, input: { method: PaymentMethod; bankAccountId?: string }) {
+  /**
+   * Validar: forma de pagamento + reserva do servidor de BD.
+   * databaseServerId: "auto" (omissão) | id | null (decidir depois).
+   */
+  async approve(
+    schoolId: string,
+    staffId: string,
+    input: { method: PaymentMethod; bankAccountId?: string; databaseServerId?: string | null },
+  ) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
     const ins = await this.instructions(input.method, input.bankAccountId);
     if (!ins.ok) return ins;
     const result = school.value.approve(ins.value, staffId, this.clock.now());
     if (!result.ok) return result;
+    const reserved = await this.databases.reserveOnApproval(schoolId, input.databaseServerId === undefined ? "auto" : input.databaseServerId, staffId);
+    if (!reserved.ok) return reserved;
     return ok(await this.persist(school.value));
   }
 
@@ -144,7 +160,9 @@ export class SchoolPayments {
     if (!school.ok) return school;
     const result = school.value.reject(reason, staffId, this.clock.now());
     if (!result.ok) return result;
-    return ok(await this.persist(school.value));
+    await this.schools.save(school.value);
+    await this.databases.release(schoolId, "Pedido rejeitado", staffId);
+    return ok(await this.view(school.value));
   }
 
   async confirmTransfer(schoolId: string, staffId: string) {
@@ -182,6 +200,6 @@ export class SchoolPayments {
   async detail(schoolId: string) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
-    return ok(toSchoolDetail(school.value, await this.schools.activity(schoolId)));
+    return ok(await this.view(school.value));
   }
 }

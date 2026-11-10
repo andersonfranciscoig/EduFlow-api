@@ -20,6 +20,7 @@ import { unwrap } from "../../../../../../../../libs/kernel/src/presentation/dom
 import { openApi } from "../../../../../../../../libs/kernel/src/presentation/openapi";
 import { ZodValidationPipe } from "../../../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { BILLING_HTTP } from "../../../billing/presentation/http/billing.schemas";
+import { DATABASE_HTTP } from "../../../databases/presentation/http/database.schemas";
 import type { StaffAccess } from "../../../identity/application/ports";
 import { CurrentStaff, StaffAuth } from "../../../identity/presentation/http/staff-auth";
 import { MAX_PROOF_BYTES, SchoolPayments } from "../../application/SchoolPayments";
@@ -27,6 +28,8 @@ import { SchoolOnboarding } from "../../application/SchoolOnboarding";
 import { PROVINCES } from "../../domain/school-data";
 import { CurrentSchoolId, SchoolOwnerAuth } from "./school-auth";
 import {
+  type ApproveBody,
+  approveSchema,
   emailCheckSchema,
   nifCheckSchema,
   type PaymentMethodBody,
@@ -178,14 +181,18 @@ export class SchoolsAdminController {
   @Post(":id/approve")
   @HttpCode(HttpStatus.OK)
   @StaffAuth("schools.manage")
-  @ApiOperation({ summary: "Validar pedido e definir a forma de pagamento" })
-  @ApiBody({ schema: openApi(paymentMethodSchema) })
+  @ApiOperation({
+    summary: "Validar pedido, definir a forma de pagamento e reservar servidor de BD",
+    description: "A reserva tem prazo; a BD só passa a ser do colégio quando o pagamento for confirmado.",
+  })
+  @ApiBody({ schema: openApi(approveSchema) })
   async approve(
     @Param("id", uuid) id: string,
-    @Body(new ZodValidationPipe(paymentMethodSchema)) body: PaymentMethodBody,
+    @Body(new ZodValidationPipe(approveSchema)) body: ApproveBody,
     @CurrentStaff() staff: StaffAccess,
   ) {
-    return unwrap(await this.payments.approve(id, staff.id, body), SCHOOL_HTTP);
+    const statuses: Partial<Record<string, HttpStatus>> = { ...DATABASE_HTTP, ...SCHOOL_HTTP };
+    return unwrap(await this.payments.approve(id, staff.id, body), statuses);
   }
 
   @Post(":id/reject")

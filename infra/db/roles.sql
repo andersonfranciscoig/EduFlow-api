@@ -1,13 +1,19 @@
 -- =============================================================================
 --  EduFlow — utilizadores PostgreSQL com privilégios mínimos (executar como admin)
 --  Idempotente: cria o que falta e sincroniza as senhas.
---  Variáveis psql: migrator_pw, platform_pw, provisioner_pw, directory_pw
+--  Variáveis psql: migrator_pw, platform_pw, provisioner_pw, directory_pw, tenant_admin_pw
 -- =============================================================================
 
 -- ---------------------------------------------------------------- utilizadores
 SELECT format('CREATE ROLE %I LOGIN', r) FROM unnest(ARRAY[
-  'eduflow_migrator', 'eduflow_platform_app', 'eduflow_provisioner', 'eduflow_school_directory'
+  'eduflow_migrator', 'eduflow_platform_app', 'eduflow_provisioner', 'eduflow_school_directory', 'eduflow_tenant_admin'
 ]) AS r WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
+
+-- tenant_admin: SÓ desenvolvimento — simula um "servidor partilhado" registado
+-- no painel (o URL fica em secrets/dev-tenant-server.url). Cria BDs e utilizadores
+-- de colégios; não tem acesso à BD da plataforma.
+ALTER ROLE eduflow_tenant_admin LOGIN CREATEDB CREATEROLE NOSUPERUSER PASSWORD :'tenant_admin_pw';
+GRANT CONNECT ON DATABASE postgres TO eduflow_tenant_admin;
 
 -- migrator: dono do esquema; só usado pelas migrações (CREATEDB → shadow DB do prisma migrate dev)
 ALTER ROLE eduflow_migrator LOGIN CREATEDB NOCREATEROLE NOSUPERUSER PASSWORD :'migrator_pw';

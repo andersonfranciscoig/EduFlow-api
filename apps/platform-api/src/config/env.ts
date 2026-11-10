@@ -17,6 +17,8 @@ export const envSchema = z.object({
   CUSTOMER_JWT_PUBLIC_KEY_FILE: z.string().min(1),
   /** Chave AES-256 (base64) que cifra os segredos TOTP na BD. */
   MFA_ENCRYPTION_KEY_FILE: z.string().min(1),
+  /** Chave PÚBLICA do provisioner: sela os URLs dos servidores de BD (a plataforma não os consegue abrir). */
+  SERVER_CREDENTIALS_PUBLIC_KEY_FILE: z.string().min(1),
   JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 8),
   DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
   /** Pasta onde se guardam ficheiros enviados (ex.: comprovativos). */

@@ -10,6 +10,8 @@ import { LocalFileStorage } from "../../../../../../libs/kernel/src/infrastructu
 import { systemClock, uuidGenerator } from "../../../../../../libs/kernel/src/infrastructure/system";
 import { BillingService } from "../billing/application/BillingService";
 import { BillingModule } from "../billing/billing.module";
+import { DatabasePlacement } from "../databases/application/DatabasePlacement";
+import { ACTIVATION_PLACEMENT, type ActivationPlacement, DatabasesModule } from "../databases/databases.module";
 import { IdentityModule } from "../identity/identity.module";
 import { PlatformDatabaseModule } from "../infrastructure/platform-database.module";
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
@@ -17,6 +19,7 @@ import {
   type CodeGenerator,
   type PlanCatalog,
   SCHOOL_TOKENS as T,
+  type SchoolDatabasePort,
   type SchoolSettings,
   type SchoolTokenService,
 } from "./application/ports";
@@ -37,6 +40,7 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
     PlatformDatabaseModule,
     IdentityModule,
     BillingModule,
+    DatabasesModule,
     // Tokens dos responsáveis dos colégios: par de chaves ES256 próprio.
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -69,9 +73,10 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
     },
     {
       provide: T.SchoolRepository,
-      inject: [PlatformPrismaService],
-      useFactory: (prisma: PlatformPrismaService) => new PrismaSchoolRepository(prisma),
+      inject: [PlatformPrismaService, ACTIVATION_PLACEMENT],
+      useFactory: (prisma: PlatformPrismaService, placement: ActivationPlacement) => new PrismaSchoolRepository(prisma, placement),
     },
+    { provide: T.SchoolDatabases, useExisting: DatabasePlacement },
     {
       provide: T.SchoolTokenService,
       inject: [JwtService, ConfigService],
@@ -103,9 +108,15 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
     },
     {
       provide: SchoolPayments,
-      inject: [T.SchoolRepository, T.PlanCatalog, SHARED_TOKENS.FileStorage, T.CodeGenerator, SHARED_TOKENS.Clock],
-      useFactory: (repo: SchoolRepository, catalog: PlanCatalog, storage: FileStorage, codes: CodeGenerator, clock: Clock) =>
-        new SchoolPayments(repo, catalog, storage, codes, clock),
+      inject: [T.SchoolRepository, T.PlanCatalog, SHARED_TOKENS.FileStorage, T.CodeGenerator, SHARED_TOKENS.Clock, T.SchoolDatabases],
+      useFactory: (
+        repo: SchoolRepository,
+        catalog: PlanCatalog,
+        storage: FileStorage,
+        codes: CodeGenerator,
+        clock: Clock,
+        databases: SchoolDatabasePort,
+      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases),
     },
     SchoolOwnerGuard,
   ],

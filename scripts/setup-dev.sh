@@ -29,6 +29,11 @@ if [ ! -f secrets/tenant-credentials.key ] || [ "$FORCE" = "--force" ]; then
   openssl pkey -in secrets/tenant-credentials.key -pubout -out secrets/tenant-credentials.pub
   echo "✓ chave tenant-credentials (RSA 3072) — privada só no school-api"
 fi
+if [ ! -f secrets/server-credentials.key ] || [ "$FORCE" = "--force" ]; then
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out secrets/server-credentials.key 2>/dev/null
+  openssl pkey -in secrets/server-credentials.key -pubout -out secrets/server-credentials.pub
+  echo "✓ chave server-credentials (RSA 3072) — URLs dos servidores de BD; privada só no provisioner"
+fi
 if [ ! -f secrets/mfa.key ] || [ "$FORCE" = "--force" ]; then
   openssl rand -base64 32 > secrets/mfa.key
   echo "✓ chave mfa (AES-256) — cifra os segredos da 2FA; só platform-api"
@@ -46,6 +51,7 @@ EOF
   chmod 600 secrets/db-passwords.env
   echo "✓ senhas da base de dados geradas"
 fi
+grep -q '^TENANT_ADMIN_PW=' secrets/db-passwords.env || echo "TENANT_ADMIN_PW=$(openssl rand -hex 24)" >> secrets/db-passwords.env
 source secrets/db-passwords.env
 url() { echo "postgresql://$1:$2@$DB_HOST:$DB_PORT/eduflow_platform?schema=public"; }
 
@@ -66,6 +72,7 @@ STAFF_JWT_PUBLIC_KEY_FILE=secrets/staff-jwt.pub
 CUSTOMER_JWT_PRIVATE_KEY_FILE=secrets/customer-jwt.key
 CUSTOMER_JWT_PUBLIC_KEY_FILE=secrets/customer-jwt.pub
 MFA_ENCRYPTION_KEY_FILE=secrets/mfa.key
+SERVER_CREDENTIALS_PUBLIC_KEY_FILE=secrets/server-credentials.pub
 JWT_EXPIRES_IN_SECONDS=28800
 DEFAULT_PHONE_COUNTRY_CODE="244"
 STORAGE_DIR=./storage/platform
@@ -84,10 +91,18 @@ PROVISIONER_DATABASE_URL="$(url eduflow_provisioner "$PROVISIONER_PW")"
 TENANT_DB_HOST=$DB_HOST
 TENANT_DB_PORT=$DB_PORT
 TENANT_CREDENTIALS_PUBLIC_KEY_FILE=secrets/tenant-credentials.pub
+SERVER_CREDENTIALS_PRIVATE_KEY_FILE=secrets/server-credentials.key
 POLL_INTERVAL_MS=3000
+HEALTH_CHECK_INTERVAL_MS=300000
+# Só desenvolvimento: colégios sem servidor atribuído usam o cluster local
+LOCAL_FALLBACK_SERVER=true
 EOF
 chmod 600 .env apps/*/.env
 echo "✓ .env de cada serviço escritos"
+
+# URL de um "servidor partilhado" local para registar no painel (Bases de dados → Adicionar)
+echo "postgresql://eduflow_tenant_admin:$TENANT_ADMIN_PW@$DB_HOST:$DB_PORT/postgres" > secrets/dev-tenant-server.url
+chmod 600 secrets/dev-tenant-server.url
 
 # ---------------------------------------------------------------- base de dados
 docker compose up -d >/dev/null
@@ -95,7 +110,7 @@ for i in $(seq 1 30); do docker exec eduflow-platform-db pg_isready -U eduflow -
 
 docker exec -i eduflow-platform-db psql -v ON_ERROR_STOP=1 -q -U eduflow -d eduflow_platform \
   -v migrator_pw="$MIGRATOR_PW" -v platform_pw="$PLATFORM_APP_PW" \
-  -v provisioner_pw="$PROVISIONER_PW" -v directory_pw="$DIRECTORY_PW" \
+  -v provisioner_pw="$PROVISIONER_PW" -v directory_pw="$DIRECTORY_PW" -v tenant_admin_pw="$TENANT_ADMIN_PW" \
   -f - < infra/db/roles.sql
 echo "✓ utilizadores PostgreSQL de privilégios mínimos"
 
@@ -106,3 +121,4 @@ pnpm exec prisma generate --schema prisma/tenant/schema.prisma >/dev/null
 echo "✓ clientes Prisma gerados"
 echo
 echo "Pronto. Arranque tudo com: pnpm dev"
+echo "Servidor de BD local para registar no painel: cat secrets/dev-tenant-server.url"

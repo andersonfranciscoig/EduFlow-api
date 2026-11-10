@@ -20,6 +20,8 @@ export const PERMISSION_CATALOG = [
   { key: "staff.manage", group: "Equipa", label: "Gerir equipa", description: "Aprovar, desativar e atribuir permissões a gestores." },
   { key: "billing.view", group: "Faturação", label: "Ver faturação", description: "Consultar planos, faturas e pagamentos." },
   { key: "billing.manage", group: "Faturação", label: "Gerir faturação", description: "Alterar planos, emitir e anular faturas." },
+  { key: "databases.view", group: "Bases de dados", label: "Ver bases de dados", description: "Consultar servidores, ocupação e testar ligações." },
+  { key: "databases.manage", group: "Bases de dados", label: "Gerir bases de dados", description: "Registar servidores, trocar credenciais e atribuir colégios." },
   { key: "settings.manage", group: "Definições", label: "Gerir definições", description: "Alterar as definições gerais da plataforma." },
 ] as const;
 

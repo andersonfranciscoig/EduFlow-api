@@ -98,8 +98,14 @@ function orderData(o: SubscriptionOrder) {
   };
 }
 
+/** Escolhe o servidor de BD na ativação (fornecido pelo contexto "databases"). */
+export type ActivationPlacement = (tx: Prisma.TransactionClient, schoolId: string) => Promise<string | null>;
+
 export class PrismaSchoolRepository implements SchoolRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly placement: ActivationPlacement,
+  ) {}
 
   async findById(id: string) {
     const row = await this.prisma.school.findUnique({ where: { id }, include: withOrders });
@@ -194,44 +200,43 @@ export class PrismaSchoolRepository implements SchoolRepository {
     const events = school.pullEvents();
     const activated = events.some((e) => e.type === "SCHOOL_ACTIVATED");
 
-    await this.prisma.$transaction([
-      this.prisma.school.upsert({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.school.upsert({
         where: { id: s.id },
         create: { id: s.id, createdAt: s.createdAt, ...data },
         update: data,
-      }),
-      ...s.orders.map((o) =>
-        this.prisma.subscriptionOrder.upsert({
+      });
+      for (const o of s.orders) {
+        await tx.subscriptionOrder.upsert({
           where: { id: o.id },
           create: { id: o.id, schoolId: s.id, createdAt: o.createdAt, ...orderData(o) },
           update: orderData(o),
-        }),
-      ),
-      ...(events.length
-        ? [
-            this.prisma.schoolActivity.createMany({
-              data: events.map((e) => ({
-                id: randomUUID(),
-                schoolId: s.id,
-                type: e.type,
-                actorStaffId: e.actorStaffId,
-                details: (e.details ?? undefined) as Prisma.InputJsonValue | undefined,
-                occurredAt: e.occurredAt,
-              })),
-            }),
-          ]
-        : []),
-      // Outbox: colégio ativado → pedido de criação da sua base de dados.
+        });
+      }
+      if (events.length) {
+        await tx.schoolActivity.createMany({
+          data: events.map((e) => ({
+            id: randomUUID(),
+            schoolId: s.id,
+            type: e.type,
+            actorStaffId: e.actorStaffId,
+            details: (e.details ?? undefined) as Prisma.InputJsonValue | undefined,
+            occurredAt: e.occurredAt,
+          })),
+        });
+      }
+      // Outbox: colégio ativado → reserva passa a atribuição + pedido de criação
+      // da sua base de dados, tudo na MESMA transação do pagamento.
       // (Só a primeira ativação cria o pedido; renovações não.)
-      ...(activated
-        ? [
-            this.prisma.tenantProvisioningJob.upsert({
-              where: { schoolId: s.id },
-              create: { id: randomUUID(), schoolId: s.id, slug: s.slug ?? `colegio-${s.id.slice(0, 8)}`, schoolName: s.name },
-              update: {},
-            }),
-          ]
-        : []),
-    ]);
+      if (activated) {
+        const serverId = await this.placement(tx, s.id);
+        await tx.tenantProvisioningJob.upsert({
+          where: { schoolId: s.id },
+          create: { id: randomUUID(), schoolId: s.id, slug: s.slug ?? `colegio-${s.id.slice(0, 8)}`, schoolName: s.name, serverId },
+          // um pedido que estava à espera de servidor fica com o que agora foi atribuído
+          update: serverId ? { serverId } : {},
+        });
+      }
+    });
   }
 }

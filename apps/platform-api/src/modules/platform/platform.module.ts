@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { BillingModule } from "./billing/billing.module";
+import { DatabasesModule } from "./databases/databases.module";
 import { IdentityModule } from "./identity/identity.module";
 import { SchoolsModule } from "./schools/schools.module";
 
@@ -9,11 +10,12 @@ import { SchoolsModule } from "./schools/schools.module";
  *   - identity → equipa interna, autenticação, níveis de acesso
  *   - billing  → planos, preços, definições de pagamento, contas bancárias
  *   - schools  → colégios clientes: adesão, subscrição e ciclo de pagamento
+ *   - databases → servidores/BDs dos colégios, reservas e atribuições
  *
  * Não depende de nenhum outro módulo de negócio, por isso pode ser extraído
  * para um serviço independente quando for preciso.
  */
 @Module({
-  imports: [IdentityModule, BillingModule, SchoolsModule],
+  imports: [IdentityModule, BillingModule, DatabasesModule, SchoolsModule],
 })
 export class PlatformModule {}

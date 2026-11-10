@@ -54,6 +54,16 @@ export const paymentMethodSchema = z
   })
   .meta({ title: "PaymentMethodChoice" });
 
+export const approveSchema = paymentMethodSchema
+  .extend({
+    databaseServerId: z
+      .union([z.uuid(), z.literal("auto")])
+      .nullable()
+      .optional()
+      .meta({ description: "Servidor de BD a reservar: \"auto\" (omissão), um id, ou null para decidir depois" }),
+  })
+  .meta({ title: "ApproveSchool" });
+
 export const reasonSchema = z.object({ reason: text("Indique o motivo.", 500) }).meta({ title: "Reason" });
 
 export const schoolStatusQuery = z.object({
@@ -62,3 +72,4 @@ export const schoolStatusQuery = z.object({
 
 export type RegisterSchoolBody = z.infer<typeof registerSchoolSchema>;
 export type PaymentMethodBody = z.infer<typeof paymentMethodSchema>;
+export type ApproveBody = z.infer<typeof approveSchema>;

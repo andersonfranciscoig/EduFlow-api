@@ -192,6 +192,7 @@ model School {
   activities SchoolActivity[]
   provisioning TenantProvisioningJob?
   database     TenantDatabase?
+  allocations  DatabaseAllocation[]
 
   @@index([status])
   @@map("schools")
@@ -217,6 +218,9 @@ model TenantProvisioningJob {
   school     School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   slug       String
   schoolName String             @map("school_name")
+  /// Servidor onde criar a BD. NULL = ainda sem servidor atribuído (à espera).
+  serverId   String?            @map("server_id") @db.Uuid
+  server     DatabaseServer?    @relation(fields: [serverId], references: [id], onDelete: Restrict)
   status     ProvisioningStatus @default(PENDING)
   attempts   Int                @default(0)
   lastError  String?            @map("last_error")
@@ -236,13 +240,173 @@ model TenantDatabase {
   schoolName         String   @map("school_name")
   dbHost             String   @map("db_host")
   dbPort             Int      @map("db_port")
-  dbName             String   @unique @map("db_name")
+  dbName             String   @map("db_name")
   dbUser             String   @map("db_user")
   passwordCiphertext String   @map("password_ciphertext")
+  /// disable | require | verify-ca | verify-full
+  sslMode            String   @default("disable") @map("ssl_mode")
+  serverId           String?  @map("server_id") @db.Uuid
   active             Boolean  @default(true)
   createdAt          DateTime @default(now()) @map("created_at")
 
+  @@unique([dbHost, dbPort, dbName])
   @@map("tenant_databases")
+}
+
+// =============================================================================
+//  SERVIDORES DE BASES DE DADOS — onde vivem as BDs dos colégios
+//  O URL de ligação é cifrado com a chave PÚBLICA do provisioner e guardado
+//  numa tabela à parte, onde a plataforma pode escrever mas NÃO ler.
+// =============================================================================
+
+enum DatabaseServerKind {
+  /// Servidor PostgreSQL onde o provisioner cria uma BD por colégio
+  SHARED_SERVER
+  /// Uma BD já criada, dedicada a um único colégio
+  DEDICATED_DATABASE
+}
+
+enum DatabaseServerStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum DatabaseServerHealth {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  UNREACHABLE
+}
+
+enum DatabaseCheckKind {
+  REGISTRATION
+  MANUAL
+  PERIODIC
+}
+
+enum DatabaseCheckStatus {
+  PENDING
+  RUNNING
+  DONE
+}
+
+enum DatabaseAllocationStatus {
+  /// Reservada na validação do colégio (tem prazo)
+  RESERVED
+  /// Atribuída após o pagamento — a BD do colégio vive aqui
+  ASSIGNED
+  RELEASED
+  EXPIRED
+}
+
+model DatabaseServer {
+  id       String               @id @db.Uuid
+  name     String
+  kind     DatabaseServerKind
+  status   DatabaseServerStatus @default(ACTIVE)
+  region   String?
+  notes    String?
+  /// Dados NÃO secretos extraídos do URL (para mostrar e evitar duplicados)
+  host     String
+  port     Int
+  database String
+  username String
+  sslMode  String               @map("ssl_mode")
+  /// user@host:port/database — único
+  endpoint String               @unique
+  /// Nº máximo de colégios (dedicada = 1)
+  capacity Int
+
+  /// Escrito apenas pelo provisioner
+  health              DatabaseServerHealth @default(UNKNOWN)
+  lastCheckedAt       DateTime?            @map("last_checked_at")
+  lastLatencyMs       Int?                 @map("last_latency_ms")
+  serverVersion       String?              @map("server_version")
+  tlsActive           Boolean?             @map("tls_active")
+  lastError           String?              @map("last_error")
+  consecutiveFailures Int                  @default(0) @map("consecutive_failures")
+
+  credentialsUpdatedAt DateTime @map("credentials_updated_at")
+  createdById          String?  @map("created_by_id") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  secret      DatabaseServerSecret?
+  checks      DatabaseServerCheck[]
+  allocations DatabaseAllocation[]
+  activities  DatabaseServerActivity[]
+  jobs        TenantProvisioningJob[]
+
+  @@index([status, kind])
+  @@map("database_servers")
+}
+
+/// URL de ligação cifrado (envelope RSA-OAEP + AES-256-GCM). Só o provisioner
+/// tem a chave privada; a plataforma tem INSERT/UPDATE mas não SELECT.
+model DatabaseServerSecret {
+  serverId      String         @id @map("server_id") @db.Uuid
+  server        DatabaseServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  urlCiphertext String         @map("url_ciphertext")
+  updatedAt     DateTime       @default(now()) @map("updated_at")
+
+  @@map("database_server_secrets")
+}
+
+/// Testes de ligação: pedidos pela equipa (fila) ou periódicos (provisioner).
+model DatabaseServerCheck {
+  id            String              @id @db.Uuid
+  serverId      String              @map("server_id") @db.Uuid
+  server        DatabaseServer      @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  kind          DatabaseCheckKind
+  status        DatabaseCheckStatus @default(PENDING)
+  requestedById String?             @map("requested_by_id") @db.Uuid
+  ok            Boolean?
+  connectMs     Int?                @map("connect_ms")
+  latencyMs     Int?                @map("latency_ms")
+  serverVersion String?             @map("server_version")
+  tls           Boolean?
+  /// Permissões, nº de BDs, avisos…
+  details       Json?
+  error         String?
+  createdAt     DateTime            @default(now()) @map("created_at")
+  completedAt   DateTime?           @map("completed_at")
+
+  @@index([serverId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("database_server_checks")
+}
+
+model DatabaseAllocation {
+  id            String                   @id @db.Uuid
+  serverId      String                   @map("server_id") @db.Uuid
+  server        DatabaseServer           @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  schoolId      String                   @map("school_id") @db.Uuid
+  school        School                   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  status        DatabaseAllocationStatus
+  reservedAt    DateTime                 @map("reserved_at")
+  expiresAt     DateTime?                @map("expires_at")
+  assignedAt    DateTime?                @map("assigned_at")
+  releasedAt    DateTime?                @map("released_at")
+  releaseReason String?                  @map("release_reason")
+  actorStaffId  String?                  @map("actor_staff_id") @db.Uuid
+  createdAt     DateTime                 @default(now()) @map("created_at")
+
+  @@index([serverId, status])
+  @@index([schoolId, status])
+  @@map("database_allocations")
+}
+
+model DatabaseServerActivity {
+  id           String         @id @db.Uuid
+  serverId     String         @map("server_id") @db.Uuid
+  server       DatabaseServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  type         String
+  actorStaffId String?        @map("actor_staff_id") @db.Uuid
+  details      Json?
+  occurredAt   DateTime       @map("occurred_at")
+
+  @@index([serverId, occurredAt(sort: Desc)])
+  @@map("database_server_activity")
 }
 
 model SubscriptionOrder {
