@@ -65,6 +65,9 @@ e `libs/` nunca importa de `apps/`.
 | `school-jwt` | ES256 | school-api (tokens do portal dos colégios) |
 | `school-mfa` | AES-256 | school-api (segredos da 2FA guardados nas BDs dos colégios) |
 | `email-api` | chave Brevo | school-api (códigos por email). Opcional em dev: sem ela os emails vão para a consola |
+| `backup` | AES-256 | só o provisioner (cifra as cópias das BDs). Nunca regenerada; guardar uma cópia fora do servidor |
+| `uploadthing.token` | token | só o provisioner (armazenamento das cópias, ficheiros privados) |
+| `uploadthing-public.token` | token | só o platform-api (logótipos, ficheiros públicos). Em dev, se não existir, usa-se `uploadthing.token` |
 
 Tokens com chave errada, de outro tipo (equipa ↔ responsável ↔ portal) ou assinados com o antigo segredo partilhado são rejeitados.
 
@@ -141,6 +144,50 @@ Regras de segurança:
 - Desenvolvimento: `pnpm run setup` cria o utilizador `eduflow_tenant_admin` e escreve o URL de um "servidor
   partilhado" local em `secrets/dev-tenant-server.url`, pronto a registar no painel. Com `LOCAL_FALLBACK_SERVER=true`
   (proibido em produção), os colégios sem servidor usam o cluster local.
+
+### Cópias de segurança e quantidade de dados
+
+- **Quem faz as cópias:** o provisioner, o único serviço que abre os URLs dos servidores. A equipa só pede uma cópia
+  (`POST /v1/platform/databases/:id/backups` para um servidor, ou `…/backups/school/:schoolId` para um colégio)
+  e vê a lista. A plataforma nunca vê os dados nem a chave.
+- **Passos de uma cópia:** `pg_dump` (formato custom, comprimido) → cifra **AES-256-GCM** (`secrets/backup.key`) →
+  envio para o **UploadThing** (o mesmo serviço do PASSA). Só saem bytes cifrados, e a `sha256` fica registada em
+  `database_backups`. `UPLOADTHING_ACL=private` é obrigatório em produção e exige um plano pago. Em dev (plano grátis)
+  usa-se `public-read`: o ficheiro tem nome aleatório e é ilegível sem a chave.
+- **Servidor partilhado:** acesso temporário ao utilizador do colégio (`GRANT` e depois `REVOKE`), como na criação da BD.
+  Numa BD dedicada usam-se as credenciais registadas.
+- **De hora a hora** (`MAINTENANCE_INTERVAL_MS`), o provisioner:
+  - mede a quantidade de dados de cada BD (`tenant_databases.size_bytes`) e o total por servidor
+    (`database_servers.used_bytes`);
+  - agenda uma cópia automática de cada colégio sem cópia nas últimas **24 h**;
+  - apaga as cópias com mais de **30 dias** (`libs/kernel/src/domain/backup-policy.ts`).
+- **Permissões:**
+  - `eduflow_platform_app` lê apenas `school_id`, `size_bytes` e `size_measured_at` de `tenant_databases`;
+  - o provisioner não pode apagar linhas de `database_backups` (só as marca como `DELETED`).
+- **`pg_dump` tem de ser da mesma versão do servidor ou mais recente** (o Neon já usa a 18). Em dev corre dentro de
+  `PG_DUMP_DOCKER_IMAGE=postgres:18-alpine`. No Neon usa o endpoint direto (sem `-pooler`).
+- **Desenvolvimento:**
+  - `secrets/uploadthing.token` contém o token de dev do PASSA; sem ele, as cópias vão para
+    `apps/provisioner/storage/backups`;
+  - `secrets/backup.key` **nunca é regenerada** (nem com `--force`): sem ela as cópias antigas ficam ilegíveis.
+    Guarde-a fora do servidor.
+- O **restauro** ainda não está implementado: o botão aparece desativado.
+
+### Logótipo do colégio
+
+- O responsável (`POST`/`DELETE /v1/schools/me/logo`) e a equipa com `schools.manage`
+  (`/v1/platform/schools/:id/logo`) enviam, trocam ou removem o logótipo. Fica no histórico do colégio.
+- **Validado pelos bytes, não pelo tipo indicado:** PNG, JPG ou WebP, até 2 MB, de 64 a 4096 px de lado.
+  **SVG é recusado** (pode levar scripts). O frontend reduz a imagem para 512 px antes de enviar, o que também retira
+  os metadados (EXIF, localização).
+- O ficheiro é **público**: vai para o UploadThing (`LOGO_STORAGE=uploadthing`) ou, sem token, para
+  `storage/platform/logos`, servido em `GET /v1/public/schools/logos/:file`. O logótipo antigo é apagado ao trocar.
+- O portal (`GET /v1/tenant` do school-api) devolve `logoUrl`. Da tabela `schools`, o school-api só pode ler
+  `id` e `logo_url`.
+- **Produção:** use uma app do UploadThing **só para ficheiros públicos** (`secrets/uploadthing-public.token`).
+  O token do platform-api não deve conseguir apagar as cópias de segurança.
+- Os erros do SDK do UploadThing levam o pedido HTTP com a chave da API. Os adaptadores trocam-nos por erros só com a
+  mensagem (`libs/kernel/src/infrastructure/safe-errors.ts`): nunca registe o erro original do SDK.
 
 ### Equipa só por convite
 

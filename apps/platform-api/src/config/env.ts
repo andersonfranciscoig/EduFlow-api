@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { z } from "zod";
 import { envValidator } from "../../../../libs/kernel/src/infrastructure/env";
 
@@ -24,6 +25,14 @@ export const envSchema = z.object({
   /** Pasta onde se guardam ficheiros enviados (ex.: comprovativos). */
   STORAGE_DIR: z.string().default("./storage/platform"),
 
+  // ---------------------------------------------------------------- logótipos (públicos)
+  /** UploadThing (ficheiros públicos) ou pasta local servida por esta API (dev sem token). */
+  LOGO_STORAGE: z.enum(["uploadthing", "local"]).default("local"),
+  /** Token do UploadThing. Em produção: uma app SÓ para ficheiros públicos, não a das cópias. */
+  LOGO_UPLOADTHING_TOKEN_FILE: z.string().min(1).optional(),
+  /** Endereço público desta API (URLs dos logótipos guardados localmente). */
+  PUBLIC_API_URL: z.string().url().default("http://localhost:4000/api"),
+
   // ---------------------------------------------------------------- email (Brevo)
   /** Sem chave (console): os emails aparecem no terminal. */
   EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),
@@ -33,6 +42,10 @@ export const envSchema = z.object({
   EMAIL_API_KEY_FILE: z.string().min(1).optional(),
   /** Endereço do portal de cada colégio ({slug}) — vai no email de ativação. */
   PORTAL_URL_TEMPLATE: z.string().includes("{slug}").default("http://{slug}.localhost:3002"),
+}).superRefine((env, ctx) => {
+  if (env.LOGO_STORAGE === "uploadthing" && (!env.LOGO_UPLOADTHING_TOKEN_FILE || !existsSync(env.LOGO_UPLOADTHING_TOKEN_FILE))) {
+    ctx.addIssue({ code: "custom", path: ["LOGO_UPLOADTHING_TOKEN_FILE"], message: "obrigatório (ficheiro existente) com LOGO_STORAGE=uploadthing" });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -2,7 +2,9 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  NotFoundException,
   HttpCode,
   HttpStatus,
   Param,
@@ -25,7 +27,9 @@ import { VERIFICATION_HTTP } from "../../../verification/verification.module";
 import type { StaffAccess } from "../../../identity/application/ports";
 import { CurrentStaff, RequireRecentMfa, StaffAuth } from "../../../identity/presentation/http/staff-auth";
 import { MAX_PROOF_BYTES, SchoolPayments } from "../../application/SchoolPayments";
+import { SchoolBranding } from "../../application/SchoolBranding";
 import { SchoolOnboarding } from "../../application/SchoolOnboarding";
+import { LOGO_RULES } from "../../domain/logo";
 import { PROVINCES } from "../../domain/school-data";
 import { CurrentSchoolId, SchoolOwnerAuth } from "./school-auth";
 import {
@@ -50,6 +54,43 @@ const MINUTE = 60_000;
 const uuid = new ZodValidationPipe(registerSchoolSchema.shape.subscription.shape.planId);
 /** Erros dos colégios + dos códigos por email. */
 const PUBLIC_HTTP: Partial<Record<string, HttpStatus>> = { ...SCHOOL_HTTP, ...VERIFICATION_HTTP };
+
+type Upload = { buffer: Buffer } | undefined;
+/** Logótipo: um ficheiro, campo "logo". O limite real (e o tipo) é validado pelos bytes no domínio. */
+const LogoUpload = () => UseInterceptors(FileInterceptor("logo", { limits: { fileSize: LOGO_RULES.MAX_BYTES, files: 1, fields: 0 } }));
+const LOGO_BODY: Parameters<typeof ApiBody>[0] = {
+  schema: { type: "object", required: ["logo"], properties: { logo: { type: "string", format: "binary" } } },
+};
+const LOGO_DESCRIPTION = `PNG, JPG ou WebP até 2 MB, entre ${LOGO_RULES.MIN_SIDE} e ${LOGO_RULES.MAX_SIDE} px de lado. Sem SVG. O ficheiro fica PÚBLICO.`;
+
+function logoContent(file: Upload) {
+  if (!file?.buffer?.length) throw new BadRequestException({ code: "INVALID_LOGO", message: "Escolha uma imagem." });
+  return file.buffer;
+}
+
+// =============================================================================
+//  Público — logótipos guardados nesta API (só com LOGO_STORAGE=local)
+// =============================================================================
+@ApiTags("Público · Registo de colégio")
+@Controller("v1/public/schools/logos")
+export class SchoolLogoFilesController {
+  constructor(private readonly branding: SchoolBranding) {}
+
+  @Get(":file")
+  @Throttle({ default: { limit: 300, ttl: MINUTE } })
+  @ApiOperation({ summary: "Logótipo de um colégio (armazenamento local)" })
+  async file(@Param("file") file: string, @Res() res: Response) {
+    const logo = await this.branding.logoFile(file);
+    if (!logo) throw new NotFoundException({ code: "LOGO_NOT_FOUND", message: "Logótipo não encontrado." });
+    res.setHeader("Content-Type", logo.mimeType);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    // o nome muda a cada envio → pode ficar em cache muito tempo
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(logo.content);
+  }
+}
 
 // =============================================================================
 //  Público — registo do colégio
@@ -163,7 +204,30 @@ export class SchoolPortalController {
   constructor(
     private readonly payments: SchoolPayments,
     private readonly onboarding: SchoolOnboarding,
+    private readonly branding: SchoolBranding,
   ) {}
+
+  @Post("logo")
+  @HttpCode(HttpStatus.OK)
+  // as tentativas recusadas (imagem inválida) também contam
+  @Throttle({ default: { limit: 20, ttl: 15 * MINUTE } })
+  @LogoUpload()
+  @ApiConsumes("multipart/form-data")
+  @ApiBody(LOGO_BODY)
+  @ApiOperation({ summary: "Enviar / trocar o logótipo do colégio", description: LOGO_DESCRIPTION })
+  async uploadLogo(@CurrentSchoolId() schoolId: string, @UploadedFile() file: Upload) {
+    unwrap(await this.branding.changeLogo(schoolId, logoContent(file), null), SCHOOL_HTTP);
+    return unwrap(await this.payments.portalView(schoolId), SCHOOL_HTTP);
+  }
+
+  @Delete("logo")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({ summary: "Remover o logótipo do colégio" })
+  async removeLogo(@CurrentSchoolId() schoolId: string) {
+    unwrap(await this.branding.removeLogo(schoolId, null), SCHOOL_HTTP);
+    return unwrap(await this.payments.portalView(schoolId), SCHOOL_HTTP);
+  }
 
   @Post("email/code")
   @HttpCode(HttpStatus.OK)
@@ -236,7 +300,32 @@ export class SchoolPortalController {
 @ApiBearerAuth()
 @Controller("v1/platform/schools")
 export class SchoolsAdminController {
-  constructor(private readonly payments: SchoolPayments) {}
+  constructor(
+    private readonly payments: SchoolPayments,
+    private readonly branding: SchoolBranding,
+  ) {}
+
+  @Post(":id/logo")
+  @HttpCode(HttpStatus.OK)
+  @StaffAuth("schools.manage")
+  @Throttle({ default: { limit: 20, ttl: 15 * MINUTE } })
+  @LogoUpload()
+  @ApiConsumes("multipart/form-data")
+  @ApiBody(LOGO_BODY)
+  @ApiOperation({ summary: "Enviar / trocar o logótipo de um colégio", description: LOGO_DESCRIPTION })
+  async uploadLogo(@Param("id", uuid) id: string, @UploadedFile() file: Upload, @CurrentStaff() staff: StaffAccess) {
+    unwrap(await this.branding.changeLogo(id, logoContent(file), staff.id), SCHOOL_HTTP);
+    return unwrap(await this.payments.detail(id), SCHOOL_HTTP);
+  }
+
+  @Delete(":id/logo")
+  @HttpCode(HttpStatus.OK)
+  @StaffAuth("schools.manage")
+  @ApiOperation({ summary: "Remover o logótipo de um colégio" })
+  async removeLogo(@Param("id", uuid) id: string, @CurrentStaff() staff: StaffAccess) {
+    unwrap(await this.branding.removeLogo(id, staff.id), SCHOOL_HTTP);
+    return unwrap(await this.payments.detail(id), SCHOOL_HTTP);
+  }
 
   @Get()
   @StaffAuth("schools.view")

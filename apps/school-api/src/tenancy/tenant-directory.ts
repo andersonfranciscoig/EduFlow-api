@@ -7,6 +7,8 @@ export interface TenantEntry {
   schoolId: string;
   slug: string;
   schoolName: string;
+  /** Logótipo público (null = sem logótipo). */
+  logoUrl: string | null;
   dbHost: string;
   dbPort: number;
   dbName: string;
@@ -73,6 +75,8 @@ export class TenantDirectory implements OnModuleDestroy {
         passwordCiphertext: true,
         sslMode: true,
         active: true,
+        // da tabela schools só pode ler id e logo_url (ver infra/db/grants.sql)
+        school: { select: { logoUrl: true } },
       },
     });
     const entry: TenantEntry | null = row?.active
@@ -80,6 +84,7 @@ export class TenantDirectory implements OnModuleDestroy {
           schoolId: row.schoolId,
           slug: row.slug,
           schoolName: row.schoolName,
+          logoUrl: row.school.logoUrl,
           dbHost: row.dbHost,
           dbPort: row.dbPort,
           dbName: row.dbName,

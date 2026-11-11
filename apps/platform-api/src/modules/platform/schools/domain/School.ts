@@ -1,5 +1,6 @@
 import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/domain/Result";
 import { schoolError, type SchoolError } from "./errors";
+import type { SchoolLogo } from "./logo";
 import { CORPORATE_EMAIL_DEADLINE_DAYS, isPersonalEmail, type OwnerData, type SchoolData } from "./school-data";
 
 export type SchoolStatus = "PENDING_REVIEW" | "AWAITING_PAYMENT" | "PAYMENT_UNDER_REVIEW" | "ACTIVE" | "REJECTED" | "SUSPENDED";
@@ -20,7 +21,9 @@ export type SchoolActivityType =
   | "OWNER_PASSWORD_RESET"
   | "OWNER_EMAIL_CHANGED"
   | "SCHOOL_SUSPENDED"
-  | "SCHOOL_REACTIVATED";
+  | "SCHOOL_REACTIVATED"
+  | "LOGO_CHANGED"
+  | "LOGO_REMOVED";
 
 export interface SchoolEvent {
   type: SchoolActivityType;
@@ -78,6 +81,8 @@ export interface SchoolProps extends SchoolData {
   suspendedAt: Date | null;
   suspensionReason: string | null;
   suspendedFromStatus: SchoolStatus | null;
+  /** Logótipo público (null = ainda não tem). */
+  logo: SchoolLogo | null;
   createdAt: Date;
   /** Da mais recente para a mais antiga. */
   orders: SubscriptionOrder[];
@@ -128,6 +133,7 @@ export class School {
       suspendedAt: null,
       suspensionReason: null,
       suspendedFromStatus: null,
+      logo: null,
       createdAt: input.now,
       orders: [{ ...input.order, status: "PENDING_REVIEW", instructions: null, proof: null, proofRejectionReason: null, paidAt: null }],
     });
@@ -195,6 +201,37 @@ export class School {
     return ok(undefined);
   }
 
+  // ================================================================ logótipo
+
+  /**
+   * O responsável (staffId null) só muda o logótipo enquanto a conta está em
+   * uso; a equipa pode sempre. Devolve a chave do logótipo anterior (para apagar).
+   */
+  canEditLogo(staffId: string | null): Result<void, SchoolError> {
+    if (staffId) return ok(undefined);
+    if (this.props.status === "REJECTED") return fail(schoolError("INVALID_STATE", "Este pedido não foi aprovado."));
+    return this.ensureNotSuspended();
+  }
+
+  changeLogo(logo: SchoolLogo, staffId: string | null, now: Date): Result<string | null, SchoolError> {
+    const allowed = this.canEditLogo(staffId);
+    if (!allowed.ok) return allowed;
+    const previous = this.props.logo?.key ?? null;
+    this.props.logo = { ...logo };
+    this.record("LOGO_CHANGED", staffId, now, { replaced: previous !== null });
+    return ok(previous);
+  }
+
+  removeLogo(staffId: string | null, now: Date): Result<string, SchoolError> {
+    const allowed = this.canEditLogo(staffId);
+    if (!allowed.ok) return allowed;
+    if (!this.props.logo) return fail(schoolError("LOGO_NOT_FOUND", "O colégio não tem logótipo."));
+    const previous = this.props.logo.key;
+    this.props.logo = null;
+    this.record("LOGO_REMOVED", staffId, now, null);
+    return ok(previous);
+  }
+
   private ensureNotSuspended(): Result<void, SchoolError> {
     return this.props.status === "SUSPENDED"
       ? fail(schoolError("INVALID_STATE", "Este colégio está desativado. Fale com a equipa EduFlow."))
@@ -202,7 +239,7 @@ export class School {
   }
 
   static restore(props: SchoolProps): School {
-    return new School({ ...props, orders: props.orders.map((o) => ({ ...o })) });
+    return new School({ ...props, logo: props.logo ? { ...props.logo } : null, orders: props.orders.map((o) => ({ ...o })) });
   }
 
   // ================================================================ equipa

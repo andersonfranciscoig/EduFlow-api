@@ -67,6 +67,7 @@ function toDomain(row: SchoolRow & { orders: OrderRow[] }): School {
     suspendedAt: row.suspendedAt,
     suspensionReason: row.suspensionReason,
     suspendedFromStatus: row.suspendedFromStatus,
+    logo: row.logoKey && row.logoUrl && row.logoUpdatedAt ? { key: row.logoKey, url: row.logoUrl, updatedAt: row.logoUpdatedAt } : null,
     createdAt: row.createdAt,
     orders: row.orders.map(orderToDomain),
   });
@@ -214,6 +215,9 @@ export class PrismaSchoolRepository implements SchoolRepository {
       suspendedAt: s.suspendedAt,
       suspensionReason: s.suspensionReason,
       suspendedFromStatus: s.suspendedFromStatus,
+      logoKey: s.logo?.key ?? null,
+      logoUrl: s.logo?.url ?? null,
+      logoUpdatedAt: s.logo?.updatedAt ?? null,
     };
     const events = school.pullEvents();
     const activated = events.some((e) => e.type === "SCHOOL_ACTIVATED");

@@ -36,6 +36,34 @@ export interface AllocationView {
   releaseReason: string | null;
   /** RESERVED mas fora do prazo (ainda não varrida) */
   expired: boolean;
+  /** quantidade de dados da BD do colégio (medida pelo provisioner) */
+  databaseBytes?: number | null;
+}
+
+export interface BackupView {
+  id: string;
+  school: { id: string; name: string };
+  trigger: "MANUAL" | "AUTOMATIC";
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "DELETED";
+  /** tamanho da cópia (cifrada) */
+  sizeBytes: number | null;
+  /** tamanho da BD no momento da cópia */
+  databaseBytes: number | null;
+  error: string | null;
+  requestedBy: { id: string; fullName: string } | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}
+
+/** Cópias de segurança: pedidas aqui, feitas pelo provisioner (fila database_backups). */
+export interface BackupRepository {
+  /** colégios com BD criada e atribuída a este servidor */
+  schoolsOnServer(serverId: string): Promise<string[]>;
+  hasDatabase(schoolId: string): Promise<boolean>;
+  /** Cria pedidos MANUAL (ignora colégios com uma cópia já pendente). Devolve quantos criou. */
+  request(schoolIds: string[], staffId: string): Promise<number>;
+  forServer(serverId: string, limit: number): Promise<BackupView[]>;
+  forSchool(schoolId: string, limit: number): Promise<BackupView[]>;
 }
 
 export interface ServerActivityView extends Omit<ServerEvent, "actorStaffId"> {
@@ -50,14 +78,14 @@ export interface DatabaseServerRepository {
   save(server: DatabaseServer, sealedUrl?: string): Promise<void>;
   remove(id: string): Promise<void>;
   /** colégios atribuídos e reservas válidas */
-  usage(id: string): Promise<{ assigned: number; reserved: number; everAssigned: number }>;
+  usage(id: string): Promise<{ assigned: number; reserved: number; everAssigned: number; usedBytes: number | null }>;
   /** Volta a pôr na fila a criação/ligação das BDs dos colégios deste servidor (ex.: senha da BD dedicada mudou). */
   requeueProvisioning(serverId: string): Promise<number>;
   requestCheck(serverId: string, kind: "REGISTRATION" | "MANUAL", staffId: string): Promise<string>;
 }
 
 export interface DatabaseServerQueries {
-  list(): Promise<{ server: DatabaseServer; usage: { assigned: number; reserved: number }; recentLatency: (number | null)[] }[]>;
+  list(): Promise<{ server: DatabaseServer; usage: { assigned: number; reserved: number; usedBytes: number | null }; recentLatency: (number | null)[] }[]>;
   checks(serverId: string, limit: number): Promise<CheckView[]>;
   check(serverId: string, checkId: string): Promise<CheckView | null>;
   allocations(serverId: string): Promise<AllocationView[]>;
@@ -79,6 +107,8 @@ export interface SchoolDatabaseStatus {
   server: { id: string; name: string; kind: DatabaseServer["kind"] } | null;
   allocation: AllocationView | null;
   provisioning: { status: "PENDING" | "RUNNING" | "DONE" | "FAILED"; attempts: number; lastError: string | null; provisioned: boolean } | null;
+  /** quantidade de dados e última cópia (null = a BD ainda não existe) */
+  storage: { databaseBytes: number | null; measuredAt: Date | null; lastBackup: BackupView | null } | null;
 }
 
 /** Reservas/atribuições (com bloqueio de linhas para respeitar a capacidade). */
@@ -98,4 +128,5 @@ export const DATABASE_TOKENS = {
   Queries: Symbol("DatabaseServerQueries"),
   Sealer: Symbol("CredentialSealer"),
   PlacementStore: Symbol("PlacementStore"),
+  Backups: Symbol("BackupRepository"),
 } as const;

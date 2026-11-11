@@ -9,7 +9,7 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO eduflow_platform_app;
 -- …mas não as credenciais (cifradas) das BDs dos colégios nem o histórico de migrações
 REVOKE ALL ON public.tenant_databases FROM eduflow_platform_app;
 -- …exceto ligar/desligar o portal de um colégio (desativar/reativar): só a coluna "active"
-GRANT SELECT (school_id), UPDATE (active) ON public.tenant_databases TO eduflow_platform_app;
+GRANT SELECT (school_id, size_bytes, size_measured_at), UPDATE (active) ON public.tenant_databases TO eduflow_platform_app;
 REVOKE ALL ON public._prisma_migrations FROM eduflow_platform_app;
 -- URLs dos servidores de BD: a plataforma ESCREVE mas não LÊ (write-only).
 -- (SELECT só na chave, necessário para UPDATE/DELETE … WHERE server_id = …)
@@ -24,10 +24,14 @@ GRANT SELECT, UPDATE ON public.tenant_provisioning_jobs TO eduflow_provisioner;
 GRANT SELECT, INSERT, UPDATE ON public.tenant_databases TO eduflow_provisioner;
 GRANT SELECT ON public.database_server_secrets TO eduflow_provisioner;
 GRANT SELECT (id, kind, status, host, port, database, ssl_mode, health, server_version, tls_active, consecutive_failures),
-      UPDATE (health, last_checked_at, last_latency_ms, server_version, tls_active, last_error, consecutive_failures, updated_at)
+      UPDATE (health, last_checked_at, last_latency_ms, server_version, tls_active, last_error, consecutive_failures, used_bytes, updated_at)
   ON public.database_servers TO eduflow_provisioner;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.database_server_checks TO eduflow_provisioner;
+-- cópias de segurança: fila (pedidas pela equipa) + automáticas + retenção
+GRANT SELECT, INSERT, UPDATE ON public.database_backups TO eduflow_provisioner;
 
 -- school-api: só lê o diretório
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM eduflow_school_directory;
 GRANT SELECT ON public.tenant_databases TO eduflow_school_directory;
+-- …e o logótipo (público) do colégio: só o id e o URL, nada mais da tabela schools
+GRANT SELECT (id, logo_url) ON public.schools TO eduflow_school_directory;

@@ -1,6 +1,6 @@
 import type { DatabaseServer, ServerHealth, ServerKind } from "../domain/DatabaseServer";
 import { acceptsNewSchool, freeSlots, type PlacementCandidate } from "../domain/placement";
-import type { AllocationView, CheckView, SchoolDatabaseStatus, ServerActivityView } from "./ports";
+import type { AllocationView, BackupView, CheckView, SchoolDatabaseStatus, ServerActivityView } from "./ports";
 
 export const KIND_LABELS: Record<ServerKind, string> = {
   SHARED_SERVER: "Servidor partilhado",
@@ -16,7 +16,11 @@ export const HEALTH_LABELS: Record<ServerHealth, string> = {
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
-export function toServerSummary(server: DatabaseServer, usage: { assigned: number; reserved: number }, recentLatency: (number | null)[] = []) {
+export function toServerSummary(
+  server: DatabaseServer,
+  usage: { assigned: number; reserved: number; usedBytes: number | null },
+  recentLatency: (number | null)[] = [],
+) {
   const s = server.snapshot;
   const h = s.healthState;
   return {
@@ -37,6 +41,8 @@ export function toServerSummary(server: DatabaseServer, usage: { assigned: numbe
     assigned: usage.assigned,
     reserved: usage.reserved,
     free: freeSlots({ capacity: s.capacity, ...usage }),
+    /** soma dos dados das BDs dos colégios neste servidor (medida de hora a hora) */
+    usedBytes: usage.usedBytes,
     health: h.health,
     healthLabel: HEALTH_LABELS[h.health],
     lastCheckedAt: iso(h.lastCheckedAt),
@@ -89,6 +95,24 @@ export function toCandidateDto(c: PlacementCandidate) {
   };
 }
 
+export const BACKUP_STATUS_LABELS: Record<BackupView["status"], string> = {
+  PENDING: "Na fila",
+  RUNNING: "A copiar",
+  DONE: "Concluída",
+  FAILED: "Falhou",
+  DELETED: "Apagada (prazo)",
+};
+
+export function toBackupDto(b: BackupView) {
+  return {
+    ...b,
+    statusLabel: BACKUP_STATUS_LABELS[b.status],
+    triggerLabel: b.trigger === "MANUAL" ? "Manual" : "Automática",
+    createdAt: b.createdAt.toISOString(),
+    completedAt: iso(b.completedAt),
+  };
+}
+
 export const SCHOOL_DB_LABELS: Record<SchoolDatabaseStatus["state"], string> = {
   NONE: "Sem servidor reservado",
   RESERVED: "Servidor reservado",
@@ -107,6 +131,13 @@ export function toSchoolDatabaseDto(s: SchoolDatabaseStatus) {
     server: s.server ? { ...s.server, kindLabel: KIND_LABELS[s.server.kind] } : null,
     allocation: s.allocation ? toAllocationDto(s.allocation) : null,
     provisioning: s.provisioning,
+    storage: s.storage
+      ? {
+          databaseBytes: s.storage.databaseBytes,
+          measuredAt: iso(s.storage.measuredAt),
+          lastBackup: s.storage.lastBackup ? toBackupDto(s.storage.lastBackup) : null,
+        }
+      : null,
   };
 }
 

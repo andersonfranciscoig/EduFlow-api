@@ -43,7 +43,37 @@ if [ ! -f secrets/school-mfa.key ] || [ "$FORCE" = "--force" ]; then
   openssl rand -base64 32 > secrets/school-mfa.key
   echo "✓ chave school-mfa (AES-256) — segredos da 2FA nas BDs dos colégios; só school-api"
 fi
+if [ ! -f secrets/backup.key ]; then # nunca regenerar com --force: perder-se-iam as cópias existentes
+  openssl rand -base64 32 > secrets/backup.key
+  echo "✓ chave backup (AES-256) — cifra as cópias das BDs; só provisioner (GUARDE-A FORA DO SERVIDOR)"
+fi
 chmod 600 secrets/*.key
+
+# ---------------------------------------------------------------- cópias de segurança
+# Com secrets/uploadthing.token as cópias (cifradas) vão para o UploadThing (privado);
+# sem ele ficam em apps/provisioner/storage/backups.
+BACKUP_STORAGE=local
+if [ -s secrets/uploadthing.token ]; then
+  chmod 600 secrets/uploadthing.token
+  BACKUP_STORAGE=uploadthing
+  echo "✓ cópias de segurança no UploadThing"
+else
+  echo "• cópias de segurança numa pasta local (crie secrets/uploadthing.token para usar o UploadThing)"
+fi
+# Logótipos dos colégios (ficheiros PÚBLICOS): secrets/uploadthing-public.token se existir
+# (recomendado: app do UploadThing só para ficheiros públicos); em dev serve o mesmo token.
+LOGO_STORAGE=local
+LOGO_TOKEN_FILE=secrets/uploadthing-public.token
+[ -s "$LOGO_TOKEN_FILE" ] || LOGO_TOKEN_FILE=secrets/uploadthing.token
+if [ -s "$LOGO_TOKEN_FILE" ]; then
+  chmod 600 "$LOGO_TOKEN_FILE"
+  LOGO_STORAGE=uploadthing
+  echo "✓ logótipos no UploadThing ($LOGO_TOKEN_FILE)"
+else
+  echo "• logótipos numa pasta local (servidos pelo platform-api)"
+fi
+# pg_dump tem de ser >= versão do servidor (o Neon já usa a 18); o do sistema costuma ser antigo → Docker
+PG_DUMP_DOCKER_IMAGE="postgres:18-alpine"
 
 # ---------------------------------------------------------------- email (Brevo)
 # Opcional. Sem secrets/email-api.key os emails aparecem na consola do school-api.
@@ -96,6 +126,10 @@ SERVER_CREDENTIALS_PUBLIC_KEY_FILE=secrets/server-credentials.pub
 JWT_EXPIRES_IN_SECONDS=28800
 DEFAULT_PHONE_COUNTRY_CODE="244"
 STORAGE_DIR=./storage/platform
+# logótipos dos colégios (públicos)
+LOGO_STORAGE=$LOGO_STORAGE
+LOGO_UPLOADTHING_TOKEN_FILE=$LOGO_TOKEN_FILE
+PUBLIC_API_URL="http://localhost:4000/api"
 # códigos por email (criar conta, repor senha) e aviso "portal pronto"
 PORTAL_URL_TEMPLATE="http://{slug}.localhost:3002"
 EMAIL_PROVIDER=$EMAIL_PROVIDER
@@ -135,6 +169,15 @@ POLL_INTERVAL_MS=3000
 HEALTH_CHECK_INTERVAL_MS=300000
 # Só desenvolvimento: colégios sem servidor atribuído usam o cluster local
 LOCAL_FALLBACK_SERVER=true
+# cópias de segurança (diárias, 30 dias) e tamanho das BDs
+BACKUP_KEY_FILE=secrets/backup.key
+BACKUP_STORAGE=$BACKUP_STORAGE
+UPLOADTHING_TOKEN_FILE=secrets/uploadthing.token
+# plano grátis do UploadThing não permite ficheiros privados; as cópias vão cifradas (produção: private)
+UPLOADTHING_ACL=public-read
+BACKUP_LOCAL_DIR=./storage/backups
+PG_DUMP_DOCKER_IMAGE=$PG_DUMP_DOCKER_IMAGE
+MAINTENANCE_INTERVAL_MS=3600000
 EOF
 chmod 600 .env apps/*/.env
 echo "✓ .env de cada serviço escritos"

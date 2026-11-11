@@ -6,12 +6,14 @@ import type { Env } from "../../../config/env";
 import { IdentityModule } from "../identity/identity.module";
 import { PlatformDatabaseModule } from "../infrastructure/platform-database.module";
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
+import { DatabaseBackups } from "./application/DatabaseBackups";
 import { DatabasePlacement } from "./application/DatabasePlacement";
 import { DatabaseRegistry } from "./application/DatabaseRegistry";
 import { type CredentialSealer, DATABASE_TOKENS as T, type PlacementStore } from "./application/ports";
 import { assignOnActivation, PrismaPlacementStore } from "./infrastructure/placement-sql";
+import { PrismaBackupRepository } from "./infrastructure/PrismaBackupRepository";
 import { PrismaDatabaseServerRepository } from "./infrastructure/PrismaDatabaseServerRepository";
-import { DatabasePlacementController, DatabaseServersController } from "./presentation/http/database.controller";
+import { DatabaseBackupsController, DatabasePlacementController, DatabaseServersController } from "./presentation/http/database.controller";
 
 /** Gancho usado pelo contexto "schools" na transação de ativação do colégio. */
 export const ACTIVATION_PLACEMENT = Symbol("ActivationPlacement");
@@ -23,7 +25,7 @@ export type ActivationPlacement = typeof assignOnActivation;
  */
 @Module({
   imports: [PlatformDatabaseModule, IdentityModule],
-  controllers: [DatabaseServersController, DatabasePlacementController],
+  controllers: [DatabaseBackupsController, DatabaseServersController, DatabasePlacementController],
   providers: [
     {
       provide: T.Sealer,
@@ -48,6 +50,11 @@ export type ActivationPlacement = typeof assignOnActivation;
       inject: [PrismaDatabaseServerRepository, T.Sealer],
       useFactory: (repo: PrismaDatabaseServerRepository, sealer: CredentialSealer) =>
         new DatabaseRegistry(repo, repo, sealer, uuidGenerator, systemClock),
+    },
+    {
+      provide: DatabaseBackups,
+      inject: [PlatformPrismaService, PrismaDatabaseServerRepository],
+      useFactory: (prisma: PlatformPrismaService, repo: PrismaDatabaseServerRepository) => new DatabaseBackups(new PrismaBackupRepository(prisma), repo),
     },
     {
       provide: DatabasePlacement,

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtModule, JwtService } from "@nestjs/jwt";
@@ -17,6 +19,7 @@ import { PlatformDatabaseModule } from "../infrastructure/platform-database.modu
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
 import {
   type CodeGenerator,
+  type LogoStorage,
   type PlanCatalog,
   SCHOOL_TOKENS as T,
   type SchoolDatabasePort,
@@ -24,6 +27,7 @@ import {
   type SchoolSettings,
   type SchoolTokenService,
 } from "./application/ports";
+import { SchoolBranding } from "./application/SchoolBranding";
 import { SchoolOnboarding } from "./application/SchoolOnboarding";
 import { SchoolPayments } from "./application/SchoolPayments";
 import type { SchoolRepository } from "./domain/SchoolRepository";
@@ -32,9 +36,15 @@ import type { Mailer } from "../../../../../../libs/kernel/src/infrastructure/ma
 import { EmailVerificationService } from "../verification/application/EmailVerificationService";
 import { PLATFORM_MAILER, VerificationModule } from "../verification/verification.module";
 import { EmailDeadlineSweeper } from "./infrastructure/email-deadline-sweeper";
+import { LocalLogoStorage, UploadThingLogoStorage } from "./infrastructure/logo-storage";
 import { PrismaSchoolRepository } from "./infrastructure/PrismaSchoolRepository";
 import { SchoolOwnerGuard } from "./presentation/http/school-auth";
-import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminController } from "./presentation/http/school.controllers";
+import {
+  SchoolLogoFilesController,
+  SchoolOnboardingController,
+  SchoolPortalController,
+  SchoolsAdminController,
+} from "./presentation/http/school.controllers";
 
 /**
  * Contexto "Schools" do módulo Plataforma: colégios clientes, adesão,
@@ -58,7 +68,7 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
       }),
     }),
   ],
-  controllers: [SchoolOnboardingController, SchoolPortalController, SchoolsAdminController],
+  controllers: [SchoolOnboardingController, SchoolLogoFilesController, SchoolPortalController, SchoolsAdminController],
   providers: [
     { provide: SHARED_TOKENS.Clock, useValue: systemClock },
     { provide: SHARED_TOKENS.IdGenerator, useValue: uuidGenerator },
@@ -138,6 +148,24 @@ import { SchoolOnboardingController, SchoolPortalController, SchoolsAdminControl
         notifier: SchoolNotifier,
         settings: SchoolSettings,
       ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings),
+    },
+    {
+      provide: T.LogoStorage,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>): LogoStorage => {
+        const tokenFile = config.get("LOGO_UPLOADTHING_TOKEN_FILE", { infer: true });
+        const storage =
+          config.get("LOGO_STORAGE", { infer: true }) === "uploadthing" && tokenFile
+            ? new UploadThingLogoStorage(readFileSync(tokenFile, "utf8"))
+            : new LocalLogoStorage(path.join(config.get("STORAGE_DIR", { infer: true }), "logos"), config.get("PUBLIC_API_URL", { infer: true }));
+        console.log(`[platform-api] logótipos: ${storage.name}`);
+        return storage;
+      },
+    },
+    {
+      provide: SchoolBranding,
+      inject: [T.SchoolRepository, T.LogoStorage, SHARED_TOKENS.Clock],
+      useFactory: (repo: SchoolRepository, storage: LogoStorage, clock: Clock) => new SchoolBranding(repo, storage, clock),
     },
     SchoolOwnerGuard,
     EmailDeadlineSweeper,

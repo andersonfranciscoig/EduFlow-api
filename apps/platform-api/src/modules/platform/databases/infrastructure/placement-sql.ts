@@ -5,6 +5,7 @@ import type { AllocationView, PlacementStore, SchoolDatabaseStatus } from "../ap
 import type { ServerActivityType } from "../domain/DatabaseServer";
 import { databaseError, type DatabaseError } from "../domain/errors";
 import { acceptsNewSchool, freeSlots, type PlacementCandidate, rankForAutoPlacement } from "../domain/placement";
+import { backupViews, databaseSizes } from "./PrismaBackupRepository";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -153,7 +154,18 @@ export class PrismaPlacementStore implements PlacementStore {
     } else if (view?.status === "RESERVED") {
       state = view.expired ? "RESERVATION_EXPIRED" : "RESERVED";
     }
-    return { state, server, allocation: view, provisioning };
+
+    let storage: SchoolDatabaseStatus["storage"] = null;
+    const size = (await databaseSizes(this.prisma, [schoolId])).get(schoolId);
+    if (size) {
+      const last = await this.prisma.databaseBackup.findFirst({
+        where: { schoolId, status: { not: "DELETED" } },
+        include: { school: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+      storage = { databaseBytes: size.bytes, measuredAt: size.measuredAt, lastBackup: last ? (await backupViews(this.prisma, [last]))[0]! : null };
+    }
+    return { state, server, allocation: view, provisioning, storage };
   }
 
   async reserve(input: { schoolId: string; serverIds: string[]; staffId: string; expiresAt: Date }): Promise<Result<AllocationView, DatabaseError>> {

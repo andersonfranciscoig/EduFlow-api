@@ -70,6 +70,8 @@ export function toSchoolSummary(school: School) {
     cycleLabel: order ? cycleLabel(order.cycle, order.months) : null,
     subscriptionEndsAt: s.subscriptionEndsAt?.toISOString() ?? null,
     slug: s.slug,
+    // logótipo público (a chave interna no armazenamento não sai daqui)
+    logoUrl: s.logo?.url ?? null,
     // email pessoal: prazo para passar a corporativo (null = corporativo)
     ownerEmailDeadline: s.ownerEmailDeadline?.toISOString() ?? null,
     suspendedAt: s.suspendedAt?.toISOString() ?? null,

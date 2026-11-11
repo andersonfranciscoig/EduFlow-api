@@ -209,6 +209,10 @@ model School {
   suspendedAt         DateTime?     @map("suspended_at")
   suspensionReason    String?       @map("suspension_reason")
   suspendedFromStatus SchoolStatus? @map("suspended_from_status")
+  /// Logótipo (público): chave no armazenamento + URL. O school-api só lê o URL.
+  logoKey             String?       @map("logo_key")
+  logoUrl             String?       @map("logo_url")
+  logoUpdatedAt       DateTime?     @map("logo_updated_at")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 
@@ -217,6 +221,7 @@ model School {
   provisioning TenantProvisioningJob?
   database     TenantDatabase?
   allocations  DatabaseAllocation[]
+  backups      DatabaseBackup[]
 
   @@index([status])
   @@map("schools")
@@ -277,6 +282,9 @@ model TenantDatabase {
   /// disable | require | verify-ca | verify-full
   sslMode            String   @default("disable") @map("ssl_mode")
   serverId           String?  @map("server_id") @db.Uuid
+  /// Quantidade de dados da BD do colégio (medida pelo provisioner)
+  sizeBytes          BigInt?  @map("size_bytes")
+  sizeMeasuredAt     DateTime? @map("size_measured_at")
   active             Boolean  @default(true)
   createdAt          DateTime @default(now()) @map("created_at")
 
@@ -356,6 +364,8 @@ model DatabaseServer {
   tlsActive           Boolean?             @map("tls_active")
   lastError           String?              @map("last_error")
   consecutiveFailures Int                  @default(0) @map("consecutive_failures")
+  /// Soma dos dados das BDs dos colégios neste servidor (provisioner)
+  usedBytes           BigInt?              @map("used_bytes")
 
   credentialsUpdatedAt DateTime @map("credentials_updated_at")
   createdById          String?  @map("created_by_id") @db.Uuid
@@ -438,6 +448,51 @@ model DatabaseServerActivity {
 
   @@index([serverId, occurredAt(sort: Desc)])
   @@map("database_server_activity")
+}
+
+// =============================================================================
+//  CÓPIAS DE SEGURANÇA das BDs dos colégios
+//  Feitas pelo provisioner (pg_dump), cifradas com AES-256-GCM ANTES de sair
+//  e guardadas no armazenamento externo (UploadThing, privado).
+// =============================================================================
+
+enum BackupStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  /// apagada do armazenamento (fim da retenção)
+  DELETED
+}
+
+enum BackupTrigger {
+  MANUAL
+  AUTOMATIC
+}
+
+model DatabaseBackup {
+  id            String        @id @db.Uuid
+  schoolId      String        @map("school_id") @db.Uuid
+  school        School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  serverId      String?       @map("server_id") @db.Uuid
+  trigger       BackupTrigger
+  status        BackupStatus  @default(PENDING)
+  requestedById String?       @map("requested_by_id") @db.Uuid
+  /// Chave do ficheiro no armazenamento (nunca um URL público)
+  storageKey    String?       @map("storage_key")
+  /// Tamanho do ficheiro cifrado
+  sizeBytes     BigInt?       @map("size_bytes")
+  /// Tamanho da BD no momento da cópia
+  databaseBytes BigInt?       @map("database_bytes")
+  sha256        String?
+  error         String?
+  createdAt     DateTime      @default(now()) @map("created_at")
+  startedAt     DateTime?     @map("started_at")
+  completedAt   DateTime?     @map("completed_at")
+
+  @@index([schoolId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("database_backups")
 }
 
 // =============================================================================

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { PrismaClient as PlatformClient, type Prisma } from ".prisma/platform-client";
 import { parsePostgresUrl, type PostgresUrl } from "../../../libs/kernel/src/domain/postgres-url";
+import { readBackupKey } from "../../../libs/kernel/src/infrastructure/backup-crypto";
 import { openSealed, readKeyFile } from "../../../libs/kernel/src/infrastructure/keys";
+import { LocalBackupStore, UploadThingBackupStore } from "./backup-store";
+import { applyRetention, claimBackup, type MaintenanceContext, measureSizes, runBackup, scheduleAutomaticBackups } from "./backups";
 import { loadEnv } from "./env";
 import { type CheckResult, runCheck, type ServerKind } from "./health-check";
 import { friendlyError } from "./pg-target";
@@ -186,12 +190,65 @@ async function provision(job: Job) {
     WHERE id = ${job.id}::uuid`;
 }
 
+// ======================================================================= cópias e tamanho das BDs
+
+const backupStore =
+  env.BACKUP_STORAGE === "uploadthing"
+    ? new UploadThingBackupStore(readFileSync(env.UPLOADTHING_TOKEN_FILE!, "utf8"), env.UPLOADTHING_ACL)
+    : new LocalBackupStore(env.BACKUP_LOCAL_DIR);
+
+const maintenance: MaintenanceContext = {
+  platform,
+  store: backupStore,
+  backupKey: readBackupKey(readFileSync(env.BACKUP_KEY_FILE, "utf8")),
+  dockerImage: env.PG_DUMP_DOCKER_IMAGE,
+  log,
+  async resolve(serverId) {
+    if (!serverId) {
+      if (!env.LOCAL_FALLBACK_SERVER) throw new Error("Colégio sem servidor atribuído.");
+      return { kind: "SHARED_SERVER", url: localServer() };
+    }
+    const { server, url } = await loadServer(serverId);
+    return { kind: server.kind, url };
+  },
+};
+
+let backingUp: Promise<void> | null = null;
+/** Uma cópia de cada vez, em segundo plano. */
+async function nextBackup() {
+  if (backingUp) return;
+  const job = await claimBackup(platform);
+  if (!job) return;
+  backingUp = runBackup(maintenance, job)
+    .catch((error) => log(`✗ cópia: ${describe(error)}`))
+    .finally(() => {
+      backingUp = null;
+    });
+}
+
+let lastMaintenance = 0;
+let maintaining: Promise<void> | null = null;
+function periodicMaintenance() {
+  if (maintaining || Date.now() - lastMaintenance < env.MAINTENANCE_INTERVAL_MS) return;
+  lastMaintenance = Date.now();
+  maintaining = (async () => {
+    await measureSizes(maintenance);
+    await scheduleAutomaticBackups(maintenance);
+    await applyRetention(maintenance);
+  })()
+    .catch((error) => log(`✗ manutenção: ${describe(error)}`))
+    .finally(() => {
+      maintaining = null;
+    });
+}
+
 // ======================================================================= ciclo
 
 let running = true;
 async function loop() {
   log(`a vigiar a fila (cada ${env.POLL_INTERVAL_MS} ms; saúde dos servidores cada ${Math.round(env.HEALTH_CHECK_INTERVAL_MS / 1000)} s)`);
   if (env.LOCAL_FALLBACK_SERVER) log("aviso: LOCAL_FALLBACK_SERVER ativo (só desenvolvimento)");
+  log(`cópias de segurança → ${backupStore.name}${env.PG_DUMP_DOCKER_IMAGE ? ` (pg_dump em ${env.PG_DUMP_DOCKER_IMAGE})` : ""}`);
   // testes interrompidos (ex.: o provisioner foi reiniciado a meio) voltam à fila
   await platform.$executeRaw`
     UPDATE database_server_checks SET status = 'PENDING'
@@ -226,6 +283,13 @@ async function loop() {
       periodicChecks();
     } catch (error) {
       log(`✗ testes de ligação: ${describe(error)}`);
+    }
+
+    try {
+      await nextBackup();
+      periodicMaintenance();
+    } catch (error) {
+      log(`✗ cópias: ${describe(error)}`);
     }
 
     if (!worked) await new Promise((r) => setTimeout(r, env.POLL_INTERVAL_MS));

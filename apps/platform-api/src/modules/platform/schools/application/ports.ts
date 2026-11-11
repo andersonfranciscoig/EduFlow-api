@@ -65,6 +65,15 @@ export interface SchoolNotifier {
   schoolSuspended(input: { to: { email: string; name: string }; schoolName: string; reason: string }): Promise<void>;
 }
 
+/** Onde ficam os logótipos (ficheiros PÚBLICOS: qualquer pessoa com o URL os vê). */
+export interface LogoStorage {
+  readonly name: string;
+  put(schoolId: string, file: { mimeType: string; content: Buffer }): Promise<{ key: string; url: string }>;
+  remove(key: string): Promise<void>;
+  /** Só quando é esta API a servir os ficheiros (pasta local). */
+  read?(key: string): Promise<{ content: Buffer; mimeType: string } | null>;
+}
+
 export const SCHOOL_TOKENS = {
   SchoolRepository: Symbol("SchoolRepository"),
   PlanCatalog: Symbol("PlanCatalog"),
@@ -73,4 +82,5 @@ export const SCHOOL_TOKENS = {
   SchoolSettings: Symbol("SchoolSettings"),
   SchoolDatabases: Symbol("SchoolDatabases"),
   SchoolNotifier: Symbol("SchoolNotifier"),
+  LogoStorage: Symbol("LogoStorage"),
 } as const;

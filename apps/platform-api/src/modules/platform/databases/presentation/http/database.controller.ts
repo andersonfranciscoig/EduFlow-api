@@ -7,6 +7,7 @@ import { openApi } from "../../../../../../../../libs/kernel/src/presentation/op
 import { ZodValidationPipe } from "../../../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import type { StaffAccess } from "../../../identity/application/ports";
 import { CurrentStaff, RequireRecentMfa, StaffAuth } from "../../../identity/presentation/http/staff-auth";
+import { DatabaseBackups } from "../../application/DatabaseBackups";
 import { DatabasePlacement } from "../../application/DatabasePlacement";
 import { DatabaseRegistry } from "../../application/DatabaseRegistry";
 import {
@@ -117,6 +118,46 @@ export class DatabaseServersController {
   @ApiOperation({ summary: "Resultado de um teste de ligação (latência, versão, TLS, permissões)" })
   async check(@Param("id", uuid) id: string, @Param("checkId", uuid) checkId: string) {
     return unwrap(await this.registry.check(id, checkId), DATABASE_HTTP);
+  }
+}
+
+@ApiTags("Plataforma · Bases de dados")
+@ApiBearerAuth()
+@Controller("v1/platform/databases")
+export class DatabaseBackupsController {
+  constructor(private readonly backups: DatabaseBackups) {}
+
+  @Get(":id/backups")
+  @StaffAuth("databases.view")
+  @ApiOperation({ summary: "Cópias de segurança das BDs dos colégios deste servidor (e a política)" })
+  async listForServer(@Param("id", uuid) id: string) {
+    return unwrap(await this.backups.forServer(id), DATABASE_HTTP);
+  }
+
+  @Post(":id/backups")
+  @StaffAuth("databases.manage")
+  @Throttle({ default: { limit: 5, ttl: MINUTE } })
+  @ApiOperation({
+    summary: "Copiar agora todos os colégios deste servidor",
+    description: "As cópias são feitas pelo provisioner (pg_dump), cifradas com AES-256-GCM e só depois enviadas para o armazenamento.",
+  })
+  async requestForServer(@Param("id", uuid) id: string, @CurrentStaff() staff: StaffAccess) {
+    return unwrap(await this.backups.requestForServer(id, staff.id), DATABASE_HTTP);
+  }
+
+  @Get("backups/school/:schoolId")
+  @StaffAuth("schools.view")
+  @ApiOperation({ summary: "Cópias de segurança da BD de um colégio" })
+  listForSchool(@Param("schoolId", uuid) schoolId: string) {
+    return this.backups.forSchool(schoolId);
+  }
+
+  @Post("backups/school/:schoolId")
+  @StaffAuth("databases.manage")
+  @Throttle({ default: { limit: 5, ttl: MINUTE } })
+  @ApiOperation({ summary: "Copiar agora a BD de um colégio" })
+  async requestForSchool(@Param("schoolId", uuid) schoolId: string, @CurrentStaff() staff: StaffAccess) {
+    return unwrap(await this.backups.requestForSchool(schoolId, staff.id), DATABASE_HTTP);
   }
 }
 

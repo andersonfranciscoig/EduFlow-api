@@ -13,11 +13,11 @@ export class TenantController {
   @ApiOperation({
     summary: "Identidade pública do colégio",
     description:
-      "Nome e slug, lidos da BD PRÓPRIA do colégio (com o utilizador PostgreSQL do colégio). " +
+      "Nome e slug, lidos da BD PRÓPRIA do colégio (com o utilizador PostgreSQL do colégio), e o URL do logótipo (público). " +
       "Rota pública: não expõe nada sobre a infraestrutura (servidor, BD, utilizador).",
   })
   async info(@CurrentTenant() tenant: TenantContext) {
     const info = await tenant.db.tenantInfo.findUnique({ where: { id: 1 }, select: { name: true } });
-    return { slug: tenant.entry.slug, name: info?.name ?? tenant.entry.schoolName };
+    return { slug: tenant.entry.slug, name: info?.name ?? tenant.entry.schoolName, logoUrl: tenant.entry.logoUrl };
   }
 }

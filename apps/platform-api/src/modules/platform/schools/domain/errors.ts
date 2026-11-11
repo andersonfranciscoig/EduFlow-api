@@ -13,7 +13,10 @@ export type SchoolErrorCode =
   | "REFERENCE_EXPIRED"
   | "AMOUNT_MISMATCH"
   | "INVALID_PROOF"
-  | "PROOF_NOT_FOUND";
+  | "PROOF_NOT_FOUND"
+  | "INVALID_LOGO"
+  | "LOGO_NOT_FOUND"
+  | "STORAGE_UNAVAILABLE";
 
 export type SchoolError = DomainError<SchoolErrorCode>;
 

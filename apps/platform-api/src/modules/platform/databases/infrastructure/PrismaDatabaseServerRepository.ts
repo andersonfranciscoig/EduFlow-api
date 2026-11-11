@@ -10,6 +10,7 @@ import type {
 } from "../application/ports";
 import { DatabaseServer, type ServerActivityType } from "../domain/DatabaseServer";
 import { allocationView, staffNames } from "./placement-sql";
+import { bytes, databaseSizes } from "./PrismaBackupRepository";
 
 /** Colunas que a plataforma pode ler (nunca a tabela de segredos). */
 function toDomain(row: ServerRow): DatabaseServer {
@@ -126,12 +127,13 @@ export class PrismaDatabaseServerRepository implements DatabaseServerRepository,
   }
 
   async usage(id: string) {
-    const [assigned, reserved, everAssigned] = await Promise.all([
+    const [assigned, reserved, everAssigned, server] = await Promise.all([
       this.prisma.databaseAllocation.count({ where: { serverId: id, status: "ASSIGNED" } }),
       this.prisma.databaseAllocation.count({ where: { serverId: id, status: "RESERVED", expiresAt: { gt: new Date() } } }),
       this.prisma.tenantProvisioningJob.count({ where: { serverId: id } }),
+      this.prisma.databaseServer.findUnique({ where: { id }, select: { usedBytes: true } }),
     ]);
-    return { assigned, reserved, everAssigned: everAssigned + assigned };
+    return { assigned, reserved, everAssigned: everAssigned + assigned, usedBytes: bytes(server?.usedBytes) };
   }
 
   async requeueProvisioning(serverId: string) {
@@ -175,7 +177,7 @@ export class PrismaDatabaseServerRepository implements DatabaseServerRepository,
     const usageById = new Map(usage.map((u) => [u.server_id, u]));
     return rows.map((row) => ({
       server: toDomain(row),
-      usage: { assigned: usageById.get(row.id)?.assigned ?? 0, reserved: usageById.get(row.id)?.reserved ?? 0 },
+      usage: { assigned: usageById.get(row.id)?.assigned ?? 0, reserved: usageById.get(row.id)?.reserved ?? 0, usedBytes: bytes(row.usedBytes) },
       recentLatency: latency.filter((l) => l.server_id === row.id).map((l) => (l.ok ? l.latency_ms : null)),
     }));
   }
@@ -216,7 +218,8 @@ export class PrismaDatabaseServerRepository implements DatabaseServerRepository,
       orderBy: { createdAt: "desc" },
       take: 100,
     });
-    return rows.map(allocationView);
+    const sizes = await databaseSizes(this.prisma, rows.filter((r) => r.status === "ASSIGNED").map((r) => r.schoolId));
+    return rows.map((r) => ({ ...allocationView(r), databaseBytes: sizes.get(r.schoolId)?.bytes ?? null }));
   }
 
   async activity(serverId: string): Promise<ServerActivityView[]> {
