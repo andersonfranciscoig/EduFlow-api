@@ -37,6 +37,11 @@ export const envSchema = z
     DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
     /** Endereço do portal nos emails; {slug} é substituído pelo colégio. */
     PORTAL_URL_TEMPLATE: z.string().includes("{slug}").default("http://{slug}.localhost:3002"),
+    /**
+     * Chave PÚBLICA dos bilhetes de suporte (a privada só existe no platform-api).
+     * Com ela o school-api confirma um bilhete, mas não consegue criar nenhum.
+     */
+    SUPPORT_TICKET_PUBLIC_KEY_FILE: z.string().min(1),
 
     // ---------------------------------------------------------------- email (Brevo)
     EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),

@@ -9,6 +9,7 @@ import { GetProfile } from "../../application/GetProfile";
 import type { ClientInfo, SchoolAccess } from "../../application/ports";
 import { SchoolSecurity } from "../../application/SchoolSecurity";
 import { SchoolSignIn } from "../../application/SchoolSignIn";
+import { SUPPORT_MODE_LABELS, SupportAccess } from "../../application/SupportAccess";
 import { TenantScopes } from "../../infrastructure/tenant-scopes";
 import {
   type ChallengeBody,
@@ -29,12 +30,13 @@ import {
   setPasswordSchema,
   type SignInBody,
   signInSchema,
+  supportExchangeSchema,
   ticketResponseSchema,
   type VerifyCodeBody,
   verifyCodeSchema,
 } from "./auth.schemas";
 import { Client, orThrow } from "./http-support";
-import { CurrentUser, SchoolAuth } from "./school-auth";
+import { CurrentUser, SchoolAuth, SupportMayCall } from "./school-auth";
 
 const MINUTE = 60_000;
 const error = openApi(apiErrorSchema);
@@ -57,6 +59,7 @@ export class AuthController {
     private readonly recovery: AccountRecovery,
     private readonly security: SchoolSecurity,
     private readonly profile: GetProfile,
+    private readonly supportAccess: SupportAccess,
   ) {}
 
   // ================================================================ 1.º fator
@@ -162,19 +165,71 @@ export class AuthController {
 
   @Get("me")
   @SchoolAuth()
-  @ApiOperation({ summary: "Perfil do utilizador autenticado" })
+  @ApiOperation({ summary: "Perfil do utilizador autenticado (ou da sessão de suporte EduFlow)" })
   @ApiResponse({ status: 401, description: "Sessão inválida, terminada, expirada ou de outro colégio", schema: error })
   async me(@CurrentTenant() tenant: TenantContext, @CurrentUser() user: SchoolAccess) {
+    if (user.support) return supportProfile(user, tenant);
     const profile = await this.profile.execute(this.scopes.for(tenant), user.id);
     if (!profile) throw new NotFoundException({ code: "ACCOUNT_NOT_FOUND", message: "Conta não encontrada." });
-    return profile;
+    return { ...profile, support: null };
   }
 
   @Post("sign-out")
   @HttpCode(HttpStatus.NO_CONTENT)
   @SchoolAuth()
+  @SupportMayCall()
   @ApiOperation({ summary: "Sair (termina a sessão atual — o token deixa de valer)" })
   async signOut(@CurrentTenant() tenant: TenantContext, @CurrentUser() user: SchoolAccess) {
+    if (user.support) return this.supportAccess.signOut(this.scopes.for(tenant), user.sessionId);
     await this.security.signOut(this.scopes.for(tenant), user.sessionId);
   }
+
+  // ================================================================ suporte EduFlow
+
+  @Post("support/exchange")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 5 * MINUTE } })
+  @ApiOperation({
+    summary: "Entrar como suporte EduFlow (bilhete de 60 s emitido pela plataforma)",
+    description:
+      "Só funciona se o colégio tiver autorizado o suporte (ou for uma emergência pedida por um administrador). " +
+      "Bilhete de uso único, ligado a este colégio. Abre uma sessão de suporte de no máximo 1 h e avisa os diretores por email.",
+  })
+  @ApiBody({ schema: openApi(supportExchangeSchema) })
+  @ApiResponse({ status: 200, description: "Sessão de suporte aberta", schema: openApi(sessionResponseSchema, "output") })
+  async supportExchange(
+    @CurrentTenant() tenant: TenantContext,
+    @Body(new ZodValidationPipe(supportExchangeSchema)) body: { ticket: string },
+    @Client() client: ClientInfo,
+  ) {
+    return orThrow(await this.supportAccess.exchange(this.scopes.for(tenant), body.ticket, client));
+  }
+}
+
+/** "Perfil" de uma sessão de suporte — não é uma conta do colégio. */
+function supportProfile(user: SchoolAccess, tenant: TenantContext) {
+  const s = user.support!;
+  const parts = s.staffName.split(" ");
+  return {
+    id: user.id,
+    fullName: s.staffName,
+    firstName: parts[0] ?? s.staffName,
+    initials: `${parts[0]?.[0] ?? ""}${parts.length > 1 ? parts[parts.length - 1]![0] : ""}`.toUpperCase(),
+    email: null,
+    phone: null,
+    role: user.role,
+    roleLabel: "Suporte EduFlow",
+    isOwner: false,
+    mfaEnabled: true,
+    recoveryCodesLeft: 0,
+    lastLoginAt: null,
+    school: { slug: tenant.entry.slug, name: tenant.entry.schoolName },
+    support: {
+      mode: s.mode,
+      modeLabel: SUPPORT_MODE_LABELS[s.mode],
+      emergency: s.emergency,
+      reason: s.reason,
+      expiresAt: s.expiresAt.toISOString(),
+    },
+  };
 }

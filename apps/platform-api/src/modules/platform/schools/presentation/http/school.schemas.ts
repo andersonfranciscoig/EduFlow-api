@@ -15,7 +15,16 @@ export const SCHOOL_HTTP: Partial<Record<SchoolErrorCode, HttpStatus>> = {
   REFERENCE_NOT_FOUND: HttpStatus.NOT_FOUND,
   INVALID_STATE: HttpStatus.CONFLICT,
   REFERENCE_EXPIRED: HttpStatus.GONE,
+  SUPPORT_FORBIDDEN: HttpStatus.FORBIDDEN,
 };
+
+export const supportTicketSchema = z
+  .object({
+    reason: z.string({ error: "Explique o motivo do acesso." }).trim().min(10, "Explique o motivo do acesso (pelo menos 10 caracteres).").max(500),
+    mode: z.enum(["READ", "WRITE"]).default("READ").meta({ description: "READ = só leitura (omissão); WRITE = pode alterar dados" }),
+    emergency: z.boolean().default(false).meta({ description: "Só ADMIN: entra mesmo sem autorização do colégio (que é avisado)" }),
+  })
+  .meta({ title: "SupportTicketRequest" });
 
 const text = (message: string, max: number) => z.string({ error: message }).trim().min(1, message).max(max);
 

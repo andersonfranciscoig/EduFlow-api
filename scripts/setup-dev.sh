@@ -25,6 +25,7 @@ gen_ec() { # par ES256
 gen_ec staff-jwt       # tokens da equipa EduFlow       → só platform-api
 gen_ec customer-jwt    # tokens dos responsáveis        → só platform-api
 gen_ec school-jwt      # tokens do portal dos colégios  → só school-api
+gen_ec support-ticket  # bilhetes de suporte: privada só no platform-api, pública só no school-api
 if [ ! -f secrets/tenant-credentials.key ] || [ "$FORCE" = "--force" ]; then
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out secrets/tenant-credentials.key 2>/dev/null
   openssl pkey -in secrets/tenant-credentials.key -pubout -out secrets/tenant-credentials.pub
@@ -130,6 +131,8 @@ STORAGE_DIR=./storage/platform
 LOGO_STORAGE=$LOGO_STORAGE
 LOGO_UPLOADTHING_TOKEN_FILE=$LOGO_TOKEN_FILE
 PUBLIC_API_URL="http://localhost:4000/api"
+# acesso de suporte aos portais (bilhetes de 60 s; o school-api só tem a chave pública)
+SUPPORT_TICKET_PRIVATE_KEY_FILE=secrets/support-ticket.key
 # códigos por email (criar conta, repor senha) e aviso "portal pronto"
 PORTAL_URL_TEMPLATE="http://{slug}.localhost:3002"
 EMAIL_PROVIDER=$EMAIL_PROVIDER
@@ -147,6 +150,7 @@ TENANT_CREDENTIALS_PRIVATE_KEY_FILE=secrets/tenant-credentials.key
 SCHOOL_JWT_PRIVATE_KEY_FILE=secrets/school-jwt.key
 SCHOOL_JWT_PUBLIC_KEY_FILE=secrets/school-jwt.pub
 SCHOOL_MFA_KEY_FILE=secrets/school-mfa.key
+SUPPORT_TICKET_PUBLIC_KEY_FILE=secrets/support-ticket.pub
 JWT_EXPIRES_IN_SECONDS=28800
 DEFAULT_PHONE_COUNTRY_CODE="244"
 # portal (EduFlow-portal): cada colégio no seu subdomínio — em dev, <slug>.localhost:3002

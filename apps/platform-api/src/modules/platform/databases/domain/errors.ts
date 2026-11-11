@@ -10,7 +10,9 @@ export type DatabaseErrorCode =
   | "SCHOOL_NOT_FOUND"
   | "INVALID_STATE"
   | "NO_CAPACITY"
-  | "SERVER_IN_USE";
+  | "SERVER_IN_USE"
+  | "BACKUP_NOT_FOUND"
+  | "CONFIRMATION_MISMATCH";
 
 export type DatabaseError = DomainError<DatabaseErrorCode>;
 

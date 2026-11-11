@@ -16,6 +16,7 @@ import {
   type RegisterServerBody,
   registerServerSchema,
   reserveSchema,
+  restoreSchema,
   rotateCredentialsSchema,
   type ServerSettingsBody,
   serverSettingsSchema,
@@ -158,6 +159,26 @@ export class DatabaseBackupsController {
   @ApiOperation({ summary: "Copiar agora a BD de um colégio" })
   async requestForSchool(@Param("schoolId", uuid) schoolId: string, @CurrentStaff() staff: StaffAccess) {
     return unwrap(await this.backups.requestForSchool(schoolId, staff.id), DATABASE_HTTP);
+  }
+
+  @Post("backups/:backupId/restore")
+  @StaffAuth("databases.restore")
+  @RequireRecentMfa()
+  // os pedidos recusados (ex.: identificador mal escrito) também contam
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({
+    summary: "Restaurar uma cópia na BD do colégio a que pertence (2FA recente)",
+    description:
+      "O provisioner guarda primeiro o estado atual (cópia 'Antes de restaurar'), restaura numa só transação e, se falhar, " +
+      "repõe o estado anterior. No fim termina todas as sessões do portal do colégio. Exige motivo e o identificador do colégio.",
+  })
+  @ApiBody({ schema: openApi(restoreSchema) })
+  async restore(
+    @Param("backupId", uuid) backupId: string,
+    @Body(new ZodValidationPipe(restoreSchema)) body: { reason: string; confirm: string },
+    @CurrentStaff() staff: StaffAccess,
+  ) {
+    return unwrap(await this.backups.requestRestore(backupId, staff.id, body), DATABASE_HTTP);
   }
 }
 

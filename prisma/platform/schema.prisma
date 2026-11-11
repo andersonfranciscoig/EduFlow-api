@@ -222,6 +222,7 @@ model School {
   database     TenantDatabase?
   allocations  DatabaseAllocation[]
   backups      DatabaseBackup[]
+  restores     DatabaseRestore[]
 
   @@index([status])
   @@map("schools")
@@ -468,6 +469,40 @@ enum BackupStatus {
 enum BackupTrigger {
   MANUAL
   AUTOMATIC
+  /// cópia de segurança feita automaticamente ANTES de um restauro
+  PRE_RESTORE
+}
+
+enum RestoreStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Restauro de uma cópia na BD do PRÓPRIO colégio da cópia (fila para o provisioner).
+model DatabaseRestore {
+  id             String         @id @db.Uuid
+  schoolId       String         @map("school_id") @db.Uuid
+  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  backupId       String         @map("backup_id") @db.Uuid
+  /// relação composta: a cópia TEM de ser do mesmo colégio (garantido pela própria BD)
+  backup         DatabaseBackup @relation("RestoredFrom", fields: [backupId, schoolId], references: [id, schoolId])
+  status         RestoreStatus  @default(PENDING)
+  requestedById  String         @map("requested_by_id") @db.Uuid
+  reason         String
+  /// cópia do estado ANTERIOR, feita pelo provisioner antes de restaurar
+  safetyBackupId String?        @map("safety_backup_id") @db.Uuid
+  /// o restauro falhou e a BD voltou ao estado anterior?
+  rolledBack     Boolean        @default(false) @map("rolled_back")
+  error          String?
+  createdAt      DateTime       @default(now()) @map("created_at")
+  startedAt      DateTime?      @map("started_at")
+  completedAt    DateTime?      @map("completed_at")
+
+  @@index([schoolId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("database_restores")
 }
 
 model DatabaseBackup {
@@ -490,6 +525,9 @@ model DatabaseBackup {
   startedAt     DateTime?     @map("started_at")
   completedAt   DateTime?     @map("completed_at")
 
+  restores DatabaseRestore[] @relation("RestoredFrom")
+
+  @@unique([id, schoolId])
   @@index([schoolId, createdAt(sort: Desc)])
   @@index([status, createdAt])
   @@map("database_backups")

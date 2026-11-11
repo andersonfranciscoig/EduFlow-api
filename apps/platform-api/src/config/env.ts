@@ -33,6 +33,10 @@ export const envSchema = z.object({
   /** Endereço público desta API (URLs dos logótipos guardados localmente). */
   PUBLIC_API_URL: z.string().url().default("http://localhost:4000/api"),
 
+  // ---------------------------------------------------------------- suporte aos colégios
+  /** Chave PRIVADA dos bilhetes de suporte (a pública está só no school-api). */
+  SUPPORT_TICKET_PRIVATE_KEY_FILE: z.string().min(1),
+
   // ---------------------------------------------------------------- email (Brevo)
   /** Sem chave (console): os emails aparecem no terminal. */
   EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),

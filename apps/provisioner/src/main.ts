@@ -5,8 +5,9 @@ import { parsePostgresUrl, type PostgresUrl } from "../../../libs/kernel/src/dom
 import { readBackupKey } from "../../../libs/kernel/src/infrastructure/backup-crypto";
 import { openSealed, readKeyFile } from "../../../libs/kernel/src/infrastructure/keys";
 import { LocalBackupStore, UploadThingBackupStore } from "./backup-store";
-import { applyRetention, claimBackup, type MaintenanceContext, measureSizes, runBackup, scheduleAutomaticBackups } from "./backups";
+import { applyRetention, claimBackup, type MaintenanceContext, measureSizes, migrateAllTenants, runBackup, scheduleAutomaticBackups } from "./backups";
 import { loadEnv } from "./env";
+import { claimRestore, failInterruptedRestores, runRestore } from "./restores";
 import { type CheckResult, runCheck, type ServerKind } from "./health-check";
 import { friendlyError } from "./pg-target";
 import { type Job, provisionOnDedicatedDatabase, provisionOnSharedServer, type ProvisionContext } from "./provision";
@@ -214,13 +215,19 @@ const maintenance: MaintenanceContext = {
 };
 
 let backingUp: Promise<void> | null = null;
-/** Uma cópia de cada vez, em segundo plano. */
+/**
+ * Uma operação de cada vez, em segundo plano: cópia OU restauro (um restauro
+ * nunca corre ao mesmo tempo que uma cópia). Os restauros têm prioridade.
+ */
 async function nextBackup() {
   if (backingUp) return;
-  const job = await claimBackup(platform);
-  if (!job) return;
-  backingUp = runBackup(maintenance, job)
-    .catch((error) => log(`✗ cópia: ${describe(error)}`))
+  const restore = await claimRestore(maintenance);
+  const run = restore
+    ? runRestore(maintenance, restore)
+    : await claimBackup(platform).then((job) => (job ? runBackup(maintenance, job) : null));
+  if (!run) return;
+  backingUp = run
+    .catch((error) => log(`✗ ${restore ? "restauro" : "cópia"}: ${describe(error)}`))
     .finally(() => {
       backingUp = null;
     });
@@ -235,6 +242,7 @@ function periodicMaintenance() {
     await measureSizes(maintenance);
     await scheduleAutomaticBackups(maintenance);
     await applyRetention(maintenance);
+    await failInterruptedRestores(maintenance);
   })()
     .catch((error) => log(`✗ manutenção: ${describe(error)}`))
     .finally(() => {
@@ -256,6 +264,10 @@ async function loop() {
   await platform.$executeRaw`
     UPDATE database_server_checks SET status = 'DONE', ok = false, error = 'Teste interrompido', completed_at = now()
     WHERE status = 'RUNNING' AND kind = 'PERIODIC' AND created_at < now() - interval '2 minutes'`;
+  // em segundo plano: as BDs que já existem recebem as migrações novas (ex.: tabelas do suporte)
+  void migrateAllTenants(maintenance)
+    .then((n) => log(`migrações dos colégios em dia${n ? ` (${n} atualizado(s))` : ""}`))
+    .catch((error) => log(`✗ migrações dos colégios: ${describe(error)}`));
   while (running) {
     let worked = false;
 

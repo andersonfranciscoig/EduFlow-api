@@ -1,6 +1,6 @@
 import type { DatabaseServer, ServerHealth, ServerKind } from "../domain/DatabaseServer";
 import { acceptsNewSchool, freeSlots, type PlacementCandidate } from "../domain/placement";
-import type { AllocationView, BackupView, CheckView, SchoolDatabaseStatus, ServerActivityView } from "./ports";
+import type { AllocationView, BackupView, CheckView, RestoreView, SchoolDatabaseStatus, ServerActivityView } from "./ports";
 
 export const KIND_LABELS: Record<ServerKind, string> = {
   SHARED_SERVER: "Servidor partilhado",
@@ -103,13 +103,32 @@ export const BACKUP_STATUS_LABELS: Record<BackupView["status"], string> = {
   DELETED: "Apagada (prazo)",
 };
 
+const TRIGGER_LABELS: Record<BackupView["trigger"], string> = { MANUAL: "Manual", AUTOMATIC: "Automática", PRE_RESTORE: "Antes de restaurar" };
+
 export function toBackupDto(b: BackupView) {
   return {
     ...b,
     statusLabel: BACKUP_STATUS_LABELS[b.status],
-    triggerLabel: b.trigger === "MANUAL" ? "Manual" : "Automática",
+    triggerLabel: TRIGGER_LABELS[b.trigger],
     createdAt: b.createdAt.toISOString(),
     completedAt: iso(b.completedAt),
+  };
+}
+
+const RESTORE_STATUS_LABELS: Record<RestoreView["status"], string> = {
+  PENDING: "Na fila",
+  RUNNING: "A restaurar",
+  DONE: "Concluído",
+  FAILED: "Falhou",
+};
+
+export function toRestoreDto(r: RestoreView) {
+  return {
+    ...r,
+    statusLabel: r.status === "FAILED" && r.rolledBack ? "Falhou · estado anterior reposto" : RESTORE_STATUS_LABELS[r.status],
+    backupCreatedAt: r.backupCreatedAt.toISOString(),
+    createdAt: r.createdAt.toISOString(),
+    completedAt: iso(r.completedAt),
   };
 }
 

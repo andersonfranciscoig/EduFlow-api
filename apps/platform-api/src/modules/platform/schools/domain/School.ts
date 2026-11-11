@@ -23,7 +23,8 @@ export type SchoolActivityType =
   | "SCHOOL_SUSPENDED"
   | "SCHOOL_REACTIVATED"
   | "LOGO_CHANGED"
-  | "LOGO_REMOVED";
+  | "LOGO_REMOVED"
+  | "SUPPORT_ACCESS_REQUESTED";
 
 export interface SchoolEvent {
   type: SchoolActivityType;
@@ -230,6 +231,21 @@ export class School {
     this.props.logo = null;
     this.record("LOGO_REMOVED", staffId, now, null);
     return ok(previous);
+  }
+
+  // ================================================================ suporte
+
+  /**
+   * A equipa pede para entrar no portal (suporte). Só com o colégio ativo.
+   * Fica no histórico — que o responsável também vê.
+   */
+  requestSupportAccess(staffId: string, input: { mode: "READ" | "WRITE"; emergency: boolean; reason: string }, now: Date): Result<void, SchoolError> {
+    if (this.props.status !== "ACTIVE") return fail(schoolError("INVALID_STATE", "Só é possível dar suporte a um colégio ativo."));
+    if (!this.props.slug) return fail(schoolError("INVALID_STATE", "Este colégio ainda não tem portal."));
+    const reason = input.reason.trim();
+    if (reason.length < 10) return fail(schoolError("INVALID_STATE", "Explique o motivo do acesso (pelo menos 10 caracteres)."));
+    this.record("SUPPORT_ACCESS_REQUESTED", staffId, now, { mode: input.mode, emergency: input.emergency, reason });
+    return ok(undefined);
   }
 
   private ensureNotSuspended(): Result<void, SchoolError> {

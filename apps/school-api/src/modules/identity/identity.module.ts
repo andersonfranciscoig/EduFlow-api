@@ -20,15 +20,22 @@ import {
   type PasswordHasher,
   type RecoveryCodes,
   type SecretCipher,
+  type SupportNotifier,
+  type SupportTicketVerifier,
+  type SupportTokenService,
   type TotpService,
 } from "./application/ports";
 import { SchoolSecurity } from "./application/SchoolSecurity";
 import { SchoolSignIn } from "./application/SchoolSignIn";
+import { SupportAccess } from "./application/SupportAccess";
 import { EmailCodeMailer } from "./infrastructure/code-mailer";
 import { JwtAccessTokenService, JwtChallengeService } from "./infrastructure/jwt-tokens";
+import { SupportMailer } from "./infrastructure/support-mailer";
+import { JwtSupportTicketVerifier, JwtSupportTokenService } from "./infrastructure/support-tokens";
 import { TenantScopes } from "./infrastructure/tenant-scopes";
 import { AuthController } from "./presentation/http/auth.controller";
 import { SchoolAuthGuard } from "./presentation/http/school-auth";
+import { SupportAccessController } from "./presentation/http/support.controller";
 
 /**
  * Contexto "Identity" do portal do colégio — composition root.
@@ -47,7 +54,7 @@ import { SchoolAuthGuard } from "./presentation/http/school-auth";
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, SupportAccessController],
   providers: [
     // --- portas → adaptadores
     { provide: T.Clock, useValue: systemClock },
@@ -129,9 +136,37 @@ import { SchoolAuthGuard } from "./presentation/http/school-auth";
     },
     { provide: GetProfile, useFactory: () => new GetProfile() },
 
+    // --- suporte EduFlow (bilhetes da plataforma: aqui só a chave PÚBLICA)
+    {
+      provide: T.SupportTicketVerifier,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>) => new JwtSupportTicketVerifier(readKeyFile(config.get("SUPPORT_TICKET_PUBLIC_KEY_FILE", { infer: true }))),
+    },
+    { provide: T.SupportTokenService, inject: [JwtService], useFactory: (jwt: JwtService) => new JwtSupportTokenService(jwt) },
+    {
+      provide: T.SupportNotifier,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>): SupportNotifier => {
+        const keyFile = config.get("EMAIL_API_KEY_FILE", { infer: true });
+        const settings = {
+          from: config.get("EMAIL_FROM", { infer: true }),
+          fromName: config.get("EMAIL_FROM_NAME", { infer: true }),
+          replyTo: config.get("EMAIL_REPLY_TO", { infer: true }),
+        };
+        const mailer = config.get("EMAIL_PROVIDER", { infer: true }) === "brevo" && keyFile ? new BrevoMailer(readKeyFile(keyFile), settings) : new ConsoleMailer();
+        return new SupportMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true }));
+      },
+    },
+    {
+      provide: SupportAccess,
+      inject: [T.SupportTicketVerifier, T.SupportTokenService, T.SupportNotifier, T.IdGenerator, T.Clock],
+      useFactory: (tickets: SupportTicketVerifier, tokens: SupportTokenService, notifier: SupportNotifier, ids: IdGenerator, clock: Clock) =>
+        new SupportAccess(tickets, tokens, notifier, ids, clock),
+    },
+
     // --- guard (exportado para os próximos contextos do portal: turmas, alunos…)
     SchoolAuthGuard,
   ],
-  exports: [T.AccessTokenService, SchoolSecurity, TenantScopes, SchoolAuthGuard],
+  exports: [T.AccessTokenService, T.SupportTokenService, SchoolSecurity, SupportAccess, TenantScopes, SchoolAuthGuard],
 })
 export class IdentityModule {}

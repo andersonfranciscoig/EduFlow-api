@@ -160,7 +160,7 @@ export class PrismaPlacementStore implements PlacementStore {
     if (size) {
       const last = await this.prisma.databaseBackup.findFirst({
         where: { schoolId, status: { not: "DELETED" } },
-        include: { school: { select: { id: true, name: true } } },
+        include: { school: { select: { id: true, name: true, slug: true } } },
         orderBy: { createdAt: "desc" },
       });
       storage = { databaseBytes: size.bytes, measuredAt: size.measuredAt, lastBackup: last ? (await backupViews(this.prisma, [last]))[0]! : null };

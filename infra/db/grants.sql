@@ -29,7 +29,8 @@ GRANT SELECT (id, kind, status, host, port, database, ssl_mode, health, server_v
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.database_server_checks TO eduflow_provisioner;
 -- cópias de segurança: fila (pedidas pela equipa) + automáticas + retenção
 GRANT SELECT, INSERT, UPDATE ON public.database_backups TO eduflow_provisioner;
-
+-- restauros: pedidos pela equipa; o provisioner só os executa (não cria nem apaga pedidos)
+GRANT SELECT, UPDATE (status, safety_backup_id, rolled_back, error, started_at, completed_at) ON public.database_restores TO eduflow_provisioner;
 -- school-api: só lê o diretório
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM eduflow_school_directory;
 GRANT SELECT ON public.tenant_databases TO eduflow_school_directory;

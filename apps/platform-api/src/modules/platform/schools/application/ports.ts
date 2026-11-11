@@ -65,6 +65,19 @@ export interface SchoolNotifier {
   schoolSuspended(input: { to: { email: string; name: string }; schoolName: string; reason: string }): Promise<void>;
 }
 
+/** Bilhetes de suporte (assinados com a chave privada que só a plataforma tem). */
+export interface SupportTicketIssuer {
+  issue(input: {
+    staffId: string;
+    staffName: string;
+    schoolId: string;
+    mode: "READ" | "WRITE";
+    emergency: boolean;
+    reason: string;
+    ttlSeconds: number;
+  }): Promise<string>;
+}
+
 /** Onde ficam os logótipos (ficheiros PÚBLICOS: qualquer pessoa com o URL os vê). */
 export interface LogoStorage {
   readonly name: string;
@@ -83,4 +96,5 @@ export const SCHOOL_TOKENS = {
   SchoolDatabases: Symbol("SchoolDatabases"),
   SchoolNotifier: Symbol("SchoolNotifier"),
   LogoStorage: Symbol("LogoStorage"),
+  SupportTicketIssuer: Symbol("SupportTicketIssuer"),
 } as const;

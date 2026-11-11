@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from ".prisma/platform-client";
-import type { BackupRepository, BackupView } from "../application/ports";
+import type { BackupRepository, BackupView, RestoreView } from "../application/ports";
 import { staffNames } from "./placement-sql";
 
 type Db = PrismaClient | Prisma.TransactionClient;
-type BackupRow = Prisma.DatabaseBackupGetPayload<{ include: { school: { select: { id: true; name: true } } } }>;
+type BackupRow = Prisma.DatabaseBackupGetPayload<{ include: { school: { select: { id: true; name: true; slug: true } } } }>;
 
 export const bytes = (v: bigint | null | undefined) => (v == null ? null : Number(v));
 
@@ -35,7 +35,7 @@ export async function databaseSizes(db: Db, schoolIds: string[]) {
   return new Map(rows.map((r) => [r.school_id, { bytes: bytes(r.size_bytes), measuredAt: r.size_measured_at }]));
 }
 
-const include = { school: { select: { id: true, name: true } } } as const;
+const include = { school: { select: { id: true, name: true, slug: true } } } as const;
 
 export class PrismaBackupRepository implements BackupRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -83,5 +83,53 @@ export class PrismaBackupRepository implements BackupRepository {
   async forSchool(schoolId: string, limit: number) {
     const rows = await this.prisma.databaseBackup.findMany({ where: { schoolId }, include, orderBy: { createdAt: "desc" }, take: limit });
     return backupViews(this.prisma, rows);
+  }
+
+  async schoolSlug(schoolId: string) {
+    return (await this.prisma.school.findUnique({ where: { id: schoolId }, select: { slug: true } }))?.slug ?? null;
+  }
+
+  findBackup(backupId: string) {
+    return this.prisma.databaseBackup.findUnique({ where: { id: backupId }, select: { id: true, schoolId: true, status: true, createdAt: true } });
+  }
+
+  async requestRestore(input: { schoolId: string; backupId: string; staffId: string; reason: string }) {
+    return this.prisma.$transaction(async (tx) => {
+      // bloqueia o colégio: dois pedidos ao mesmo tempo não passam os dois
+      await tx.$queryRaw`SELECT id FROM schools WHERE id = ${input.schoolId}::uuid FOR UPDATE`;
+      const busy = await tx.databaseRestore.count({ where: { schoolId: input.schoolId, status: { in: ["PENDING", "RUNNING"] } } });
+      if (busy) return null;
+      const id = randomUUID();
+      // a FK composta (backup_id, school_id) garante que a cópia é deste colégio
+      await tx.databaseRestore.create({
+        data: { id, schoolId: input.schoolId, backupId: input.backupId, requestedById: input.staffId, reason: input.reason, status: "PENDING" },
+      });
+      return id;
+    });
+  }
+
+  async restores(filter: { schoolId?: string; serverId?: string }, limit: number): Promise<RestoreView[]> {
+    const schoolIds = filter.serverId ? await this.schoolsOnServer(filter.serverId) : undefined;
+    const rows = await this.prisma.databaseRestore.findMany({
+      where: filter.schoolId ? { schoolId: filter.schoolId } : { schoolId: { in: schoolIds ?? [] } },
+      include: { school: { select: { id: true, name: true, slug: true } }, backup: { select: { createdAt: true } } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    const names = await staffNames(this.prisma, rows.map((r) => r.requestedById));
+    return rows.map((r) => ({
+      id: r.id,
+      school: r.school,
+      backupId: r.backupId,
+      backupCreatedAt: r.backup.createdAt,
+      status: r.status,
+      reason: r.reason,
+      requestedBy: names.get(r.requestedById) ?? null,
+      safetyBackupId: r.safetyBackupId,
+      rolledBack: r.rolledBack,
+      error: r.error,
+      createdAt: r.createdAt,
+      completedAt: r.completedAt,
+    }));
   }
 }

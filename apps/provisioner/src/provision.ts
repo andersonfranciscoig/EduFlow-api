@@ -50,9 +50,14 @@ async function register(job: Job, at: Placement, db: { name: string; user: strin
     passwordCiphertext: encryptSecret(ctx.tenantPublicKey, db.password),
     sslMode: at.sslMode,
     serverId: at.serverId,
-    active: true,
   };
-  await ctx.platform.tenantDatabase.upsert({ where: { schoolId: job.school_id }, create: { schoolId: job.school_id, ...directory }, update: directory });
+  // "active" só na criação: voltar a processar um colégio DESATIVADO (ex.: troca de email)
+  // nunca pode reabrir o portal — isso é decisão da plataforma (desativar/reativar)
+  await ctx.platform.tenantDatabase.upsert({
+    where: { schoolId: job.school_id },
+    create: { schoolId: job.school_id, ...directory, active: true },
+    update: directory,
+  });
 }
 
 /**

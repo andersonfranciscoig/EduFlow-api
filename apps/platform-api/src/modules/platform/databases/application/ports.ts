@@ -42,8 +42,8 @@ export interface AllocationView {
 
 export interface BackupView {
   id: string;
-  school: { id: string; name: string };
-  trigger: "MANUAL" | "AUTOMATIC";
+  school: { id: string; name: string; slug?: string | null };
+  trigger: "MANUAL" | "AUTOMATIC" | "PRE_RESTORE";
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "DELETED";
   /** tamanho da cópia (cifrada) */
   sizeBytes: number | null;
@@ -64,6 +64,29 @@ export interface BackupRepository {
   request(schoolIds: string[], staffId: string): Promise<number>;
   forServer(serverId: string, limit: number): Promise<BackupView[]>;
   forSchool(schoolId: string, limit: number): Promise<BackupView[]>;
+  schoolSlug(schoolId: string): Promise<string | null>;
+  findBackup(backupId: string): Promise<{ id: string; schoolId: string; status: BackupView["status"]; createdAt: Date } | null>;
+  /**
+   * Pede o restauro (numa transação que bloqueia o colégio: no máximo um
+   * restauro em curso). null = já há um restauro na fila ou a correr.
+   */
+  requestRestore(input: { schoolId: string; backupId: string; staffId: string; reason: string }): Promise<string | null>;
+  restores(filter: { schoolId?: string; serverId?: string }, limit: number): Promise<RestoreView[]>;
+}
+
+export interface RestoreView {
+  id: string;
+  school: { id: string; name: string; slug: string | null };
+  backupId: string;
+  backupCreatedAt: Date;
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+  reason: string;
+  requestedBy: { id: string; fullName: string } | null;
+  safetyBackupId: string | null;
+  rolledBack: boolean;
+  error: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
 }
 
 export interface ServerActivityView extends Omit<ServerEvent, "actorStaffId"> {

@@ -14,7 +14,16 @@ export const DATABASE_HTTP: Partial<Record<DatabaseErrorCode, HttpStatus>> = {
   INVALID_STATE: HttpStatus.CONFLICT,
   NO_CAPACITY: HttpStatus.CONFLICT,
   SERVER_IN_USE: HttpStatus.CONFLICT,
+  BACKUP_NOT_FOUND: HttpStatus.NOT_FOUND,
+  CONFIRMATION_MISMATCH: HttpStatus.UNPROCESSABLE_ENTITY,
 };
+
+export const restoreSchema = z
+  .object({
+    reason: z.string({ error: "Explique o motivo do restauro." }).trim().min(10, "Explique o motivo do restauro (pelo menos 10 caracteres).").max(500),
+    confirm: z.string({ error: "Escreva o identificador do colégio." }).trim().min(1, "Escreva o identificador do colégio.").max(60),
+  })
+  .meta({ title: "RestoreBackup" });
 
 const optionalText = (max: number) =>
   z

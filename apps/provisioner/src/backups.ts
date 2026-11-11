@@ -5,6 +5,7 @@ import { encryptBackup, sha256 } from "../../../libs/kernel/src/infrastructure/b
 import type { BackupStore } from "./backup-store";
 import { pgClient } from "./pg-target";
 import { pgDump } from "./pg-dump";
+import { migrateTenant } from "./tenant-migrator";
 
 export interface Target {
   kind: "SHARED_SERVER" | "DEDICATED_DATABASE";
@@ -34,7 +35,7 @@ const VALID_ROLE = /^tenant_[0-9a-f]{12}$/;
  * Servidor partilhado: o provisioner só tem acesso aos dados de um colégio
  * DURANTE a operação — torna-se membro do utilizador do colégio e retira-se no fim.
  */
-async function withTenantAccess<T>(admin: PostgresUrl, role: string, fn: (client: ReturnType<typeof pgClient>) => Promise<T>): Promise<T> {
+export async function withTenantAccess<T>(admin: PostgresUrl, role: string, fn: (client: ReturnType<typeof pgClient>) => Promise<T>): Promise<T> {
   if (!VALID_ROLE.test(role)) throw new Error(`Utilizador inválido: ${role}`);
   const client = pgClient(admin);
   await client.connect();
@@ -51,12 +52,12 @@ async function withTenantAccess<T>(admin: PostgresUrl, role: string, fn: (client
   }
 }
 
-async function databaseSize(client: ReturnType<typeof pgClient>, database: string) {
+export async function databaseSize(client: ReturnType<typeof pgClient>, database: string) {
   const { rows } = await client.query<{ size: string }>(`SELECT pg_database_size($1)::text AS size`, [database]);
   return BigInt(rows[0]!.size);
 }
 
-async function tenants(platform: PlatformClient, schoolId?: string): Promise<TenantRow[]> {
+export async function tenants(platform: PlatformClient, schoolId?: string): Promise<TenantRow[]> {
   return schoolId
     ? platform.$queryRaw<TenantRow[]>`SELECT school_id::text, slug, db_name, server_id::text FROM tenant_databases WHERE school_id = ${schoolId}::uuid`
     : platform.$queryRaw<TenantRow[]>`SELECT school_id::text, slug, db_name, server_id::text FROM tenant_databases ORDER BY server_id NULLS FIRST`;
@@ -149,6 +150,39 @@ export async function measureSizes(ctx: MaintenanceContext) {
       ctx.log(`✗ tamanho das BDs (${serverId?.slice(0, 8) ?? "local"}): ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/**
+ * Migrações em falta em TODOS os colégios (corre no arranque do provisioner):
+ * uma versão nova pode trazer tabelas novas na BD de cada colégio.
+ * Só migrações — não mexe em senhas, no diretório nem nos dados.
+ */
+export async function migrateAllTenants(ctx: MaintenanceContext) {
+  let updated = 0;
+  for (const tenant of await tenants(ctx.platform)) {
+    try {
+      const target = await ctx.resolve(tenant.server_id);
+      const run = async (url: PostgresUrl, database: string, role?: string) => {
+        const db = pgClient(url, database);
+        await db.connect();
+        try {
+          if (role) await db.query(`SET ROLE "${role}"`);
+          const applied = await migrateTenant(db);
+          if (applied.length) {
+            updated++;
+            ctx.log(`${tenant.slug}: migrações aplicadas → ${applied.join(", ")}`);
+          }
+        } finally {
+          await db.end().catch(() => undefined);
+        }
+      };
+      if (target.kind === "DEDICATED_DATABASE") await run(target.url, target.url.database);
+      else await withTenantAccess(target.url, tenant.db_name, () => run(target.url, tenant.db_name, tenant.db_name));
+    } catch (error) {
+      ctx.log(`✗ migrações de ${tenant.slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return updated;
 }
 
 /** Agenda a cópia automática de cada colégio sem cópia nas últimas EVERY_HOURS horas. */

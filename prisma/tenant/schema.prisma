@@ -129,5 +129,48 @@ model SchoolActivity {
   @@map("school_activity")
 }
 
+// =============================================================================
+//  SUPORTE EDUFLOW — o colégio decide se (e até quando) a equipa pode entrar
+// =============================================================================
+
+/// Autorização dada pelo diretor/responsável. Sem uma ativa, ninguém da EduFlow
+/// entra (exceto emergência pedida por um administrador, sempre avisada por email).
+model SupportGrant {
+  id          String    @id @db.Uuid
+  grantedById String    @map("granted_by_id") @db.Uuid
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  revokedById String?   @map("revoked_by_id") @db.Uuid
+  createdAt   DateTime  @map("created_at")
+
+  @@index([expiresAt])
+  @@map("support_grants")
+}
+
+/// Cada entrada da equipa EduFlow: quem, porquê, em que modo e até quando.
+model SupportSession {
+  id         String    @id @db.Uuid
+  /// id do bilhete emitido pela plataforma — cada bilhete só serve uma vez
+  ticketId   String    @unique @map("ticket_id")
+  staffId    String    @map("staff_id") @db.Uuid
+  staffName  String    @map("staff_name")
+  staffEmail String?   @map("staff_email")
+  /// READ (só leitura) | WRITE
+  mode       String
+  emergency  Boolean   @default(false)
+  reason     String
+  grantId    String?   @map("grant_id") @db.Uuid
+  ip         String?
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @map("created_at")
+  lastSeenAt DateTime  @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  revokedReason String? @map("revoked_reason")
+
+  @@index([createdAt])
+  @@map("support_sessions")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

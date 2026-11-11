@@ -29,6 +29,7 @@ import { CurrentStaff, RequireRecentMfa, StaffAuth } from "../../../identity/pre
 import { MAX_PROOF_BYTES, SchoolPayments } from "../../application/SchoolPayments";
 import { SchoolBranding } from "../../application/SchoolBranding";
 import { SchoolOnboarding } from "../../application/SchoolOnboarding";
+import { SchoolSupport } from "../../application/SchoolSupport";
 import { LOGO_RULES } from "../../domain/logo";
 import { PROVINCES } from "../../domain/school-data";
 import { CurrentSchoolId, SchoolOwnerAuth } from "./school-auth";
@@ -48,6 +49,7 @@ import {
   SCHOOL_HTTP,
   schoolStatusQuery,
   signInSchema,
+  supportTicketSchema,
 } from "./school.schemas";
 
 const MINUTE = 60_000;
@@ -303,7 +305,28 @@ export class SchoolsAdminController {
   constructor(
     private readonly payments: SchoolPayments,
     private readonly branding: SchoolBranding,
+    private readonly support: SchoolSupport,
   ) {}
+
+  @Post(":id/support-ticket")
+  @HttpCode(HttpStatus.OK)
+  @StaffAuth("support.access")
+  @RequireRecentMfa()
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({
+    summary: "Entrar no portal do colégio como suporte (2FA recente)",
+    description:
+      "Devolve um link com um bilhete de 60 s, de uso único. Só entra se o colégio tiver autorizado o suporte " +
+      "(o school-api confirma). Emergência (sem autorização): só ADMIN, e o colégio é avisado. Fica no histórico do colégio.",
+  })
+  @ApiBody({ schema: openApi(supportTicketSchema) })
+  async supportTicket(
+    @Param("id", uuid) id: string,
+    @Body(new ZodValidationPipe(supportTicketSchema)) body: { reason: string; mode: "READ" | "WRITE"; emergency: boolean },
+    @CurrentStaff() staff: StaffAccess,
+  ) {
+    return unwrap(await this.support.requestTicket(id, staff, body), SCHOOL_HTTP);
+  }
 
   @Post(":id/logo")
   @HttpCode(HttpStatus.OK)

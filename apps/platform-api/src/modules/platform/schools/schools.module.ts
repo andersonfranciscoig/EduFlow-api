@@ -26,7 +26,10 @@ import {
   type SchoolNotifier,
   type SchoolSettings,
   type SchoolTokenService,
+  type SupportTicketIssuer,
 } from "./application/ports";
+import { SchoolSupport } from "./application/SchoolSupport";
+import { JwtSupportTicketIssuer } from "./infrastructure/support-tickets";
 import { SchoolBranding } from "./application/SchoolBranding";
 import { SchoolOnboarding } from "./application/SchoolOnboarding";
 import { SchoolPayments } from "./application/SchoolPayments";
@@ -166,6 +169,17 @@ import {
       provide: SchoolBranding,
       inject: [T.SchoolRepository, T.LogoStorage, SHARED_TOKENS.Clock],
       useFactory: (repo: SchoolRepository, storage: LogoStorage, clock: Clock) => new SchoolBranding(repo, storage, clock),
+    },
+    {
+      provide: T.SupportTicketIssuer,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>) => new JwtSupportTicketIssuer(readKeyFile(config.get("SUPPORT_TICKET_PRIVATE_KEY_FILE", { infer: true }))),
+    },
+    {
+      provide: SchoolSupport,
+      inject: [T.SchoolRepository, T.SchoolDatabases, T.SupportTicketIssuer, T.SchoolSettings, SHARED_TOKENS.Clock],
+      useFactory: (repo: SchoolRepository, databases: SchoolDatabasePort, tickets: SupportTicketIssuer, settings: SchoolSettings, clock: Clock) =>
+        new SchoolSupport(repo, databases, tickets, settings, clock),
     },
     SchoolOwnerGuard,
     EmailDeadlineSweeper,

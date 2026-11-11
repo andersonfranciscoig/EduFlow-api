@@ -16,7 +16,8 @@ export type SchoolErrorCode =
   | "PROOF_NOT_FOUND"
   | "INVALID_LOGO"
   | "LOGO_NOT_FOUND"
-  | "STORAGE_UNAVAILABLE";
+  | "STORAGE_UNAVAILABLE"
+  | "SUPPORT_FORBIDDEN";
 
 export type SchoolError = DomainError<SchoolErrorCode>;
 

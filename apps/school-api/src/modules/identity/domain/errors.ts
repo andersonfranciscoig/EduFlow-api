@@ -21,7 +21,12 @@ export type IdentityErrorCode =
   | "INVALID_MFA_CODE"
   | "MFA_NOT_ENABLED"
   | "MFA_ALREADY_ENABLED"
-  | "SESSION_NOT_FOUND";
+  | "SESSION_NOT_FOUND"
+  // suporte EduFlow
+  | "INVALID_SUPPORT_TICKET"
+  | "SUPPORT_TICKET_USED"
+  | "SUPPORT_NOT_AUTHORIZED"
+  | "SUPPORT_FORBIDDEN";
 
 export type IdentityError = DomainError<IdentityErrorCode>;
 

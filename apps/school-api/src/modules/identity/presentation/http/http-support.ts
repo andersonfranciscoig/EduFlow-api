@@ -27,6 +27,10 @@ const STATUS: Record<IdentityErrorCode, HttpStatus> = {
   MFA_NOT_ENABLED: HttpStatus.CONFLICT,
   MFA_ALREADY_ENABLED: HttpStatus.CONFLICT,
   SESSION_NOT_FOUND: HttpStatus.NOT_FOUND,
+  INVALID_SUPPORT_TICKET: HttpStatus.UNAUTHORIZED,
+  SUPPORT_TICKET_USED: HttpStatus.CONFLICT,
+  SUPPORT_NOT_AUTHORIZED: HttpStatus.FORBIDDEN,
+  SUPPORT_FORBIDDEN: HttpStatus.FORBIDDEN,
 };
 
 /** Desembrulha o Result do caso de uso ou lança o erro HTTP correspondente. */

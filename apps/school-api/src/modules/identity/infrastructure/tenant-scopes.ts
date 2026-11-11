@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import type { TenantContext } from "../../../tenancy/tenant-context";
 import type { TenantScope } from "../application/ports";
 import { PrismaEmailCodeRepository, PrismaSchoolSessionRepository, PrismaSchoolUserRepository } from "./prisma-repositories";
+import { PrismaSupportRepository } from "./support-repository";
 
 /**
  * Liga os repositórios à BD do colégio do pedido. Objetos leves (sem estado
@@ -17,6 +18,7 @@ export class TenantScopes {
       users: new PrismaSchoolUserRepository(tenant.db),
       sessions: new PrismaSchoolSessionRepository(tenant.db),
       codes: new PrismaEmailCodeRepository(tenant.db),
+      support: new PrismaSupportRepository(tenant.db),
     };
   }
 }

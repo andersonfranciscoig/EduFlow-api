@@ -43,6 +43,10 @@ export const verifyCodeSchema = z
 export const setPasswordSchema = z.object({ ticket, password }).meta({ title: "SetPassword" });
 export const challengeSchema = z.object({ challengeToken: ticket }).meta({ title: "MfaChallenge" });
 export const challengeCodeSchema = z.object({ challengeToken: ticket, code: mfaCode }).meta({ title: "MfaChallengeCode" });
+export const supportExchangeSchema = z.object({ ticket }).meta({ title: "SupportTicketExchange" });
+export const supportGrantSchema = z
+  .object({ days: z.union([z.literal(1), z.literal(7), z.literal(30)], { error: "Escolha 1, 7 ou 30 dias." }) })
+  .meta({ title: "SupportGrant" });
 
 export type IdentifyBody = z.infer<typeof identifySchema>;
 export type SignInBody = z.infer<typeof signInSchema>;

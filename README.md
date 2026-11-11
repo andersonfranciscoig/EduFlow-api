@@ -68,6 +68,7 @@ e `libs/` nunca importa de `apps/`.
 | `backup` | AES-256 | só o provisioner (cifra as cópias das BDs). Nunca regenerada; guardar uma cópia fora do servidor |
 | `uploadthing.token` | token | só o provisioner (armazenamento das cópias, ficheiros privados) |
 | `uploadthing-public.token` | token | só o platform-api (logótipos, ficheiros públicos). Em dev, se não existir, usa-se `uploadthing.token` |
+| `support-ticket` | ES256 | **privada** só no platform-api (emite bilhetes de suporte), **pública** só no school-api (confirma-os) |
 
 Tokens com chave errada, de outro tipo (equipa ↔ responsável ↔ portal) ou assinados com o antigo segredo partilhado são rejeitados.
 
@@ -171,7 +172,45 @@ Regras de segurança:
     `apps/provisioner/storage/backups`;
   - `secrets/backup.key` **nunca é regenerada** (nem com `--force`): sem ela as cópias antigas ficam ilegíveis.
     Guarde-a fora do servidor.
-- O **restauro** ainda não está implementado: o botão aparece desativado.
+
+### Restaurar uma cópia
+
+- Permissão **`databases.restore`** (os ADMIN têm-na; a um gestor dá-se caso a caso) + **2FA recente** + motivo +
+  escrever o identificador do colégio. `POST /v1/platform/databases/backups/:backupId/restore`.
+- Uma cópia só pode ser restaurada **no colégio a que pertence** (FK composta `(backup_id, school_id)` na própria BD)
+  e há no máximo um restauro em curso por colégio. O provisioner não cria nem apaga pedidos.
+- O que o provisioner faz (`apps/provisioner/src/restores.ts`):
+  1. descarrega a cópia, confere o sha256 e decifra;
+  2. faz uma cópia do **estado atual** ("Antes de restaurar") — dá para voltar atrás restaurando-a;
+  3. termina as ligações e põe o schema atual de lado (`eduflow_pre_restore`, um rename instantâneo);
+  4. `pg_restore` → SQL → `psql` numa só transação (retira o `SET transaction_timeout` das versões 17+, que servidores
+     ≤ 16 não conhecem);
+  5. confere que a BD restaurada é deste colégio (`tenant_info`); **se algo falhar, repõe o estado anterior**;
+  6. termina **todas as sessões** do portal e invalida códigos por email (a cópia traria sessões antigas de volta)
+     e aplica as migrações em falta.
+- Um restauro interrompido (o serviço reiniciou) fica `FAILED` e **nunca se repete sozinho**: se o schema
+  `eduflow_pre_restore` ficou para trás, o próximo restauro recusa-se até alguém verificar à mão.
+
+### Acesso de suporte aos colégios
+
+- **O colégio decide.** O diretor/responsável autoriza no portal (24 h, 7 ou 30 dias) e pode retirar a qualquer
+  momento (termina logo as sessões). A autorização e cada entrada ficam na **BD do próprio colégio**
+  (`support_grants`, `support_sessions`, `school_activity`).
+- **Quem pode entrar:** membros da equipa com **`support.access`** (o ADMIN cria um gestor de suporte por convite e
+  dá-lhe só esta permissão, ou entra com a sua conta). Pedido com **2FA recente** e motivo
+  (`POST /v1/platform/schools/:id/support-ticket`), registado no histórico do colégio.
+- **Bilhete:** JWT ES256 de **60 s**, de uso único (`jti` guardado), ligado ao colégio (`tid`). A chave privada só existe
+  no platform-api; o school-api só tem a pública (confirma, não cria). Vai no **fragmento** do link (`#bilhete=…`):
+  o browser nunca o envia a um servidor nem em `Referer`.
+- **Sessão de suporte:** própria (não é uma conta do colégio), no máximo **1 h** e nunca para além da autorização;
+  confirmada a cada pedido. **Só leitura por omissão**: o guard recusa tudo o que não seja GET; em modo de edição
+  fica registado. Rotas `@NoSupport` (decidir o acesso, e no futuro senhas/2FA) são sempre recusadas.
+- **Emergência:** só um ADMIN pode entrar sem autorização do colégio — os diretores recebem logo um email
+  "Acesso de emergência" e a entrada fica no histórico.
+- Cada entrada envia um email aos diretores (quem, modo, motivo, até quando) e aparece no portal com uma faixa
+  "Sessão de suporte EduFlow".
+- O provisioner aplica as **migrações em falta em todos os colégios** quando arranca (as tabelas do suporte chegam
+  assim aos colégios que já existiam).
 
 ### Logótipo do colégio
 

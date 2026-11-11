@@ -22,6 +22,18 @@ export const PERMISSION_CATALOG = [
   { key: "billing.manage", group: "Faturação", label: "Gerir faturação", description: "Alterar planos, emitir e anular faturas." },
   { key: "databases.view", group: "Bases de dados", label: "Ver bases de dados", description: "Consultar servidores, ocupação e testar ligações." },
   { key: "databases.manage", group: "Bases de dados", label: "Gerir bases de dados", description: "Registar servidores, trocar credenciais e atribuir colégios." },
+  {
+    key: "databases.restore",
+    group: "Bases de dados",
+    label: "Restaurar cópias",
+    description: "Repor a base de dados de um colégio a partir de uma cópia de segurança (2FA recente; o estado atual é guardado antes).",
+  },
+  {
+    key: "support.access",
+    group: "Suporte",
+    label: "Acesso de suporte aos colégios",
+    description: "Entrar no portal dos colégios que o autorizaram — só leitura, salvo pedido de edição. Tudo fica registado e o colégio é avisado.",
+  },
   { key: "settings.manage", group: "Definições", label: "Gerir definições", description: "Alterar as definições gerais da plataforma." },
 ] as const;
 
