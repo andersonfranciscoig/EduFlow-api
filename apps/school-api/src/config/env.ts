@@ -42,6 +42,8 @@ export const envSchema = z
      * Com ela o school-api confirma um bilhete, mas não consegue criar nenhum.
      */
     SUPPORT_TICKET_PUBLIC_KEY_FILE: z.string().min(1),
+    /** Segredo partilhado com o portal: o IP real do utilizador chega assinado (HMAC). Opcional em dev. */
+    CLIENT_IP_SECRET: z.string().min(32, "use pelo menos 32 caracteres").optional(),
 
     // ---------------------------------------------------------------- email (Brevo)
     EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),

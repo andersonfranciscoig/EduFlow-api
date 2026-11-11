@@ -4,6 +4,7 @@ import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import { signedClientIp } from "../../../libs/kernel/src/presentation/signed-client-ip";
 import { AppModule } from "./app.module";
 import type { Env } from "./config/env";
 
@@ -13,6 +14,8 @@ async function bootstrap() {
 
   app.setGlobalPrefix("api");
   app.set("trust proxy", "loopback, linklocal, uniquelocal");
+  // com proxies de terceiros (Vercel → Render), o IP real chega assinado pelo portal
+  app.use(signedClientIp(config.get("CLIENT_IP_SECRET", { infer: true })));
   app.disable("x-powered-by");
   app.enableShutdownHooks();
 

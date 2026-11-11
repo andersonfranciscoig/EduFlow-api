@@ -37,6 +37,9 @@ export const envSchema = z.object({
   /** Chave PRIVADA dos bilhetes de suporte (a pública está só no school-api). */
   SUPPORT_TICKET_PRIVATE_KEY_FILE: z.string().min(1),
 
+  /** Segredo partilhado com o frontend: o IP real do utilizador chega assinado (HMAC). Opcional em dev. */
+  CLIENT_IP_SECRET: z.string().min(32, "use pelo menos 32 caracteres").optional(),
+
   // ---------------------------------------------------------------- email (Brevo)
   /** Sem chave (console): os emails aparecem no terminal. */
   EMAIL_PROVIDER: z.enum(["brevo", "console"]).default("console"),

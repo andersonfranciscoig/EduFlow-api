@@ -4,6 +4,7 @@ import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import { signedClientIp } from "../../../libs/kernel/src/presentation/signed-client-ip";
 import { AppModule } from "./app.module";
 import type { Env } from "./config/env";
 
@@ -15,6 +16,8 @@ async function bootstrap() {
   // O frontend (Next.js) chama a API a partir do servidor e reencaminha o IP real
   // em X-Forwarded-For — confiamos apenas em proxies da rede local/loopback.
   app.set("trust proxy", "loopback, linklocal, uniquelocal");
+  // com proxies de terceiros (Vercel → Render), o IP real chega assinado pelo frontend
+  app.use(signedClientIp(config.get("CLIENT_IP_SECRET", { infer: true })));
   app.disable("x-powered-by");
   app.enableCors({ origin: config.get("FRONTEND_URL", { infer: true }), credentials: true });
   app.enableShutdownHooks();
