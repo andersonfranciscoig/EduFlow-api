@@ -17,3 +17,6 @@ secrets/
 .env
 apps/*/.env
 !**/.env.example
+
+# segredos de PRODUÇÃO (scripts/prod/*) — nunca no repositório
+secrets-prod/

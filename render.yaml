@@ -1,0 +1,100 @@
+# =============================================================================
+#  EduFlow-api no Render (Blueprint). Fase de testes: plano gratuito.
+#  Antes do 1.º deploy: README → "Deploy (Render + Neon)".
+#
+#  - Segredos NUNCA aqui: os URLs das BDs são "sync: false" (preenchidos no
+#    painel) e as chaves vão como "Secret Files" de cada serviço → /etc/secrets/<nome>.
+#  - Região Frankfurt (a mais próxima de Angola); crie o Neon também em Frankfurt.
+# =============================================================================
+services:
+  # ---------------------------------------------------------------- platform-api
+  - type: web
+    name: eduflow-platform-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    # --prod=false: com NODE_ENV=production o pnpm saltaria as devDependencies (TypeScript, Prisma)
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm run build
+    startCommand: pnpm run start:platform
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - { key: NODE_ENV, value: production }
+      - { key: NODE_VERSION, value: 22.15.0 }
+      - { key: PLATFORM_DATABASE_URL, sync: false }
+      # endereço do painel EduFlow (Vercel) — CORS
+      - { key: FRONTEND_URL, sync: false }
+      # ex.: https://{slug}.eduflow.ao
+      - { key: PORTAL_URL_TEMPLATE, sync: false }
+      # ex.: https://eduflow-platform-api.onrender.com/api
+      - { key: PUBLIC_API_URL, sync: false }
+      - { key: STAFF_JWT_PRIVATE_KEY_FILE, value: /etc/secrets/staff-jwt.key }
+      - { key: STAFF_JWT_PUBLIC_KEY_FILE, value: /etc/secrets/staff-jwt.pub }
+      - { key: CUSTOMER_JWT_PRIVATE_KEY_FILE, value: /etc/secrets/customer-jwt.key }
+      - { key: CUSTOMER_JWT_PUBLIC_KEY_FILE, value: /etc/secrets/customer-jwt.pub }
+      - { key: MFA_ENCRYPTION_KEY_FILE, value: /etc/secrets/mfa.key }
+      - { key: SERVER_CREDENTIALS_PUBLIC_KEY_FILE, value: /etc/secrets/server-credentials.pub }
+      - { key: SUPPORT_TICKET_PRIVATE_KEY_FILE, value: /etc/secrets/support-ticket.key }
+      # o disco do plano gratuito apaga-se a cada deploy: logótipos no UploadThing
+      - { key: LOGO_STORAGE, value: uploadthing }
+      - { key: LOGO_UPLOADTHING_TOKEN_FILE, value: /etc/secrets/uploadthing-public.token }
+      # ATENÇÃO: comprovativos de pagamento ainda vão para disco local (efémero no plano gratuito)
+      - { key: STORAGE_DIR, value: /tmp/eduflow-storage }
+      - { key: EMAIL_PROVIDER, value: brevo }
+      - { key: EMAIL_API_KEY_FILE, value: /etc/secrets/email-api.key }
+      - { key: EMAIL_FROM, sync: false }
+      - { key: EMAIL_REPLY_TO, sync: false }
+      - { key: DEFAULT_PHONE_COUNTRY_CODE, value: "244" }
+
+  # ---------------------------------------------------------------- school-api
+  - type: web
+    name: eduflow-school-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm run build
+    startCommand: pnpm run start:school
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - { key: NODE_ENV, value: production }
+      - { key: NODE_VERSION, value: 22.15.0 }
+      - { key: DIRECTORY_DATABASE_URL, sync: false }
+      # domínio dos portais (ex.: eduflow.ao → colegio-x.eduflow.ao) — obrigatório em produção
+      - { key: TENANT_BASE_DOMAIN, sync: false }
+      - { key: PORTAL_URL_TEMPLATE, sync: false }
+      - { key: TENANT_CREDENTIALS_PRIVATE_KEY_FILE, value: /etc/secrets/tenant-credentials.key }
+      - { key: SCHOOL_JWT_PRIVATE_KEY_FILE, value: /etc/secrets/school-jwt.key }
+      - { key: SCHOOL_JWT_PUBLIC_KEY_FILE, value: /etc/secrets/school-jwt.pub }
+      - { key: SCHOOL_MFA_KEY_FILE, value: /etc/secrets/school-mfa.key }
+      - { key: SUPPORT_TICKET_PUBLIC_KEY_FILE, value: /etc/secrets/support-ticket.pub }
+      - { key: EMAIL_PROVIDER, value: brevo }
+      - { key: EMAIL_API_KEY_FILE, value: /etc/secrets/email-api.key }
+      - { key: EMAIL_FROM, sync: false }
+      - { key: EMAIL_REPLY_TO, sync: false }
+      - { key: DEFAULT_PHONE_COUNTRY_CODE, value: "244" }
+
+  # ---------------------------------------------------------------- provisioner (DESLIGADO na fase gratuita)
+  # O Render só tem "background workers" pagos. Sem o provisioner não há criação
+  # automática das BDs dos colégios nem cópias de segurança. Para ativar:
+  # descomentar, escolher o plano e juntar os Secret Files de secrets-prod/provisioner/.
+  # Precisa de pg_dump 18 (o Neon usa PG 18) — ver README.
+  #
+  # - type: worker
+  #   name: eduflow-provisioner
+  #   runtime: node
+  #   plan: starter
+  #   region: frankfurt
+  #   buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm run build
+  #   startCommand: pnpm run start:provisioner
+  #   envVars:
+  #     - { key: NODE_ENV, value: production }
+  #     - { key: NODE_VERSION, value: 22.15.0 }
+  #     - { key: PROVISIONER_DATABASE_URL, sync: false }
+  #     - { key: TENANT_CREDENTIALS_PUBLIC_KEY_FILE, value: /etc/secrets/tenant-credentials.pub }
+  #     - { key: SERVER_CREDENTIALS_PRIVATE_KEY_FILE, value: /etc/secrets/server-credentials.key }
+  #     - { key: BACKUP_KEY_FILE, value: /etc/secrets/backup.key }
+  #     - { key: BACKUP_STORAGE, value: uploadthing }
+  #     - { key: UPLOADTHING_TOKEN_FILE, value: /etc/secrets/uploadthing.token }
+  #     - { key: UPLOADTHING_ACL, value: private }
+  #     - { key: LOCAL_FALLBACK_SERVER, value: "false" }

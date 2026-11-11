@@ -268,6 +268,32 @@ Regras de segurança:
 - Painel da equipa só acessível por VPN/lista de IPs; contentores sem root e com sistema de ficheiros só de leitura.
 - Rede do provisioner limitada aos servidores de BD (ele liga-se aos endereços registados pela equipa).
 
+## Deploy (Render + Neon)
+
+Fase de testes: `platform-api` e `school-api` no **Render (plano gratuito)**, BD da plataforma no **Neon**.
+O `render.yaml` (Blueprint) descreve os serviços; os segredos nunca estão no repositório.
+
+1. **Chaves de produção** (novas — nunca as de desenvolvimento):
+   `bash scripts/prod/gen-secrets.sh` → `secrets-prod/{platform-api,school-api,provisioner}/`.
+   Juntar à mão: `email-api.key` (Brevo) nas pastas da platform-api e do school-api e
+   `uploadthing-public.token` na da platform-api. **Guardar `secrets-prod/_all/backup.key` fora do computador.**
+2. **BD no Neon** (região Frankfurt): criar o projeto e uma BD (ex.: `eduflow_platform`); guardar o URL do
+   dono em `secrets-prod/neon-owner.url` e correr `bash scripts/prod/bootstrap-db.sh`
+   (utilizadores de privilégios mínimos, migrações e permissões; idempotente — correr de novo a cada versão
+   com migrações novas). Os URLs de cada serviço ficam em `secrets-prod/render-env.txt`.
+3. **Render**: New → Blueprint → este repositório. Em cada serviço:
+   - **Environment**: preencher as variáveis `sync: false` (URLs da BD do `render-env.txt`, `FRONTEND_URL`,
+     `PORTAL_URL_TEMPLATE`, `PUBLIC_API_URL`, `TENANT_BASE_DOMAIN`, `EMAIL_FROM`…);
+   - **Secret Files**: carregar os ficheiros da pasta desse serviço em `secrets-prod/` (ficam em `/etc/secrets/`).
+4. Confirmar: `https://<serviço>.onrender.com/api/health` → 200.
+
+Limitações do plano gratuito (resolver antes de abrir a clientes):
+- os serviços **adormecem** após 15 min sem uso (o 1.º pedido demora ~1 min);
+- o **provisioner** não está ativo (no Render só há workers pagos): sem criação automática das BDs dos colégios
+  nem cópias. Para testar pode correr-se localmente apontado para o Neon (só faz ligações de saída);
+- o disco é **efémero**: os comprovativos de pagamento (ainda em disco local) perdem-se a cada deploy;
+- as APIs ficam acessíveis na internet (os frontends chamam-nas do servidor); limitar quando houver plano pago.
+
 ## Base de dados
 
 ```bash
