@@ -195,6 +195,8 @@ model AcademicYear {
   reservations   SeatReservation[]
   classSubjects  ClassSubject[]
   lessons        Lesson[]
+  classFees      ClassFee[]
+  feePlan        FeePlan?
 
   @@index([startsOn])
   @@map("academic_years")
@@ -217,6 +219,7 @@ model SchoolClass {
   groups       ClassGroup[]
   reservations SeatReservation[]
   subjects     ClassSubject[]
+  fees         ClassFee[]
 
   @@index([courseId])
   @@map("school_classes")
@@ -360,6 +363,65 @@ model SeatReservation {
   @@index([classId, status])
   @@index([academicYearId, status])
   @@map("seat_reservations")
+}
+
+// =============================================================================
+//  FINANÇAS — preçário (rubricas, preço por classe/curso, calendário das propinas)
+// =============================================================================
+
+/// Rubrica de cobrança (Propina, Matrícula, Confirmação, Uniforme…). Atravessa os anos.
+model FeeItem {
+  id         String    @id @db.Uuid
+  name       String
+  /// MENSAL | UNICA
+  billing    String
+  /// TODOS | NOVOS | CONTINUANTES
+  appliesTo  String    @default("TODOS") @map("applies_to")
+  position   Int       @default(0)
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @map("created_at")
+  updatedAt  DateTime  @map("updated_at")
+
+  prices ClassFee[]
+
+  @@map("fee_items")
+}
+
+/// Preço de uma rubrica numa classe do ano (no II Ciclo, a classe já é por curso). Kwanzas.
+model ClassFee {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  classId        String       @map("class_id") @db.Uuid
+  schoolClass    SchoolClass  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  feeItemId      String       @map("fee_item_id") @db.Uuid
+  feeItem        FeeItem      @relation(fields: [feeItemId], references: [id], onDelete: Restrict)
+  amount         Int
+  updatedById    String?      @map("updated_by_id") @db.Uuid
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+
+  @@unique([classId, feeItemId])
+  @@index([academicYearId])
+  @@index([feeItemId])
+  @@map("class_fees")
+}
+
+/// Calendário das propinas do ano: meses cobrados, dia limite e multa por atraso.
+model FeePlan {
+  academicYearId String       @id @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  /// ["2026-09", "2026-10", …]
+  months         Json
+  dueDay         Int          @default(10) @map("due_day")
+  /// NONE | PERCENT | FIXED
+  lateFeeKind    String       @default("NONE") @map("late_fee_kind")
+  lateFeeValue   Int          @default(0) @map("late_fee_value")
+  updatedById    String?      @map("updated_by_id") @db.Uuid
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+
+  @@map("fee_plans")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
