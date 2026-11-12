@@ -190,8 +190,9 @@ model AcademicYear {
   createdAt   DateTime  @map("created_at")
   updatedAt   DateTime  @map("updated_at")
 
-  classes SchoolClass[]
-  groups  ClassGroup[]
+  classes      SchoolClass[]
+  groups       ClassGroup[]
+  reservations SeatReservation[]
 
   @@index([startsOn])
   @@map("academic_years")
@@ -206,9 +207,12 @@ model SchoolClass {
   /// Obrigatório no II Ciclo (podem existir várias 10.ª, uma por curso)
   course         String?
   description    String?
+  /// Vagas para o ano letivo (direção). null = usar os lugares das turmas
+  vacancies      Int?
   createdAt      DateTime     @map("created_at")
 
-  groups ClassGroup[]
+  groups       ClassGroup[]
+  reservations SeatReservation[]
 
   @@map("school_classes")
 }
@@ -227,8 +231,32 @@ model ClassGroup {
   createdAt      DateTime     @map("created_at")
   updatedAt      DateTime     @map("updated_at")
 
+  reservations SeatReservation[]
+
   @@index([academicYearId])
   @@map("class_groups")
+}
+
+/// Ocupação de vagas: HELD (reservada, com prazo) → CONFIRMED (aluno numa turma) → RELEASED.
+model SeatReservation {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  classId        String       @map("class_id") @db.Uuid
+  schoolClass    SchoolClass  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  groupId        String?      @map("group_id") @db.Uuid
+  group          ClassGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  /// HELD | CONFIRMED | RELEASED
+  status         String
+  /// quem ocupa (ex.: n.º da inscrição)
+  reference      String
+  expiresAt      DateTime?    @map("expires_at")
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+
+  @@index([classId, status])
+  @@index([academicYearId, status])
+  @@map("seat_reservations")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida

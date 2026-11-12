@@ -16,7 +16,8 @@ import {
   suggestYearName,
   YEAR_STATUS_LABELS,
 } from "../domain/academic";
-import type { ClassRow, GroupRow, PedagogyActor, PedagogyRepository, WriteOutcome, YearRow, YearSummaryRow } from "./ports";
+import { cleanReference, HOLD_HOURS_DEFAULT, HOLD_HOURS_MAX, seatNumbers } from "../domain/seats";
+import type { ClassRow, GroupRow, PedagogyActor, PedagogyRepository, ReservationRow, SeatOutcome, WriteOutcome, YearRow, YearSummaryRow } from "./ports";
 
 type R<T> = Promise<Result<T, PedagogyError>>;
 
@@ -31,7 +32,19 @@ const yearDto = (y: YearRow) => ({
   closedAt: y.closedAt?.toISOString() ?? null,
 });
 
-const groupDto = (g: GroupRow) => ({ id: g.id, classId: g.classId, name: g.name, shift: g.shift, shiftLabel: SHIFT_LABELS[g.shift], room: g.room, capacity: g.capacity });
+const groupDto = (g: GroupRow) => ({
+  id: g.id,
+  classId: g.classId,
+  name: g.name,
+  shift: g.shift,
+  shiftLabel: SHIFT_LABELS[g.shift],
+  room: g.room,
+  capacity: g.capacity,
+  /** alunos colocados nesta turma */
+  confirmed: g.confirmed,
+  /** lugares livres (null = turma sem lotação) */
+  free: g.capacity === null ? null : Math.max(0, g.capacity - g.confirmed),
+});
 
 const classDto = (c: ClassRow) => ({
   id: c.id,
@@ -42,7 +55,67 @@ const classDto = (c: ClassRow) => ({
   description: c.description,
   groups: c.groups.map(groupDto),
   nextGroupName: nextGroupName(c.groups.map((g) => g.name)),
+  seats: seatNumbers(
+    c.groups.map((g) => g.capacity),
+    c.vacanciesSet,
+    c.held,
+    c.groups.reduce((n, g) => n + g.confirmed, 0),
+  ),
 });
+
+const reservationDto = (r: ReservationRow) => ({
+  id: r.id,
+  classId: r.classId,
+  groupId: r.groupId,
+  status: r.status,
+  reference: r.reference,
+  expiresAt: r.expiresAt?.toISOString() ?? null,
+  createdAt: r.createdAt.toISOString(),
+});
+
+const classTitle = (c: { grade: number; course: string | null }) => `${gradeLabel(c.grade)}${c.course ? ` de ${c.course}` : ""}`;
+
+/** Traduz um "não deu" das escritas de vagas para um erro de domínio com mensagem clara. */
+function seatError(
+  r: Exclude<SeatOutcome<unknown>, { ok: true }>,
+  ctx: { cls?: { grade: number; course: string | null }; groupName?: string; what: "class" | "group" | "reservation"; removing?: boolean },
+): PedagogyError {
+  const name = ctx.cls ? classTitle(ctx.cls) : "classe";
+  switch (r.reason) {
+    case "no_vacancy":
+      return pedagogyError("NO_VACANCY", `Não há vagas disponíveis na ${name}.`, { available: 0 });
+    case "group_full":
+      return pedagogyError("GROUP_FULL", ctx.groupName ? `A turma ${ctx.groupName} está lotada.` : `As turmas da ${name} estão lotadas.`);
+    case "invalid_group":
+      return pedagogyError("INVALID_INPUT", "Essa turma não pertence a esta classe.");
+    case "seats_taken":
+      if (r.inGroup !== undefined) {
+        const alunos = `${r.inGroup} aluno${r.inGroup === 1 ? "" : "s"}`;
+        return pedagogyError("SEATS_TAKEN", ctx.removing ? `A turma tem ${alunos}: não pode ser removida.` : `A turma tem ${alunos}: a lotação não pode ficar abaixo disso.`, { taken: r.taken });
+      }
+      return pedagogyError(
+        "SEATS_TAKEN",
+        `Há ${r.taken} vaga${r.taken === 1 ? "" : "s"} ocupada${r.taken === 1 ? "" : "s"} ou reservada${r.taken === 1 ? "" : "s"} na ${name}: ${ctx.removing ? "as restantes turmas não chegam para elas" : "as vagas não podem ficar abaixo disso"}.`,
+        { taken: r.taken },
+      );
+    case "above_capacity":
+      return pedagogyError("INVALID_INPUT", `As turmas da ${name} têm ${r.capacity} lugares: as vagas não podem passar disso.`, { capacity: r.capacity });
+    case "duplicate":
+      return ctx.what === "reservation"
+        ? pedagogyError("RESERVATION_EXISTS", `Esta inscrição já tem uma vaga na ${name}.`)
+        : pedagogyError("GROUP_EXISTS", "Já existe uma turma com este nome nesta classe.");
+    case "not_held":
+      return pedagogyError("INVALID_STATE", "Esta reserva já foi confirmada ou libertada.");
+    case "closed":
+      return pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura.");
+    case "not_found":
+      return ctx.what === "reservation"
+        ? pedagogyError("RESERVATION_NOT_FOUND", "Reserva de vaga não encontrada.")
+        : ctx.what === "group"
+          ? pedagogyError("GROUP_NOT_FOUND", "Turma não encontrada.")
+          : pedagogyError("CLASS_NOT_FOUND", "Classe não encontrada.");
+  }
+}
 
 /** Traduz um "não deu" da BD (regras atómicas) para um erro de domínio. */
 function outcome<T>(r: WriteOutcome<T>): Result<T, PedagogyError> {
@@ -92,7 +165,13 @@ export class Pedagogy {
     const year = await repo.findYear(id);
     if (!year) return fail(pedagogyError("YEAR_NOT_FOUND", "Ano letivo não encontrado."));
     const classes = await repo.structure(id);
-    return ok({ canManage: this.canManage(actor) && year.status !== "CLOSED", year: yearDto(year), classes: classes.map(classDto) });
+    return ok({
+      canManage: this.canManage(actor) && year.status !== "CLOSED",
+      /** pode reservar/confirmar vagas (inscrições) */
+      canEnroll: this.canEnroll(actor) && year.status !== "CLOSED",
+      year: yearDto(year),
+      classes: classes.map(classDto),
+    });
   }
 
   async createYear(
@@ -230,17 +309,77 @@ export class Pedagogy {
     if (!group.ok) return group;
     const updated = await repo.updateGroup(id, { ...group.value, now: this.clock.now() });
     if (!updated.ok && updated.reason === "duplicate") return fail(pedagogyError("GROUP_EXISTS", `A turma ${group.value.name} já existe nesta classe.`));
-    const r = outcome(updated);
-    return r.ok ? ok(groupDto(r.value)) : r;
+    if (!updated.ok) return fail(seatError(updated, { cls: await repo.findClass(existing.classId) ?? undefined, what: "group" }));
+    return ok(groupDto(updated.value));
   }
 
+  /** Só sem alunos na turma e sem deixar a classe com menos vagas do que as já tomadas. */
   async removeGroup(repo: PedagogyRepository, actor: PedagogyActor, id: string) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const existing = await repo.findGroup(id);
     if (!existing) return fail(pedagogyError("GROUP_NOT_FOUND", "Turma não encontrada."));
     if (existing.yearStatus === "CLOSED") return fail(pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
-    await repo.removeGroup(id);
+    const removed = await repo.removeGroup(id);
+    if (!removed.ok) return fail(seatError(removed, { cls: await repo.findClass(existing.classId) ?? undefined, what: "group", removing: true }));
     return ok({ deleted: true });
+  }
+
+  // ================================================================ vagas
+
+  /** Quem pode reservar e confirmar vagas (inscrições): a direção e a secretaria. */
+  canEnroll(actor: PedagogyActor) {
+    return this.canManage(actor) || (!actor.support && actor.role === "SECRETARIA");
+  }
+
+  /** Vagas da classe (direção). null = usar os lugares das turmas. Nunca acima dos lugares nem abaixo das já tomadas. */
+  async setVacancies(repo: PedagogyRepository, actor: PedagogyActor, classId: string, value: number | null) {
+    const allowed = this.guard(actor);
+    if (!allowed.ok) return allowed;
+    const cls = await repo.findClass(classId);
+    if (!cls) return fail(pedagogyError("CLASS_NOT_FOUND", "Classe não encontrada."));
+    if (value !== null && (!Number.isInteger(value) || value < 0)) return fail(pedagogyError("INVALID_INPUT", "Indique um número de vagas (0 ou mais)."));
+    const now = this.clock.now();
+    const r = await repo.setVacancies(classId, value, now);
+    if (!r.ok) return fail(seatError(r, { cls, what: "class" }));
+    await repo.record("CLASS_VACANCIES_SET", classId, actor.support ? null : actor.id, { class: classTitle(cls), vacancies: value }, now);
+    const updated = (await repo.findClass(classId))!;
+    return ok(classDto(updated));
+  }
+
+  /** Reserva uma vaga na classe (ex.: ao submeter uma inscrição). Falha se não houver vagas. */
+  async holdSeat(repo: PedagogyRepository, actor: PedagogyActor, classId: string, input: { reference: string; holdHours?: number | null }) {
+    if (!this.canEnroll(actor)) return fail(pedagogyError("FORBIDDEN", "Só a direção e a secretaria podem reservar vagas."));
+    const cls = await repo.findClass(classId);
+    if (!cls) return fail(pedagogyError("CLASS_NOT_FOUND", "Classe não encontrada."));
+    if (cls.yearStatus === "CLOSED") return fail(pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
+    const reference = cleanReference(input.reference);
+    if (!reference) return fail(pedagogyError("INVALID_INPUT", "Indique a referência da inscrição (até 60 caracteres)."));
+    const hours = input.holdHours ?? HOLD_HOURS_DEFAULT;
+    if (!Number.isInteger(hours) || hours < 1 || hours > HOLD_HOURS_MAX) return fail(pedagogyError("INVALID_INPUT", `O prazo da reserva é de 1 a ${HOLD_HOURS_MAX} horas.`));
+    const now = this.clock.now();
+    const r = await repo.holdSeat({ id: this.ids.next(), classId, reference, expiresAt: new Date(now.getTime() + hours * 3_600_000), now });
+    return r.ok ? ok(reservationDto(r.value)) : fail(seatError(r, { cls, what: "reservation" }));
+  }
+
+  /** Confirma a vaga e coloca o aluno numa turma com lugar (a pedida ou a com mais lugares livres). */
+  async confirmSeat(repo: PedagogyRepository, actor: PedagogyActor, reservationId: string, input: { groupId?: string | null }) {
+    if (!this.canEnroll(actor)) return fail(pedagogyError("FORBIDDEN", "Só a direção e a secretaria podem confirmar vagas."));
+    const res = await repo.findReservation(reservationId);
+    if (!res) return fail(pedagogyError("RESERVATION_NOT_FOUND", "Reserva de vaga não encontrada."));
+    const cls = await repo.findClass(res.classId);
+    const r = await repo.confirmSeat({ reservationId, groupId: input.groupId ?? null, now: this.clock.now() });
+    if (!r.ok) {
+      const groupName = input.groupId ? cls?.groups.find((g) => g.id === input.groupId)?.name : undefined;
+      return fail(seatError(r, { cls: cls ?? undefined, groupName, what: "reservation" }));
+    }
+    return ok(reservationDto(r.value));
+  }
+
+  /** Liberta a vaga (inscrição desistida/recusada, ou aluno que saiu). */
+  async releaseSeat(repo: PedagogyRepository, actor: PedagogyActor, reservationId: string) {
+    if (!this.canEnroll(actor)) return fail(pedagogyError("FORBIDDEN", "Só a direção e a secretaria podem libertar vagas."));
+    const r = await repo.releaseSeat(reservationId, this.clock.now());
+    return r.ok ? ok(reservationDto(r.value)) : fail(seatError(r, { what: "reservation" }));
   }
 }
