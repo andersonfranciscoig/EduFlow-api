@@ -22,8 +22,17 @@ export const envSchema = z.object({
   SERVER_CREDENTIALS_PUBLIC_KEY_FILE: z.string().min(1),
   JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 8),
   DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
-  /** Pasta onde se guardam ficheiros enviados (ex.: comprovativos). */
+  /** Pasta local: comprovativos antigos (e todos, com FILE_STORAGE=local). */
   STORAGE_DIR: z.string().default("./storage/platform"),
+
+  // ---------------------------------------------------------------- comprovativos de pagamento
+  /** UploadThing (cifrados com AES-256-GCM antes de sair) ou pasta local (dev sem token). */
+  FILE_STORAGE: z.enum(["uploadthing", "local"]).default("local"),
+  FILES_UPLOADTHING_TOKEN_FILE: z.string().min(1).optional(),
+  /** "private" exige plano pago; com "public-read" o conteúdo continua cifrado. */
+  FILES_UPLOADTHING_ACL: z.enum(["private", "public-read"]).default("private"),
+  /** AES-256 (base64) que cifra os comprovativos — só a platform-api a tem. */
+  FILES_ENCRYPTION_KEY_FILE: z.string().min(1).optional(),
 
   // ---------------------------------------------------------------- logótipos (públicos)
   /** UploadThing (ficheiros públicos) ou pasta local servida por esta API (dev sem token). */
@@ -52,6 +61,11 @@ export const envSchema = z.object({
 }).superRefine((env, ctx) => {
   if (env.LOGO_STORAGE === "uploadthing" && (!env.LOGO_UPLOADTHING_TOKEN_FILE || !existsSync(env.LOGO_UPLOADTHING_TOKEN_FILE))) {
     ctx.addIssue({ code: "custom", path: ["LOGO_UPLOADTHING_TOKEN_FILE"], message: "obrigatório (ficheiro existente) com LOGO_STORAGE=uploadthing" });
+  }
+  if (env.FILE_STORAGE === "uploadthing") {
+    for (const k of ["FILES_UPLOADTHING_TOKEN_FILE", "FILES_ENCRYPTION_KEY_FILE"] as const) {
+      if (!env[k] || !existsSync(env[k])) ctx.addIssue({ code: "custom", path: [k], message: "obrigatório (ficheiro existente) com FILE_STORAGE=uploadthing" });
+    }
   }
 });
 

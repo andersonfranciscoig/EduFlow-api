@@ -44,6 +44,10 @@ if [ ! -f secrets/school-mfa.key ] || [ "$FORCE" = "--force" ]; then
   openssl rand -base64 32 > secrets/school-mfa.key
   echo "✓ chave school-mfa (AES-256) — segredos da 2FA nas BDs dos colégios; só school-api"
 fi
+if [ ! -f secrets/files.key ]; then # nunca regenerar: os comprovativos guardados ficariam ilegíveis
+  openssl rand -base64 32 > secrets/files.key
+  echo "✓ chave files (AES-256) — cifra os comprovativos de pagamento; só platform-api"
+fi
 if [ ! -f secrets/backup.key ]; then # nunca regenerar com --force: perder-se-iam as cópias existentes
   openssl rand -base64 32 > secrets/backup.key
   echo "✓ chave backup (AES-256) — cifra as cópias das BDs; só provisioner (GUARDE-A FORA DO SERVIDOR)"
@@ -131,6 +135,11 @@ STORAGE_DIR=./storage/platform
 LOGO_STORAGE=$LOGO_STORAGE
 LOGO_UPLOADTHING_TOKEN_FILE=$LOGO_TOKEN_FILE
 PUBLIC_API_URL="http://localhost:4000/api"
+# comprovativos de pagamento: cifrados (AES-256-GCM) antes de irem para o UploadThing
+FILE_STORAGE=$LOGO_STORAGE
+FILES_UPLOADTHING_TOKEN_FILE=$LOGO_TOKEN_FILE
+FILES_UPLOADTHING_ACL=public-read
+FILES_ENCRYPTION_KEY_FILE=secrets/files.key
 # acesso de suporte aos portais (bilhetes de 60 s; o school-api só tem a chave pública)
 SUPPORT_TICKET_PRIVATE_KEY_FILE=secrets/support-ticket.key
 # códigos por email (criar conta, repor senha) e aviso "portal pronto"

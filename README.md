@@ -69,6 +69,7 @@ e `libs/` nunca importa de `apps/`.
 | `uploadthing.token` | token | só o provisioner (armazenamento das cópias, ficheiros privados) |
 | `uploadthing-public.token` | token | só o platform-api (logótipos, ficheiros públicos). Em dev, se não existir, usa-se `uploadthing.token` |
 | `support-ticket` | ES256 | **privada** só no platform-api (emite bilhetes de suporte), **pública** só no school-api (confirma-os) |
+| `files` | AES-256 | só o platform-api (cifra os comprovativos de pagamento antes de irem para o UploadThing). Nunca regenerada; guardar uma cópia fora do servidor |
 
 Tokens com chave errada, de outro tipo (equipa ↔ responsável ↔ portal) ou assinados com o antigo segredo partilhado são rejeitados.
 
@@ -291,7 +292,9 @@ Limitações do plano gratuito (resolver antes de abrir a clientes):
 - os serviços **adormecem** após 15 min sem uso (o 1.º pedido demora ~1 min);
 - o **provisioner** não está ativo (no Render só há workers pagos): sem criação automática das BDs dos colégios
   nem cópias. Para testar pode correr-se localmente apontado para o Neon (só faz ligações de saída);
-- o disco é **efémero**: os comprovativos de pagamento (ainda em disco local) perdem-se a cada deploy;
+- o disco é **efémero**: por isso os logótipos e os **comprovativos de pagamento** vão para o UploadThing
+  (os comprovativos cifrados com AES-256-GCM — `secrets-prod/platform-api/files.key`; os antigos, em disco,
+  continuam a ler-se);
 - as APIs ficam acessíveis na internet (os frontends chamam-nas do servidor); limitar quando houver plano pago.
 
 ## Base de dados

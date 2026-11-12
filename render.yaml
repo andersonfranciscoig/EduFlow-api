@@ -38,8 +38,13 @@ services:
       # o disco do plano gratuito apaga-se a cada deploy: logótipos no UploadThing
       - { key: LOGO_STORAGE, value: uploadthing }
       - { key: LOGO_UPLOADTHING_TOKEN_FILE, value: /etc/secrets/uploadthing-public.token }
-      # ATENÇÃO: comprovativos de pagamento ainda vão para disco local (efémero no plano gratuito)
       - { key: STORAGE_DIR, value: /tmp/eduflow-storage }
+      # comprovativos de pagamento: cifrados (AES-256-GCM) antes de irem para o UploadThing
+      - { key: FILE_STORAGE, value: uploadthing }
+      - { key: FILES_UPLOADTHING_TOKEN_FILE, value: /etc/secrets/uploadthing-public.token }
+      # plano grátis do UploadThing: sem ficheiros privados — o conteúdo vai cifrado
+      - { key: FILES_UPLOADTHING_ACL, value: public-read }
+      - { key: FILES_ENCRYPTION_KEY_FILE, value: /etc/secrets/files.key }
       - { key: EMAIL_PROVIDER, value: brevo }
       - { key: EMAIL_API_KEY_FILE, value: /etc/secrets/email-api.key }
       - { key: EMAIL_FROM, sync: false }
