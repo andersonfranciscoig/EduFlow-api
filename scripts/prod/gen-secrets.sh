@@ -41,10 +41,11 @@ rsa server-credentials
 aes mfa
 aes school-mfa
 aes backup
+aes files
 
 # ---------------------------------------------------------------- por serviço (só o que cada um precisa)
 copy() { mkdir -p "$OUT/$1"; for f in "${@:2}"; do cp "$ALL/$f" "$OUT/$1/$f"; done; }
-copy platform-api staff-jwt.key staff-jwt.pub customer-jwt.key customer-jwt.pub mfa.key server-credentials.pub support-ticket.key
+copy platform-api staff-jwt.key staff-jwt.pub customer-jwt.key customer-jwt.pub mfa.key server-credentials.pub support-ticket.key files.key
 copy school-api school-jwt.key school-jwt.pub school-mfa.key tenant-credentials.key support-ticket.pub
 copy provisioner tenant-credentials.pub server-credentials.key backup.key
 chmod -R go-rwx "$OUT"
@@ -57,6 +58,7 @@ Pronto. Falta juntar à mão (não são gerados aqui):
   secrets-prod/platform-api/uploadthing-public.token token do UploadThing (logótipos)
   secrets-prod/provisioner/uploadthing.token         token do UploadThing (cópias — plano pago, ficheiros privados)
 
-IMPORTANTE: guarde secrets-prod/_all/backup.key FORA deste computador (gestor de
-senhas). Sem ela, as cópias de segurança de produção ficam ilegíveis.
+IMPORTANTE: guarde secrets-prod/_all/backup.key e secrets-prod/_all/files.key FORA
+deste computador (gestor de senhas). Sem elas, as cópias de segurança e os
+comprovativos de pagamento de produção ficam ilegíveis.
 EOF

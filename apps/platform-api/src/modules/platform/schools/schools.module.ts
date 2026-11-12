@@ -40,6 +40,8 @@ import { EmailVerificationService } from "../verification/application/EmailVerif
 import { PLATFORM_MAILER, VerificationModule } from "../verification/verification.module";
 import { EmailDeadlineSweeper } from "./infrastructure/email-deadline-sweeper";
 import { LocalLogoStorage, UploadThingLogoStorage } from "./infrastructure/logo-storage";
+import { EncryptedUploadThingFileStorage } from "./infrastructure/proof-storage";
+import { readBackupKey } from "../../../../../../libs/kernel/src/infrastructure/backup-crypto";
 import { PrismaSchoolRepository } from "./infrastructure/PrismaSchoolRepository";
 import { SchoolOwnerGuard } from "./presentation/http/school-auth";
 import {
@@ -77,9 +79,20 @@ import {
     { provide: SHARED_TOKENS.IdGenerator, useValue: uuidGenerator },
     { provide: SHARED_TOKENS.PasswordHasher, useFactory: () => new BcryptPasswordHasher() },
     {
+      // comprovativos: UploadThing cifrado (os antigos, em disco, continuam a ler-se)
       provide: SHARED_TOKENS.FileStorage,
       inject: [ConfigService],
-      useFactory: (config: ConfigService<Env, true>) => new LocalFileStorage(config.get("STORAGE_DIR", { infer: true })),
+      useFactory: (config: ConfigService<Env, true>): FileStorage => {
+        const local = new LocalFileStorage(config.get("STORAGE_DIR", { infer: true }));
+        if (config.get("FILE_STORAGE", { infer: true }) !== "uploadthing") return local;
+        console.log("[platform-api] comprovativos: UploadThing (cifrados)");
+        return new EncryptedUploadThingFileStorage(
+          readFileSync(config.get("FILES_UPLOADTHING_TOKEN_FILE", { infer: true })!, "utf8"),
+          readBackupKey(readFileSync(config.get("FILES_ENCRYPTION_KEY_FILE", { infer: true })!, "utf8")),
+          config.get("FILES_UPLOADTHING_ACL", { infer: true }),
+          local,
+        );
+      },
     },
     { provide: T.CodeGenerator, useValue: randomCodes },
     { provide: T.PlanCatalog, useExisting: BillingService },
