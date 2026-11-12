@@ -15,6 +15,19 @@ cd "$(dirname "$0")/../.."
 source ~/.nvm/nvm.sh >/dev/null 2>&1 && nvm use 22.15.0 >/dev/null 2>&1 || true
 S=secrets-prod
 
+# Produção corre SÓ o código do main: as migrações das BDs dos colégios são lidas
+# da pasta prisma/tenant/migrations deste checkout. Noutro ramo, faltariam (ou
+# sobrariam) migrações em relação à API que está no Render.
+BRANCH=$(git branch --show-current)
+[ "$BRANCH" = main ] || { echo "✗ está no ramo '$BRANCH'. Corra no main:  git checkout main && git pull"; exit 1; }
+[ -z "$(git status --porcelain -- apps libs prisma)" ] || { echo "✗ há alterações por guardar em apps/, libs/ ou prisma/ — produção só corre código do main tal como está no GitHub"; exit 1; }
+if git fetch -q origin main 2>/dev/null; then
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "✗ o main local não é igual ao do GitHub. Atualize:  git pull --ff-only"; exit 1; }
+else
+  echo "! sem ligação ao GitHub — a usar o main local ($(git log --oneline -1))"
+fi
+echo "• código: main $(git log --oneline -1) · migrações dos colégios: $(ls prisma/tenant/migrations | tr '\n' ' ')"
+
 PROV_URL=$(sed -n 's/^PROVISIONER_DATABASE_URL=//p' "$S/render-env.txt")
 [ -n "$PROV_URL" ] || { echo "✗ falta PROVISIONER_DATABASE_URL em $S/render-env.txt (corra scripts/prod/bootstrap-db.sh)"; exit 1; }
 for f in tenant-credentials.pub server-credentials.key backup.key; do
