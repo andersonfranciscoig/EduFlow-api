@@ -190,9 +190,11 @@ model AcademicYear {
   createdAt   DateTime  @map("created_at")
   updatedAt   DateTime  @map("updated_at")
 
-  classes      SchoolClass[]
-  groups       ClassGroup[]
-  reservations SeatReservation[]
+  classes        SchoolClass[]
+  groups         ClassGroup[]
+  reservations   SeatReservation[]
+  classSubjects  ClassSubject[]
+  lessons        Lesson[]
 
   @@index([startsOn])
   @@map("academic_years")
@@ -214,6 +216,7 @@ model SchoolClass {
 
   groups       ClassGroup[]
   reservations SeatReservation[]
+  subjects     ClassSubject[]
 
   @@index([courseId])
   @@map("school_classes")
@@ -252,9 +255,89 @@ model ClassGroup {
   updatedAt      DateTime     @map("updated_at")
 
   reservations SeatReservation[]
+  lessons      Lesson[]
 
   @@index([academicYearId])
   @@map("class_groups")
+}
+
+/// Catálogo de disciplinas do colégio (atravessa os anos).
+model Subject {
+  id         String    @id @db.Uuid
+  name       String
+  /// sigla (ex.: MAT)
+  code       String
+  /// cor no horário (#rrggbb)
+  color      String
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @map("created_at")
+  updatedAt  DateTime  @map("updated_at")
+
+  classes ClassSubject[]
+  lessons Lesson[]
+
+  @@map("subjects")
+}
+
+/// Plano curricular: disciplina de uma classe (no ano) e tempos por semana.
+model ClassSubject {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  classId        String       @map("class_id") @db.Uuid
+  schoolClass    SchoolClass  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subjectId      String       @map("subject_id") @db.Uuid
+  subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  weeklyPeriods  Int          @map("weekly_periods")
+  position       Int          @default(0)
+  createdAt      DateTime     @map("created_at")
+
+  @@unique([classId, subjectId])
+  @@index([subjectId])
+  @@map("class_subjects")
+}
+
+/// Tempos letivos de um turno (aula ou intervalo).
+model SchoolPeriod {
+  id        String   @id @db.Uuid
+  /// MANHA | TARDE | NOITE
+  shift     String
+  position  Int
+  startsAt  DateTime @map("starts_at") @db.Time(0)
+  endsAt    DateTime @map("ends_at") @db.Time(0)
+  /// AULA | INTERVALO
+  kind      String   @default("AULA")
+  createdAt DateTime @map("created_at")
+  updatedAt DateTime @map("updated_at")
+
+  lessons Lesson[]
+
+  @@unique([shift, position])
+  @@map("school_periods")
+}
+
+/// Horário: turma × dia × tempo → disciplina (+ sala, + professor quando existir).
+model Lesson {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  groupId        String       @map("group_id") @db.Uuid
+  group          ClassGroup   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  /// 1 = segunda … 5 = sexta
+  weekday        Int
+  periodId       String       @map("period_id") @db.Uuid
+  period         SchoolPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  subjectId      String       @map("subject_id") @db.Uuid
+  subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  /// professor — vazio até existir o módulo de professores
+  teacherId      String?      @map("teacher_id") @db.Uuid
+  room           String?
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+
+  @@unique([groupId, weekday, periodId])
+  @@index([subjectId])
+  @@map("lessons")
 }
 
 /// Ocupação de vagas: HELD (reservada, com prazo) → CONFIRMED (aluno numa turma) → RELEASED.
