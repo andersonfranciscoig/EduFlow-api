@@ -36,7 +36,9 @@ const yearCreate = z
   .object({ name: optionalText(40), startsOn: day, endsOn: day, copyFromYearId: z.uuid().nullish() })
   .meta({ title: "AcademicYearCreate", description: "Sem nome, sugere-se a partir das datas (ex.: 2026/2027)." });
 const yearUpdate = z.object({ name: z.string().min(1).max(40), startsOn: day, endsOn: day }).meta({ title: "AcademicYearUpdate" });
-const classCreate = z.object({ grade: z.number().int().min(0).max(13), course: optionalText(80) }).meta({ title: "SchoolClassCreate", description: "0 = Iniciação; 1–13 = classe. Curso só no II Ciclo (10.ª–13.ª)." });
+const classCreate = z
+  .object({ grade: z.number().int().min(0).max(13), course: optionalText(80), description: optionalText(160) })
+  .meta({ title: "SchoolClassCreate", description: "0 = Iniciação; 1–13 = classe. Curso obrigatório no II Ciclo (10.ª–13.ª) e só aí." });
 const groupFields = { shift: z.enum(["MANHA", "TARDE", "NOITE"], { error: "Escolha o turno." }), room: optionalText(40), capacity: z.number().int().min(1).max(200).nullish() };
 const groupCreate = z.object({ name: optionalText(20), ...groupFields }).meta({ title: "ClassGroupCreate", description: "Sem nome, usa-se a próxima letra livre (A, B, C…)." });
 const groupUpdate = z.object({ name: z.string().min(1).max(20), ...groupFields }).meta({ title: "ClassGroupUpdate" });

@@ -86,13 +86,25 @@ export function gradeLevel(grade: number) {
   return "II Ciclo do Ensino Secundário";
 }
 
-/** Só o II Ciclo (10.ª–13.ª) tem cursos. */
-export function checkClass(grade: number, course: string | null): Result<{ grade: number; course: string | null }, PedagogyError> {
+const clean = (s: string | null | undefined) => s?.replace(/\s+/g, " ").trim() || null;
+
+/**
+ * No II Ciclo (10.ª–13.ª) cada classe pertence a um curso — obrigatório, porque
+ * o colégio pode ter várias 10.ª (uma por curso). Nas outras não há curso.
+ */
+export function checkClass(
+  grade: number,
+  course: string | null,
+  description: string | null = null,
+): Result<{ grade: number; course: string | null; description: string | null }, PedagogyError> {
   if (!Number.isInteger(grade) || grade < 0 || grade > 13) return fail(pedagogyError("INVALID_INPUT", "Escolha uma classe entre a Iniciação e a 13.ª."));
-  const c = course?.replace(/\s+/g, " ").trim() || null;
+  const c = clean(course);
   if (c && grade < 10) return fail(pedagogyError("INVALID_INPUT", "Só as classes do II Ciclo (10.ª a 13.ª) têm curso."));
+  if (!c && grade >= 10) return fail(pedagogyError("INVALID_INPUT", "Indique o curso: no II Ciclo cada classe pertence a um curso."));
   if (c && c.length > 80) return fail(pedagogyError("INVALID_INPUT", "O nome do curso tem no máximo 80 caracteres."));
-  return ok({ grade, course: c });
+  const d = clean(description);
+  if (d && d.length > 160) return fail(pedagogyError("INVALID_INPUT", "A descrição tem no máximo 160 caracteres."));
+  return ok({ grade, course: c, description: d });
 }
 
 // ================================================================ turmas
