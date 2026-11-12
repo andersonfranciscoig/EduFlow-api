@@ -39,6 +39,7 @@ const classDto = (c: ClassRow) => ({
   label: gradeLabel(c.grade),
   level: gradeLevel(c.grade),
   course: c.course,
+  description: c.description,
   groups: c.groups.map(groupDto),
   nextGroupName: nextGroupName(c.groups.map((g) => g.name)),
 });
@@ -175,15 +176,15 @@ export class Pedagogy {
 
   // ================================================================ classes
 
-  async addClass(repo: PedagogyRepository, actor: PedagogyActor, yearId: string, input: { grade: number; course?: string | null }) {
+  async addClass(repo: PedagogyRepository, actor: PedagogyActor, yearId: string, input: { grade: number; course?: string | null; description?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const year = await repo.findYear(yearId);
     if (!year) return fail(pedagogyError("YEAR_NOT_FOUND", "Ano letivo não encontrado."));
     if (year.status === "CLOSED") return fail(pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
-    const cls = checkClass(input.grade, input.course ?? null);
+    const cls = checkClass(input.grade, input.course ?? null, input.description ?? null);
     if (!cls.ok) return cls;
-    const added = await repo.addClass({ id: this.ids.next(), academicYearId: yearId, grade: cls.value.grade, course: cls.value.course, now: this.clock.now() });
+    const added = await repo.addClass({ id: this.ids.next(), academicYearId: yearId, ...cls.value, now: this.clock.now() });
     if (!added.ok && added.reason === "duplicate") {
       return fail(pedagogyError("CLASS_EXISTS", `A ${gradeLabel(cls.value.grade)}${cls.value.course ? ` de ${cls.value.course}` : ""} já existe neste ano letivo.`));
     }

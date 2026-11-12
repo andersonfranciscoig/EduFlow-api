@@ -32,6 +32,7 @@ export interface ClassRow {
   academicYearId: string;
   grade: number;
   course: string | null;
+  description: string | null;
   groups: GroupRow[];
 }
 
@@ -49,7 +50,7 @@ export interface PedagogyRepository {
   /** Muda o estado só se o atual for `from` (sem corridas). */
   setStatus(id: string, from: YearStatus, to: YearStatus, now: Date): Promise<WriteOutcome<YearRow>>;
   deleteYear(id: string): Promise<void>;
-  addClass(input: { id: string; academicYearId: string; grade: number; course: string | null; now: Date }): Promise<WriteOutcome<ClassRow>>;
+  addClass(input: { id: string; academicYearId: string; grade: number; course: string | null; description: string | null; now: Date }): Promise<WriteOutcome<ClassRow>>;
   findClass(id: string): Promise<(ClassRow & { yearStatus: YearStatus }) | null>;
   removeClass(id: string): Promise<void>;
   addGroup(input: { id: string; classId: string; academicYearId: string; name: string; shift: Shift; room: string | null; capacity: number | null; now: Date }): Promise<WriteOutcome<GroupRow>>;

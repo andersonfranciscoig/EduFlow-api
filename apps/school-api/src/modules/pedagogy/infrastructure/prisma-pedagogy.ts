@@ -72,7 +72,7 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
       include: { groups: true },
       orderBy: [{ grade: "asc" }, { course: "asc" }],
     });
-    return classes.map((c) => ({ id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, groups: c.groups.map(toGroup).sort(byName) }));
+    return classes.map((c) => ({ id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, description: c.description, groups: c.groups.map(toGroup).sort(byName) }));
   }
 
   async createYear(input: Parameters<PedagogyRepository["createYear"]>[0]): Promise<WriteOutcome<YearRow>> {
@@ -88,7 +88,7 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
           const source = await tx.schoolClass.findMany({ where: { academicYearId: input.copyFromYearId }, include: { groups: true } });
           for (const c of source) {
             const classId = randomUUID();
-            await tx.schoolClass.create({ data: { id: classId, academicYearId: year.id, grade: c.grade, course: c.course, createdAt: input.now } });
+            await tx.schoolClass.create({ data: { id: classId, academicYearId: year.id, grade: c.grade, course: c.course, description: c.description, createdAt: input.now } });
             if (c.groups.length) {
               await tx.classGroup.createMany({
                 data: c.groups.map((g) => ({ id: randomUUID(), academicYearId: year.id, classId, name: g.name, shift: g.shift, room: g.room, capacity: g.capacity, createdAt: input.now, updatedAt: input.now })),
@@ -143,8 +143,10 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
 
   async addClass(input: Parameters<PedagogyRepository["addClass"]>[0]): Promise<WriteOutcome<ClassRow>> {
     try {
-      const c = await this.db.schoolClass.create({ data: { id: input.id, academicYearId: input.academicYearId, grade: input.grade, course: input.course, createdAt: input.now } });
-      return { ok: true, value: { id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, groups: [] } };
+      const c = await this.db.schoolClass.create({
+        data: { id: input.id, academicYearId: input.academicYearId, grade: input.grade, course: input.course, description: input.description, createdAt: input.now },
+      });
+      return { ok: true, value: { id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, description: c.description, groups: [] } };
     } catch (e) {
       if (isUnique(e)) return { ok: false, reason: "duplicate" };
       throw e;
@@ -154,7 +156,7 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
   async findClass(id: string) {
     const c = await this.db.schoolClass.findUnique({ where: { id }, include: { groups: true, academicYear: { select: { status: true } } } });
     if (!c) return null;
-    return { id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, groups: c.groups.map(toGroup), yearStatus: c.academicYear.status as YearStatus };
+    return { id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, description: c.description, groups: c.groups.map(toGroup), yearStatus: c.academicYear.status as YearStatus };
   }
 
   async removeClass(id: string) {

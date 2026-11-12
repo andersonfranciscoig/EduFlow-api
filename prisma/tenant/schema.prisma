@@ -203,7 +203,9 @@ model SchoolClass {
   academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
   /// 0 = Iniciação; 1–6 Primário; 7–9 I Ciclo; 10–13 II Ciclo
   grade          Int
+  /// Obrigatório no II Ciclo (podem existir várias 10.ª, uma por curso)
   course         String?
+  description    String?
   createdAt      DateTime     @map("created_at")
 
   groups ClassGroup[]
