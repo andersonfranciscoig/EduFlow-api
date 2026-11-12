@@ -10,8 +10,9 @@ import { z } from "zod";
 const schema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PROVISIONER_DATABASE_URL: z.string().min(1),
-  TENANT_DB_HOST: z.string().min(1),
-  TENANT_DB_PORT: z.coerce.number().int().positive(),
+  /** Só para o cluster local de desenvolvimento (LOCAL_FALLBACK_SERVER). */
+  TENANT_DB_HOST: z.string().min(1).default("localhost"),
+  TENANT_DB_PORT: z.coerce.number().int().positive().default(5432),
   TENANT_CREDENTIALS_PUBLIC_KEY_FILE: z.string().min(1),
   SERVER_CREDENTIALS_PRIVATE_KEY_FILE: z.string().min(1),
   POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(3000),
