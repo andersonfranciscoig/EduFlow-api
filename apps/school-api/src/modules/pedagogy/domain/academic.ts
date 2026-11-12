@@ -33,7 +33,12 @@ export type PedagogyErrorCode =
   | "GROUP_FULL"
   | "SEATS_TAKEN"
   | "RESERVATION_NOT_FOUND"
-  | "RESERVATION_EXISTS";
+  | "RESERVATION_EXISTS"
+  // cursos
+  | "COURSE_NOT_FOUND"
+  | "COURSE_EXISTS"
+  | "COURSE_IN_USE"
+  | "COURSE_ARCHIVED";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>
@@ -100,17 +105,15 @@ const clean = (s: string | null | undefined) => s?.replace(/\s+/g, " ").trim() |
  */
 export function checkClass(
   grade: number,
-  course: string | null,
+  courseId: string | null,
   description: string | null = null,
-): Result<{ grade: number; course: string | null; description: string | null }, PedagogyError> {
+): Result<{ grade: number; courseId: string | null; description: string | null }, PedagogyError> {
   if (!Number.isInteger(grade) || grade < 0 || grade > 13) return fail(pedagogyError("INVALID_INPUT", "Escolha uma classe entre a Iniciação e a 13.ª."));
-  const c = clean(course);
-  if (c && grade < 10) return fail(pedagogyError("INVALID_INPUT", "Só as classes do II Ciclo (10.ª a 13.ª) têm curso."));
-  if (!c && grade >= 10) return fail(pedagogyError("INVALID_INPUT", "Indique o curso: no II Ciclo cada classe pertence a um curso."));
-  if (c && c.length > 80) return fail(pedagogyError("INVALID_INPUT", "O nome do curso tem no máximo 80 caracteres."));
+  if (courseId && grade < 10) return fail(pedagogyError("INVALID_INPUT", "Só as classes do II Ciclo (10.ª a 13.ª) têm curso."));
+  if (!courseId && grade >= 10) return fail(pedagogyError("INVALID_INPUT", "Escolha o curso: no II Ciclo cada classe pertence a um curso."));
   const d = clean(description);
   if (d && d.length > 160) return fail(pedagogyError("INVALID_INPUT", "A descrição tem no máximo 160 caracteres."));
-  return ok({ grade, course: c, description: d });
+  return ok({ grade, courseId, description: d });
 }
 
 // ================================================================ turmas

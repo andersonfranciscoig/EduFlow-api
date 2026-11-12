@@ -205,7 +205,8 @@ model SchoolClass {
   /// 0 = Iniciação; 1–6 Primário; 7–9 I Ciclo; 10–13 II Ciclo
   grade          Int
   /// Obrigatório no II Ciclo (podem existir várias 10.ª, uma por curso)
-  course         String?
+  courseId       String?      @map("course_id") @db.Uuid
+  course         Course?      @relation(fields: [courseId], references: [id], onDelete: Restrict)
   description    String?
   /// Vagas para o ano letivo (direção). null = usar os lugares das turmas
   vacancies      Int?
@@ -214,7 +215,26 @@ model SchoolClass {
   groups       ClassGroup[]
   reservations SeatReservation[]
 
+  @@index([courseId])
   @@map("school_classes")
+}
+
+/// Catálogo de cursos do colégio (atravessa os anos). GERAL: 10.ª–12.ª · TECNICO: 10.ª–13.ª
+model Course {
+  id          String    @id @db.Uuid
+  name        String
+  /// sigla (ex.: CFB)
+  code        String?
+  /// GERAL | TECNICO
+  kind        String    @default("GERAL")
+  description String?
+  archivedAt  DateTime? @map("archived_at")
+  createdAt   DateTime  @map("created_at")
+  updatedAt   DateTime  @map("updated_at")
+
+  classes SchoolClass[]
+
+  @@map("courses")
 }
 
 model ClassGroup {
