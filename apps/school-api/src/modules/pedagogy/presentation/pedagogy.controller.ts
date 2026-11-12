@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -26,6 +26,11 @@ const HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   CLASS_EXISTS: HttpStatus.CONFLICT,
   GROUP_EXISTS: HttpStatus.CONFLICT,
   FORBIDDEN: HttpStatus.FORBIDDEN,
+  NO_VACANCY: HttpStatus.CONFLICT,
+  GROUP_FULL: HttpStatus.CONFLICT,
+  SEATS_TAKEN: HttpStatus.CONFLICT,
+  RESERVATION_NOT_FOUND: HttpStatus.NOT_FOUND,
+  RESERVATION_EXISTS: HttpStatus.CONFLICT,
 };
 
 const day = z.string({ error: "Indique a data." }).regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD.");
@@ -42,6 +47,13 @@ const classCreate = z
 const groupFields = { shift: z.enum(["MANHA", "TARDE", "NOITE"], { error: "Escolha o turno." }), room: optionalText(40), capacity: z.number().int().min(1).max(200).nullish() };
 const groupCreate = z.object({ name: optionalText(20), ...groupFields }).meta({ title: "ClassGroupCreate", description: "Sem nome, usa-se a próxima letra livre (A, B, C…)." });
 const groupUpdate = z.object({ name: z.string().min(1).max(20), ...groupFields }).meta({ title: "ClassGroupUpdate" });
+const vacanciesSet = z
+  .object({ vacancies: z.number().int().min(0).max(5000).nullable() })
+  .meta({ title: "ClassVacancies", description: "Vagas da classe no ano letivo. null = usar os lugares das turmas. Nunca acima dos lugares nem abaixo das já ocupadas/reservadas." });
+const seatHold = z
+  .object({ reference: z.string().min(1).max(60), holdHours: z.number().int().min(1).max(720).nullish() })
+  .meta({ title: "SeatHold", description: "Reserva uma vaga (ex.: inscrição submetida). `reference` identifica a inscrição; prazo por omissão 72 h." });
+const seatConfirm = z.object({ groupId: z.uuid().nullish() }).meta({ title: "SeatConfirm", description: "Sem turma, usa a que tem mais lugares livres." });
 
 const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, isOwner: u.isOwner, support: u.support ? { mode: u.support.mode } : undefined });
 
@@ -142,8 +154,40 @@ export class PedagogyController {
   }
 
   @Delete("groups/:id")
-  @ApiOperation({ summary: "Remover turma" })
+  @ApiOperation({ summary: "Remover turma (sem alunos)" })
   async removeGroup(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
     return unwrap(await this.pedagogy.removeGroup(this.repo(t), actorOf(u), groupId), HTTP);
+  }
+
+  // ---------------------------------------------------------------- vagas
+  // Os números (lugares, vagas, ocupadas, reservadas, disponíveis) vêm em GET years/:id → classes[].seats.
+
+  @Put("classes/:id/vacancies")
+  @ApiOperation({ summary: "Definir as vagas da classe (direção)" })
+  @ApiBody({ schema: openApi(vacanciesSet) })
+  async setVacancies(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) classId: string, @Body(new ZodValidationPipe(vacanciesSet)) body: z.infer<typeof vacanciesSet>) {
+    return unwrap(await this.pedagogy.setVacancies(this.repo(t), actorOf(u), classId, body.vacancies), HTTP);
+  }
+
+  @Post("classes/:id/reservations")
+  @ApiOperation({ summary: "Reservar uma vaga na classe (base da inscrição)", description: "409 NO_VACANCY quando já não há vagas. Atómico: pedidos simultâneos nunca ultrapassam as vagas." })
+  @ApiBody({ schema: openApi(seatHold) })
+  async holdSeat(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) classId: string, @Body(new ZodValidationPipe(seatHold)) body: z.infer<typeof seatHold>) {
+    return unwrap(await this.pedagogy.holdSeat(this.repo(t), actorOf(u), classId, body), HTTP);
+  }
+
+  @Post("reservations/:id/confirm")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Confirmar a vaga e colocar o aluno numa turma com lugar", description: "409 GROUP_FULL se a turma (ou todas) estiver lotada." })
+  @ApiBody({ schema: openApi(seatConfirm) })
+  async confirmSeat(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) reservationId: string, @Body(new ZodValidationPipe(seatConfirm)) body: z.infer<typeof seatConfirm>) {
+    return unwrap(await this.pedagogy.confirmSeat(this.repo(t), actorOf(u), reservationId, body), HTTP);
+  }
+
+  @Post("reservations/:id/release")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Libertar a vaga (desistência, recusa, saída do aluno)" })
+  async releaseSeat(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) reservationId: string) {
+    return unwrap(await this.pedagogy.releaseSeat(this.repo(t), actorOf(u), reservationId), HTTP);
   }
 }

@@ -27,7 +27,13 @@ export type PedagogyErrorCode =
   | "CLASS_EXISTS"
   | "GROUP_EXISTS"
   | "INVALID_INPUT"
-  | "FORBIDDEN";
+  | "FORBIDDEN"
+  // vagas
+  | "NO_VACANCY"
+  | "GROUP_FULL"
+  | "SEATS_TAKEN"
+  | "RESERVATION_NOT_FOUND"
+  | "RESERVATION_EXISTS";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>
