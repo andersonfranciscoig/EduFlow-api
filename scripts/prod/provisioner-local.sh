@@ -21,7 +21,12 @@ for f in tenant-credentials.pub server-credentials.key backup.key; do
   [ -s "$S/provisioner/$f" ] || { echo "✗ falta $S/provisioner/$f (corra scripts/prod/gen-secrets.sh)"; exit 1; }
 done
 
-[ -f dist/apps/provisioner/src/main.js ] || pnpm run build
+# compila se não houver build ou se o código for mais recente do que a versão compilada
+MAIN=dist/apps/provisioner/src/main.js
+if [ ! -f "$MAIN" ] || [ -n "$(find apps/provisioner/src libs/kernel/src prisma -newer "$MAIN" -type f -print -quit)" ]; then
+  echo "• a compilar a versão atual…"
+  pnpm run build >/dev/null
+fi
 
 export NODE_ENV=production
 export PROVISIONER_DATABASE_URL="$PROV_URL"
