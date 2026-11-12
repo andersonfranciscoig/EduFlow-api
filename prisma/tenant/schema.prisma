@@ -172,5 +172,62 @@ model SupportSession {
   @@map("support_sessions")
 }
 
+// =============================================================================
+//  ÁREA PEDAGÓGICA — tudo dentro de um ano letivo: ano → classes → turmas
+//  (restrições extra na migração 0004: datas, um só ano ativo, nomes únicos)
+// =============================================================================
+
+model AcademicYear {
+  id          String    @id @db.Uuid
+  name        String
+  startsOn    DateTime  @map("starts_on") @db.Date
+  endsOn      DateTime  @map("ends_on") @db.Date
+  /// PLANNED | ACTIVE | CLOSED
+  status      String    @default("PLANNED")
+  createdById String?   @map("created_by_id") @db.Uuid
+  activatedAt DateTime? @map("activated_at")
+  closedAt    DateTime? @map("closed_at")
+  createdAt   DateTime  @map("created_at")
+  updatedAt   DateTime  @map("updated_at")
+
+  classes SchoolClass[]
+  groups  ClassGroup[]
+
+  @@index([startsOn])
+  @@map("academic_years")
+}
+
+model SchoolClass {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  /// 0 = Iniciação; 1–6 Primário; 7–9 I Ciclo; 10–13 II Ciclo
+  grade          Int
+  course         String?
+  createdAt      DateTime     @map("created_at")
+
+  groups ClassGroup[]
+
+  @@map("school_classes")
+}
+
+model ClassGroup {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  classId        String       @map("class_id") @db.Uuid
+  schoolClass    SchoolClass  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  name           String
+  /// MANHA | TARDE | NOITE
+  shift          String
+  room           String?
+  capacity       Int?
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+
+  @@index([academicYearId])
+  @@map("class_groups")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
