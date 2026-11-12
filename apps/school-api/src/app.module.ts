@@ -5,6 +5,7 @@ import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { validateEnv } from "./config/env";
 import { IdentityModule } from "./modules/identity/identity.module";
+import { PedagogyModule } from "./modules/pedagogy/pedagogy.module";
 import { TenancyModule } from "./tenancy/tenancy.module";
 
 @ApiTags("Sistema")
@@ -35,6 +36,7 @@ class HealthController {
     ThrottlerModule.forRoot([{ name: "default", ttl: 60_000, limit: 300 }]),
     TenancyModule,
     IdentityModule,
+    PedagogyModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
