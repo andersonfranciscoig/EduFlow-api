@@ -164,9 +164,10 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
         const year = await tx.academicYear.create({
           data: { id: input.id, name: input.name, startsOn: input.startsOn, endsOn: input.endsOn, status: "PLANNED", createdById: input.createdById, createdAt: input.now, updatedAt: input.now },
         });
-        // copiar a estrutura (classes, vagas definidas e turmas) de outro ano — na mesma transação; as reservas NÃO se copiam
+        // copiar a estrutura (classes, vagas definidas, turmas e plano curricular) de outro ano — na mesma
+        // transação; as reservas e os horários NÃO se copiam (cada ano faz o seu)
         if (input.copyFromYearId) {
-          const source = await tx.schoolClass.findMany({ where: { academicYearId: input.copyFromYearId }, include: { groups: true } });
+          const source = await tx.schoolClass.findMany({ where: { academicYearId: input.copyFromYearId }, include: { groups: true, subjects: true } });
           for (const c of source) {
             const classId = randomUUID();
             await tx.schoolClass.create({
@@ -175,6 +176,11 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
             if (c.groups.length) {
               await tx.classGroup.createMany({
                 data: c.groups.map((g) => ({ id: randomUUID(), academicYearId: year.id, classId, name: g.name, shift: g.shift, room: g.room, capacity: g.capacity, createdAt: input.now, updatedAt: input.now })),
+              });
+            }
+            if (c.subjects.length) {
+              await tx.classSubject.createMany({
+                data: c.subjects.map((s) => ({ id: randomUUID(), academicYearId: year.id, classId, subjectId: s.subjectId, weeklyPeriods: s.weeklyPeriods, position: s.position, createdAt: input.now })),
               });
             }
           }

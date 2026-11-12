@@ -38,7 +38,16 @@ export type PedagogyErrorCode =
   | "COURSE_NOT_FOUND"
   | "COURSE_EXISTS"
   | "COURSE_IN_USE"
-  | "COURSE_ARCHIVED";
+  | "COURSE_ARCHIVED"
+  // disciplinas e horários
+  | "SUBJECT_NOT_FOUND"
+  | "SUBJECT_EXISTS"
+  | "SUBJECT_IN_USE"
+  | "SUBJECT_ARCHIVED"
+  | "PERIOD_IN_USE"
+  | "SLOT_INVALID"
+  | "WEEKLY_LIMIT"
+  | "ROOM_BUSY";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>

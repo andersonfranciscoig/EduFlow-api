@@ -12,7 +12,7 @@ import { Pedagogy } from "../application/Pedagogy";
 import type { PedagogyErrorCode } from "../domain/academic";
 import { PrismaPedagogyRepository } from "../infrastructure/prisma-pedagogy";
 
-const HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
+export const PEDAGOGY_HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   YEAR_NOT_FOUND: HttpStatus.NOT_FOUND,
   CLASS_NOT_FOUND: HttpStatus.NOT_FOUND,
   GROUP_NOT_FOUND: HttpStatus.NOT_FOUND,
@@ -35,7 +35,16 @@ const HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   COURSE_EXISTS: HttpStatus.CONFLICT,
   COURSE_IN_USE: HttpStatus.CONFLICT,
   COURSE_ARCHIVED: HttpStatus.CONFLICT,
+  SUBJECT_NOT_FOUND: HttpStatus.NOT_FOUND,
+  SUBJECT_EXISTS: HttpStatus.CONFLICT,
+  SUBJECT_IN_USE: HttpStatus.CONFLICT,
+  SUBJECT_ARCHIVED: HttpStatus.CONFLICT,
+  PERIOD_IN_USE: HttpStatus.CONFLICT,
+  SLOT_INVALID: HttpStatus.UNPROCESSABLE_ENTITY,
+  WEEKLY_LIMIT: HttpStatus.CONFLICT,
+  ROOM_BUSY: HttpStatus.CONFLICT,
 };
+const HTTP = PEDAGOGY_HTTP;
 
 const day = z.string({ error: "Indique a data." }).regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD.");
 const optionalText = (max: number) => z.string().max(max).nullish();
