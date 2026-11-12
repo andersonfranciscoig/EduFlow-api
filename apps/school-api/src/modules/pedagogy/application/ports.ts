@@ -1,4 +1,5 @@
 import type { Shift, YearStatus } from "../domain/academic";
+import type { CourseKind } from "../domain/courses";
 import type { ReservationStatus } from "../domain/seats";
 
 export interface YearRow {
@@ -34,7 +35,11 @@ export interface ClassRow {
   id: string;
   academicYearId: string;
   grade: number;
+  /** curso do catálogo (II Ciclo) */
+  courseId: string | null;
+  /** nome do curso (vem do catálogo) */
   course: string | null;
+  courseCode: string | null;
   description: string | null;
   /** vagas definidas pela direção (null = usar os lugares) */
   vacanciesSet: number | null;
@@ -53,6 +58,20 @@ export interface ReservationRow {
   expiresAt: Date | null;
   createdAt: Date;
 }
+
+export interface CourseRow {
+  id: string;
+  name: string;
+  code: string | null;
+  kind: CourseKind;
+  description: string | null;
+  archivedAt: Date | null;
+  createdAt: Date;
+  /** classes que usam o curso (todos os anos) */
+  classCount: number;
+}
+
+export type CourseOutcome<T> = { ok: true; value: T } | { ok: false; reason: "name_taken" | "code_taken" | "not_found" | "in_use" };
 
 /** Resultado de escritas com regras que só a BD garante de forma atómica. */
 export type WriteOutcome<T> = { ok: true; value: T } | { ok: false; reason: "overlap" | "name_taken" | "active_exists" | "duplicate" | "not_found" | "closed" };
@@ -76,7 +95,7 @@ export interface PedagogyRepository {
   /** Muda o estado só se o atual for `from` (sem corridas). */
   setStatus(id: string, from: YearStatus, to: YearStatus, now: Date): Promise<WriteOutcome<YearRow>>;
   deleteYear(id: string): Promise<void>;
-  addClass(input: { id: string; academicYearId: string; grade: number; course: string | null; description: string | null; now: Date }): Promise<WriteOutcome<ClassRow>>;
+  addClass(input: { id: string; academicYearId: string; grade: number; courseId: string | null; description: string | null; now: Date }): Promise<WriteOutcome<ClassRow>>;
   findClass(id: string): Promise<(ClassRow & { yearStatus: YearStatus }) | null>;
   removeClass(id: string): Promise<void>;
   addGroup(input: { id: string; classId: string; academicYearId: string; name: string; shift: Shift; room: string | null; capacity: number | null; now: Date }): Promise<WriteOutcome<GroupRow>>;
@@ -92,6 +111,17 @@ export interface PedagogyRepository {
   confirmSeat(input: { reservationId: string; groupId: string | null; now: Date }): Promise<SeatOutcome<ReservationRow>>;
   releaseSeat(reservationId: string, now: Date): Promise<SeatOutcome<ReservationRow>>;
   findReservation(id: string): Promise<(ReservationRow & { yearStatus: YearStatus }) | null>;
+
+  // ---- cursos (catálogo do colégio)
+  listCourses(): Promise<CourseRow[]>;
+  findCourse(id: string): Promise<CourseRow | null>;
+  createCourse(input: { id: string; name: string; code: string | null; kind: CourseKind; description: string | null; now: Date }): Promise<CourseOutcome<CourseRow>>;
+  updateCourse(id: string, input: { name: string; code: string | null; kind: CourseKind; description: string | null; now: Date }): Promise<CourseOutcome<CourseRow>>;
+  setCourseArchived(id: string, archived: boolean, now: Date): Promise<CourseOutcome<CourseRow>>;
+  /** Só se nenhuma classe (de nenhum ano) o usar. */
+  deleteCourse(id: string): Promise<CourseOutcome<void>>;
+  /** Classes do curso em todos os anos letivos (com turmas e vagas). */
+  courseClasses(courseId: string): Promise<(ClassRow & { year: YearRow })[]>;
   record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date): Promise<void>;
 }
 

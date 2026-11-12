@@ -16,8 +16,9 @@ import {
   suggestYearName,
   YEAR_STATUS_LABELS,
 } from "../domain/academic";
-import { cleanReference, HOLD_HOURS_DEFAULT, HOLD_HOURS_MAX, seatNumbers } from "../domain/seats";
-import type { ClassRow, GroupRow, PedagogyActor, PedagogyRepository, ReservationRow, SeatOutcome, WriteOutcome, YearRow, YearSummaryRow } from "./ports";
+import { checkCourse, checkCourseGrade, COURSE_GRADES, COURSE_KIND_LABELS, suggestCode } from "../domain/courses";
+import { cleanReference, HOLD_HOURS_DEFAULT, HOLD_HOURS_MAX, type SeatNumbers, seatNumbers } from "../domain/seats";
+import type { ClassRow, CourseOutcome, CourseRow, GroupRow, PedagogyActor, PedagogyRepository, ReservationRow, SeatOutcome, WriteOutcome, YearRow, YearSummaryRow } from "./ports";
 
 type R<T> = Promise<Result<T, PedagogyError>>;
 
@@ -51,7 +52,9 @@ const classDto = (c: ClassRow) => ({
   grade: c.grade,
   label: gradeLabel(c.grade),
   level: gradeLevel(c.grade),
+  courseId: c.courseId,
   course: c.course,
+  courseCode: c.courseCode,
   description: c.description,
   groups: c.groups.map(groupDto),
   nextGroupName: nextGroupName(c.groups.map((g) => g.name)),
@@ -74,6 +77,48 @@ const reservationDto = (r: ReservationRow) => ({
 });
 
 const classTitle = (c: { grade: number; course: string | null }) => `${gradeLabel(c.grade)}${c.course ? ` de ${c.course}` : ""}`;
+
+const courseDto = (c: CourseRow) => ({
+  id: c.id,
+  name: c.name,
+  code: c.code,
+  kind: c.kind,
+  kindLabel: COURSE_KIND_LABELS[c.kind],
+  /** classes que o tipo de curso admite (10.ª–12.ª geral; 10.ª–13.ª técnico) */
+  grades: COURSE_GRADES[c.kind],
+  description: c.description,
+  archived: !!c.archivedAt,
+  archivedAt: c.archivedAt?.toISOString() ?? null,
+  /** classes que usam o curso, em todos os anos */
+  classCount: c.classCount,
+});
+
+const ZERO_SEATS: SeatNumbers = { capacity: 0, groupsWithoutCapacity: 0, vacanciesSet: null, vacancies: 0, held: 0, confirmed: 0, taken: 0, available: 0 };
+const addSeats = (a: SeatNumbers, b: SeatNumbers): SeatNumbers => ({
+  capacity: a.capacity + b.capacity,
+  groupsWithoutCapacity: a.groupsWithoutCapacity + b.groupsWithoutCapacity,
+  vacanciesSet: null,
+  vacancies: a.vacancies + b.vacancies,
+  held: a.held + b.held,
+  confirmed: a.confirmed + b.confirmed,
+  taken: a.taken + b.taken,
+  available: a.available + b.available,
+});
+
+function courseError(r: Exclude<CourseOutcome<unknown>, { ok: true }>, input?: { code: string | null }, what: "update" | "delete" = "update", classCount = 0): PedagogyError {
+  switch (r.reason) {
+    case "name_taken":
+      return pedagogyError("COURSE_EXISTS", "Já existe um curso com este nome.");
+    case "code_taken":
+      return pedagogyError("COURSE_EXISTS", `A sigla ${input?.code ?? ""} já é usada por outro curso.`);
+    case "not_found":
+      return pedagogyError("COURSE_NOT_FOUND", "Curso não encontrado.");
+    case "in_use":
+      return what === "delete"
+        ? pedagogyError("COURSE_IN_USE", `O curso tem ${classCount} classe${classCount === 1 ? "" : "s"} (neste ou noutros anos): arquive-o em vez de o eliminar.`)
+        : pedagogyError("COURSE_IN_USE", "O curso tem classes de 13.ª: não pode passar a ensino geral (10.ª a 12.ª).");
+  }
+}
 
 /** Traduz um "não deu" das escritas de vagas para um erro de domínio com mensagem clara. */
 function seatError(
@@ -255,17 +300,25 @@ export class Pedagogy {
 
   // ================================================================ classes
 
-  async addClass(repo: PedagogyRepository, actor: PedagogyActor, yearId: string, input: { grade: number; course?: string | null; description?: string | null }) {
+  async addClass(repo: PedagogyRepository, actor: PedagogyActor, yearId: string, input: { grade: number; courseId?: string | null; description?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const year = await repo.findYear(yearId);
     if (!year) return fail(pedagogyError("YEAR_NOT_FOUND", "Ano letivo não encontrado."));
     if (year.status === "CLOSED") return fail(pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
-    const cls = checkClass(input.grade, input.course ?? null, input.description ?? null);
+    const cls = checkClass(input.grade, input.courseId ?? null, input.description ?? null);
     if (!cls.ok) return cls;
+    // o curso tem de existir, estar ativo e aceitar esta classe (ex.: 13.ª só no técnico-profissional)
+    const course = cls.value.courseId ? await repo.findCourse(cls.value.courseId) : null;
+    if (cls.value.courseId) {
+      if (!course) return fail(pedagogyError("COURSE_NOT_FOUND", "Curso não encontrado."));
+      if (course.archivedAt) return fail(pedagogyError("COURSE_ARCHIVED", `O curso ${course.name} está arquivado: reative-o para criar classes.`));
+      const fits = checkCourseGrade(course.kind, cls.value.grade, course.name);
+      if (!fits.ok) return fits;
+    }
     const added = await repo.addClass({ id: this.ids.next(), academicYearId: yearId, ...cls.value, now: this.clock.now() });
     if (!added.ok && added.reason === "duplicate") {
-      return fail(pedagogyError("CLASS_EXISTS", `A ${gradeLabel(cls.value.grade)}${cls.value.course ? ` de ${cls.value.course}` : ""} já existe neste ano letivo.`));
+      return fail(pedagogyError("CLASS_EXISTS", `A ${gradeLabel(cls.value.grade)}${course ? ` de ${course.name}` : ""} já existe neste ano letivo.`));
     }
     const r = outcome(added);
     return r.ok ? ok(classDto(r.value)) : r;
@@ -381,5 +434,101 @@ export class Pedagogy {
     if (!this.canEnroll(actor)) return fail(pedagogyError("FORBIDDEN", "Só a direção e a secretaria podem libertar vagas."));
     const r = await repo.releaseSeat(reservationId, this.clock.now());
     return r.ok ? ok(reservationDto(r.value)) : fail(seatError(r, { what: "reservation" }));
+  }
+
+  // ================================================================ cursos
+
+  /**
+   * Catálogo de cursos e, para o ano letivo pedido (por omissão o ano em curso ou o
+   * mais recente), as classes, turmas e vagas de cada curso nesse ano.
+   */
+  async listCourses(repo: PedagogyRepository, actor: PedagogyActor, yearId?: string | null) {
+    const [courses, years] = await Promise.all([repo.listCourses(), repo.listYears()]);
+    const year = years.find((y) => y.id === yearId) ?? years.find((y) => y.status === "ACTIVE") ?? years[0] ?? null;
+    const classes = year ? await repo.structure(year.id) : [];
+    return {
+      canManage: this.canManage(actor),
+      year: year ? yearDto(year) : null,
+      courses: courses.map((c) => {
+        const inYear = classes.filter((k) => k.courseId === c.id).map(classDto);
+        return {
+          ...courseDto(c),
+          year: {
+            classes: inYear.map((k) => ({ id: k.id, grade: k.grade, label: k.label, groups: k.groups.length, seats: k.seats })),
+            groups: inYear.reduce((n, k) => n + k.groups.length, 0),
+            seats: inYear.reduce((s, k) => addSeats(s, k.seats), ZERO_SEATS),
+            /** classes que o curso admite e ainda não existem neste ano */
+            missingGrades: COURSE_GRADES[c.kind].filter((g) => !inYear.some((k) => k.grade === g)),
+          },
+        };
+      }),
+    };
+  }
+
+  /** Um curso com as suas classes em todos os anos letivos (turmas e vagas incluídas). */
+  async course(repo: PedagogyRepository, actor: PedagogyActor, id: string) {
+    const course = await repo.findCourse(id);
+    if (!course) return fail(pedagogyError("COURSE_NOT_FOUND", "Curso não encontrado."));
+    const classes = await repo.courseClasses(id);
+    const byYear = new Map<string, { year: YearRow; classes: ClassRow[] }>();
+    for (const c of classes) byYear.set(c.year.id, { year: c.year, classes: [...(byYear.get(c.year.id)?.classes ?? []), c] });
+    return ok({
+      canManage: this.canManage(actor),
+      course: courseDto(course),
+      suggestedCode: course.code ?? suggestCode(course.name),
+      years: [...byYear.values()].map(({ year, classes: list }) => {
+        const dtos = list.map(classDto);
+        return {
+          year: yearDto(year),
+          editable: this.canManage(actor) && year.status !== "CLOSED",
+          classes: dtos,
+          seats: dtos.reduce((s, k) => addSeats(s, k.seats), ZERO_SEATS),
+          missingGrades: COURSE_GRADES[course.kind].filter((g) => !list.some((k) => k.grade === g)),
+        };
+      }),
+    });
+  }
+
+  async createCourse(repo: PedagogyRepository, actor: PedagogyActor, input: { name: string; code?: string | null; kind: string; description?: string | null }) {
+    const allowed = this.guard(actor);
+    if (!allowed.ok) return allowed;
+    const c = checkCourse(input);
+    if (!c.ok) return c;
+    const now = this.clock.now();
+    const r = await repo.createCourse({ id: this.ids.next(), ...c.value, now });
+    if (!r.ok) return fail(courseError(r, c.value));
+    await repo.record("COURSE_CREATED", r.value.id, actor.support ? null : actor.id, { name: c.value.name, kind: c.value.kind }, now);
+    return ok(courseDto(r.value));
+  }
+
+  /** Mudar o nome muda-o em todas as classes. Técnico → geral só sem classes de 13.ª. */
+  async updateCourse(repo: PedagogyRepository, actor: PedagogyActor, id: string, input: { name: string; code?: string | null; kind: string; description?: string | null }) {
+    const allowed = this.guard(actor);
+    if (!allowed.ok) return allowed;
+    const c = checkCourse(input);
+    if (!c.ok) return c;
+    const r = await repo.updateCourse(id, { ...c.value, now: this.clock.now() });
+    return r.ok ? ok(courseDto(r.value)) : fail(courseError(r, c.value));
+  }
+
+  /** Arquivado: deixa de aparecer para novas classes; as existentes mantêm-no. */
+  async setCourseArchived(repo: PedagogyRepository, actor: PedagogyActor, id: string, archived: boolean) {
+    const allowed = this.guard(actor);
+    if (!allowed.ok) return allowed;
+    const now = this.clock.now();
+    const r = await repo.setCourseArchived(id, archived, now);
+    if (!r.ok) return fail(courseError(r));
+    await repo.record(archived ? "COURSE_ARCHIVED" : "COURSE_RESTORED", id, actor.support ? null : actor.id, { name: r.value.name }, now);
+    return ok(courseDto(r.value));
+  }
+
+  /** Só cursos que nunca tiveram classes (os outros arquivam-se). */
+  async deleteCourse(repo: PedagogyRepository, actor: PedagogyActor, id: string) {
+    const allowed = this.guard(actor);
+    if (!allowed.ok) return allowed;
+    const course = await repo.findCourse(id);
+    if (!course) return fail(pedagogyError("COURSE_NOT_FOUND", "Curso não encontrado."));
+    const r = await repo.deleteCourse(id);
+    return r.ok ? ok({ deleted: true }) : fail(courseError(r, undefined, "delete", course.classCount));
   }
 }

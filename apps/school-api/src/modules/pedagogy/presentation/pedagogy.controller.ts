@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -31,6 +31,10 @@ const HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   SEATS_TAKEN: HttpStatus.CONFLICT,
   RESERVATION_NOT_FOUND: HttpStatus.NOT_FOUND,
   RESERVATION_EXISTS: HttpStatus.CONFLICT,
+  COURSE_NOT_FOUND: HttpStatus.NOT_FOUND,
+  COURSE_EXISTS: HttpStatus.CONFLICT,
+  COURSE_IN_USE: HttpStatus.CONFLICT,
+  COURSE_ARCHIVED: HttpStatus.CONFLICT,
 };
 
 const day = z.string({ error: "Indique a data." }).regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD.");
@@ -42,8 +46,12 @@ const yearCreate = z
   .meta({ title: "AcademicYearCreate", description: "Sem nome, sugere-se a partir das datas (ex.: 2026/2027)." });
 const yearUpdate = z.object({ name: z.string().min(1).max(40), startsOn: day, endsOn: day }).meta({ title: "AcademicYearUpdate" });
 const classCreate = z
-  .object({ grade: z.number().int().min(0).max(13), course: optionalText(80), description: optionalText(160) })
-  .meta({ title: "SchoolClassCreate", description: "0 = Iniciação; 1–13 = classe. Curso obrigatório no II Ciclo (10.ª–13.ª) e só aí." });
+  .object({ grade: z.number().int().min(0).max(13), courseId: z.uuid().nullish(), description: optionalText(160) })
+  .meta({ title: "SchoolClassCreate", description: "0 = Iniciação; 1–13 = classe. Curso (do catálogo) obrigatório no II Ciclo (10.ª–13.ª) e só aí; 13.ª só em cursos técnico-profissionais." });
+const courseBody = z
+  .object({ name: z.string().min(2).max(80), code: optionalText(8), kind: z.enum(["GERAL", "TECNICO"], { error: "Escolha o tipo do curso." }), description: optionalText(300) })
+  .meta({ title: "Course", description: "GERAL: 10.ª–12.ª · TECNICO (técnico-profissional): 10.ª–13.ª. Sigla: 2–8 letras/números." });
+const yearQuery = new ZodValidationPipe(z.uuid().optional());
 const groupFields = { shift: z.enum(["MANHA", "TARDE", "NOITE"], { error: "Escolha o turno." }), room: optionalText(40), capacity: z.number().int().min(1).max(200).nullish() };
 const groupCreate = z.object({ name: optionalText(20), ...groupFields }).meta({ title: "ClassGroupCreate", description: "Sem nome, usa-se a próxima letra livre (A, B, C…)." });
 const groupUpdate = z.object({ name: z.string().min(1).max(20), ...groupFields }).meta({ title: "ClassGroupUpdate" });
@@ -157,6 +165,54 @@ export class PedagogyController {
   @ApiOperation({ summary: "Remover turma (sem alunos)" })
   async removeGroup(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
     return unwrap(await this.pedagogy.removeGroup(this.repo(t), actorOf(u), groupId), HTTP);
+  }
+
+  // ---------------------------------------------------------------- cursos
+
+  @Get("courses")
+  @ApiOperation({ summary: "Cursos do colégio, com as classes, turmas e vagas de cada um no ano letivo (?yearId=; por omissão o ano em curso)" })
+  courses(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query("yearId", yearQuery) yearId?: string) {
+    return this.pedagogy.listCourses(this.repo(t), actorOf(u), yearId);
+  }
+
+  @Post("courses")
+  @ApiOperation({ summary: "Criar curso (direção)" })
+  @ApiBody({ schema: openApi(courseBody) })
+  async createCourse(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(courseBody)) body: z.infer<typeof courseBody>) {
+    return unwrap(await this.pedagogy.createCourse(this.repo(t), actorOf(u), body), HTTP);
+  }
+
+  @Get("courses/:id")
+  @ApiOperation({ summary: "Curso com as suas classes em todos os anos letivos" })
+  async course(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) courseId: string) {
+    return unwrap(await this.pedagogy.course(this.repo(t), actorOf(u), courseId), HTTP);
+  }
+
+  @Patch("courses/:id")
+  @ApiOperation({ summary: "Alterar curso (o nome muda em todas as classes)" })
+  @ApiBody({ schema: openApi(courseBody) })
+  async updateCourse(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) courseId: string, @Body(new ZodValidationPipe(courseBody)) body: z.infer<typeof courseBody>) {
+    return unwrap(await this.pedagogy.updateCourse(this.repo(t), actorOf(u), courseId, body), HTTP);
+  }
+
+  @Post("courses/:id/archive")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Arquivar curso (deixa de aparecer para novas classes)" })
+  async archiveCourse(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) courseId: string) {
+    return unwrap(await this.pedagogy.setCourseArchived(this.repo(t), actorOf(u), courseId, true), HTTP);
+  }
+
+  @Post("courses/:id/restore")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Reativar curso arquivado" })
+  async restoreCourse(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) courseId: string) {
+    return unwrap(await this.pedagogy.setCourseArchived(this.repo(t), actorOf(u), courseId, false), HTTP);
+  }
+
+  @Delete("courses/:id")
+  @ApiOperation({ summary: "Eliminar curso (só se nunca teve classes)" })
+  async deleteCourse(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) courseId: string) {
+    return unwrap(await this.pedagogy.deleteCourse(this.repo(t), actorOf(u), courseId), HTTP);
   }
 
   // ---------------------------------------------------------------- vagas

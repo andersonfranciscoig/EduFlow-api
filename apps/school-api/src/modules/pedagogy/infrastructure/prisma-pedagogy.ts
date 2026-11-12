@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import type { Shift, YearStatus } from "../domain/academic";
+import type { CourseKind } from "../domain/courses";
 import { effectiveVacancies, pickGroup, type ReservationStatus } from "../domain/seats";
-import type { ClassRow, GroupRow, PedagogyRepository, ReservationRow, SeatOutcome, WriteOutcome, YearRow, YearSummaryRow } from "../application/ports";
+import type { ClassRow, CourseOutcome, CourseRow, GroupRow, PedagogyRepository, ReservationRow, SeatOutcome, WriteOutcome, YearRow, YearSummaryRow } from "../application/ports";
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
@@ -46,6 +47,36 @@ const toReservation = (r: { id: string; academicYearId: string; classId: string;
 
 /** Ordem natural das turmas: A, B, … Z, A1… */
 const byName = (a: GroupRow, b: GroupRow) => a.name.localeCompare(b.name, "pt", { numeric: true });
+
+/** Classe com o curso do catálogo (nome e sigla) e as contagens de vagas. */
+const WITH_COURSE = { groups: true, course: { select: { name: true, code: true } } } as const;
+type ClassWithCourse = Prisma.SchoolClassGetPayload<{ include: typeof WITH_COURSE }>;
+
+function toClassRow(c: ClassWithCourse, counts: { held: Map<string, number>; confirmedByGroup: Map<string, number> }): ClassRow {
+  return {
+    id: c.id,
+    academicYearId: c.academicYearId,
+    grade: c.grade,
+    courseId: c.courseId,
+    course: c.course?.name ?? null,
+    courseCode: c.course?.code ?? null,
+    description: c.description,
+    vacanciesSet: c.vacancies,
+    held: counts.held.get(c.id) ?? 0,
+    groups: c.groups.map((g) => toGroup(g, counts.confirmedByGroup.get(g.id) ?? 0)).sort(byName),
+  };
+}
+
+const toCourse = (c: { id: string; name: string; code: string | null; kind: string; description: string | null; archivedAt: Date | null; createdAt: Date }, classCount: number): CourseRow => ({
+  id: c.id,
+  name: c.name,
+  code: c.code,
+  kind: c.kind as CourseKind,
+  description: c.description,
+  archivedAt: c.archivedAt,
+  createdAt: c.createdAt,
+  classCount,
+});
 
 /** Reservas que ocupam vaga: confirmadas, ou reservadas ainda no prazo. */
 const active = (now: Date): Prisma.SeatReservationWhereInput => ({ OR: [{ status: "CONFIRMED" }, { status: "HELD", expiresAt: { gt: now } }] });
@@ -119,19 +150,10 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
   async structure(yearId: string): Promise<ClassRow[]> {
     const now = new Date();
     const [classes, counts] = await Promise.all([
-      this.db.schoolClass.findMany({ where: { academicYearId: yearId }, include: { groups: true }, orderBy: [{ grade: "asc" }, { course: "asc" }] }),
+      this.db.schoolClass.findMany({ where: { academicYearId: yearId }, include: WITH_COURSE, orderBy: [{ grade: "asc" }, { course: { name: "asc" } }] }),
       seatCounts(this.db, { academicYearId: yearId }, now),
     ]);
-    return classes.map((c) => ({
-      id: c.id,
-      academicYearId: c.academicYearId,
-      grade: c.grade,
-      course: c.course,
-      description: c.description,
-      vacanciesSet: c.vacancies,
-      held: counts.held.get(c.id) ?? 0,
-      groups: c.groups.map((g) => toGroup(g, counts.confirmedByGroup.get(g.id) ?? 0)).sort(byName),
-    }));
+    return classes.map((c) => toClassRow(c, counts));
   }
 
   async createYear(input: Parameters<PedagogyRepository["createYear"]>[0]): Promise<WriteOutcome<YearRow>> {
@@ -148,7 +170,7 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
           for (const c of source) {
             const classId = randomUUID();
             await tx.schoolClass.create({
-              data: { id: classId, academicYearId: year.id, grade: c.grade, course: c.course, description: c.description, vacancies: c.vacancies, createdAt: input.now },
+              data: { id: classId, academicYearId: year.id, grade: c.grade, courseId: c.courseId, description: c.description, vacancies: c.vacancies, createdAt: input.now },
             });
             if (c.groups.length) {
               await tx.classGroup.createMany({
@@ -205,9 +227,10 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
   async addClass(input: Parameters<PedagogyRepository["addClass"]>[0]): Promise<WriteOutcome<ClassRow>> {
     try {
       const c = await this.db.schoolClass.create({
-        data: { id: input.id, academicYearId: input.academicYearId, grade: input.grade, course: input.course, description: input.description, createdAt: input.now },
+        data: { id: input.id, academicYearId: input.academicYearId, grade: input.grade, courseId: input.courseId, description: input.description, createdAt: input.now },
+        include: WITH_COURSE,
       });
-      return { ok: true, value: { id: c.id, academicYearId: c.academicYearId, grade: c.grade, course: c.course, description: c.description, vacanciesSet: null, held: 0, groups: [] } };
+      return { ok: true, value: toClassRow(c, { held: new Map(), confirmedByGroup: new Map() }) };
     } catch (e) {
       if (isUnique(e)) return { ok: false, reason: "duplicate" };
       throw e;
@@ -215,20 +238,10 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
   }
 
   async findClass(id: string) {
-    const c = await this.db.schoolClass.findUnique({ where: { id }, include: { groups: true, academicYear: { select: { status: true } } } });
+    const c = await this.db.schoolClass.findUnique({ where: { id }, include: { ...WITH_COURSE, academicYear: { select: { status: true } } } });
     if (!c) return null;
     const counts = await seatCounts(this.db, { classId: id }, new Date());
-    return {
-      id: c.id,
-      academicYearId: c.academicYearId,
-      grade: c.grade,
-      course: c.course,
-      description: c.description,
-      vacanciesSet: c.vacancies,
-      held: counts.held.get(id) ?? 0,
-      groups: c.groups.map((g) => toGroup(g, counts.confirmedByGroup.get(g.id) ?? 0)),
-      yearStatus: c.academicYear.status as YearStatus,
-    };
+    return { ...toClassRow(c, counts), yearStatus: c.academicYear.status as YearStatus };
   }
 
   async removeClass(id: string) {
@@ -364,5 +377,90 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
   async findReservation(id: string) {
     const r = await this.db.seatReservation.findUnique({ where: { id }, include: { academicYear: { select: { status: true } } } });
     return r ? { ...toReservation(r), yearStatus: r.academicYear.status as YearStatus } : null;
+  }
+
+  // ================================================================ cursos
+
+  async listCourses(): Promise<CourseRow[]> {
+    const courses = await this.db.course.findMany({ include: { _count: { select: { classes: true } } }, orderBy: { name: "asc" } });
+    return courses.map((c) => toCourse(c, c._count.classes));
+  }
+
+  async findCourse(id: string) {
+    const c = await this.db.course.findUnique({ where: { id }, include: { _count: { select: { classes: true } } } });
+    return c ? toCourse(c, c._count.classes) : null;
+  }
+
+  /** Nome (sem diferenciar maiúsculas) e sigla são únicos no colégio. */
+  private async clash(tx: Tx, name: string, code: string | null, exceptId?: string) {
+    const not = exceptId ? { id: { not: exceptId } } : {};
+    if (await tx.course.findFirst({ where: { name: { equals: name, mode: "insensitive" }, ...not }, select: { id: true } })) return "name_taken" as const;
+    if (code && (await tx.course.findFirst({ where: { code, ...not }, select: { id: true } }))) return "code_taken" as const;
+    return null;
+  }
+
+  async createCourse(input: Parameters<PedagogyRepository["createCourse"]>[0]): Promise<CourseOutcome<CourseRow>> {
+    try {
+      return await this.db.$transaction(async (tx) => {
+        const clash = await this.clash(tx, input.name, input.code);
+        if (clash) return { ok: false, reason: clash } as const;
+        const c = await tx.course.create({
+          data: { id: input.id, name: input.name, code: input.code, kind: input.kind, description: input.description, createdAt: input.now, updatedAt: input.now },
+        });
+        return { ok: true, value: toCourse(c, 0) } as const;
+      });
+    } catch (e) {
+      if (isUnique(e)) return { ok: false, reason: "name_taken" };
+      throw e;
+    }
+  }
+
+  async updateCourse(id: string, input: Parameters<PedagogyRepository["updateCourse"]>[1]): Promise<CourseOutcome<CourseRow>> {
+    try {
+      return await this.db.$transaction(async (tx) => {
+        if (!(await tx.course.findUnique({ where: { id }, select: { id: true } }))) return { ok: false, reason: "not_found" } as const;
+        const clash = await this.clash(tx, input.name, input.code, id);
+        if (clash) return { ok: false, reason: clash } as const;
+        // passar a ensino geral com classes 13.ª ainda ligadas → não
+        if (input.kind === "GERAL" && (await tx.schoolClass.count({ where: { courseId: id, grade: 13 } }))) return { ok: false, reason: "in_use" } as const;
+        const c = await tx.course.update({
+          where: { id },
+          data: { name: input.name, code: input.code, kind: input.kind, description: input.description, updatedAt: input.now },
+          include: { _count: { select: { classes: true } } },
+        });
+        return { ok: true, value: toCourse(c, c._count.classes) } as const;
+      });
+    } catch (e) {
+      if (isUnique(e)) return { ok: false, reason: "name_taken" };
+      throw e;
+    }
+  }
+
+  async setCourseArchived(id: string, archived: boolean, now: Date): Promise<CourseOutcome<CourseRow>> {
+    const changed = await this.db.course.updateMany({ where: { id }, data: { archivedAt: archived ? now : null, updatedAt: now } });
+    if (!changed.count) return { ok: false, reason: "not_found" };
+    return { ok: true, value: (await this.findCourse(id))! };
+  }
+
+  async deleteCourse(id: string): Promise<CourseOutcome<void>> {
+    try {
+      const deleted = await this.db.course.deleteMany({ where: { id, classes: { none: {} } } });
+      if (deleted.count) return { ok: true, value: undefined };
+      return (await this.db.course.findUnique({ where: { id }, select: { id: true } })) ? { ok: false, reason: "in_use" } : { ok: false, reason: "not_found" };
+    } catch (e) {
+      // classe criada entretanto (FK RESTRICT)
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") return { ok: false, reason: "in_use" };
+      throw e;
+    }
+  }
+
+  async courseClasses(courseId: string) {
+    const classes = await this.db.schoolClass.findMany({
+      where: { courseId },
+      include: { ...WITH_COURSE, academicYear: true },
+      orderBy: [{ academicYear: { startsOn: "desc" } }, { grade: "asc" }],
+    });
+    const counts = await seatCounts(this.db, { classId: { in: classes.map((c) => c.id) } }, new Date());
+    return classes.map((c) => ({ ...toClassRow(c, counts), year: toYear(c.academicYear) }));
   }
 }
