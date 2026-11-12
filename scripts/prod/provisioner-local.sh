@@ -21,10 +21,26 @@ S=secrets-prod
 BRANCH=$(git branch --show-current)
 [ "$BRANCH" = main ] || { echo "✗ está no ramo '$BRANCH'. Corra no main:  git checkout main && git pull"; exit 1; }
 [ -z "$(git status --porcelain -- apps libs prisma)" ] || { echo "✗ há alterações por guardar em apps/, libs/ ou prisma/ — produção só corre código do main tal como está no GitHub"; exit 1; }
-if git fetch -q origin main 2>/dev/null; then
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "✗ o main local não é igual ao do GitHub. Atualize:  git pull --ff-only"; exit 1; }
+# Confirmar no GitHub que este é o main mais recente (a rede pode falhar: tenta 3 vezes).
+# Sem confirmação NÃO corre — foi assim que a migração 0006 ficou por aplicar.
+# Só para emergências sem internet:  bash scripts/prod/provisioner-local.sh --sem-rede
+fetched=0
+for i in 1 2 3; do git fetch -q origin main 2>/dev/null && { fetched=1; break; }; sleep 3; done
+if [ "$fetched" = 1 ]; then
+  if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+    # atrasado e sem alterações locais → atualiza sozinho; divergente → recusa
+    if git merge-base --is-ancestor HEAD origin/main; then
+      echo "• o main local estava atrasado — a atualizar para o do GitHub…"
+      git merge -q --ff-only origin/main || { echo "✗ não foi possível atualizar o main"; exit 1; }
+    else
+      echo "✗ o main local tem commits que não estão no GitHub. Produção só corre o main do GitHub."; exit 1
+    fi
+  fi
+elif [ "${1:-}" = "--sem-rede" ]; then
+  echo "! sem ligação ao GitHub — a usar o main local por pedido explícito ($(git log --oneline -1))"
 else
-  echo "! sem ligação ao GitHub — a usar o main local ($(git log --oneline -1))"
+  echo "✗ sem ligação ao GitHub: não dá para confirmar que este é o main mais recente."
+  echo "  Tente de novo daqui a pouco (ou, em emergência:  bash scripts/prod/provisioner-local.sh --sem-rede)"; exit 1
 fi
 echo "• código: main $(git log --oneline -1) · migrações dos colégios: $(ls prisma/tenant/migrations | tr '\n' ' ')"
 
