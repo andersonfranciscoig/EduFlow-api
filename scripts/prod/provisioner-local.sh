@@ -54,6 +54,8 @@ done
 MAIN=dist/apps/provisioner/src/main.js
 if [ ! -f "$MAIN" ] || [ -n "$(find apps/provisioner/src libs/kernel/src prisma -newer "$MAIN" -type f -print -quit)" ]; then
   echo "• a compilar a versão atual…"
+  # o build não gera os clientes Prisma: um schema novo (ex.: depois do fast-forward) partiria a compilação
+  pnpm run db:generate >/dev/null
   pnpm run build >/dev/null
 fi
 
