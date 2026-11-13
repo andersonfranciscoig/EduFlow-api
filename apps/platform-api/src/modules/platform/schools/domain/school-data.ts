@@ -1,30 +1,10 @@
 import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/domain/Result";
 import { schoolError, type SchoolError } from "./errors";
 
-/** Províncias de Angola (divisão político-administrativa de 2024). */
-export const PROVINCES = [
-  "Bengo",
-  "Benguela",
-  "Bié",
-  "Cabinda",
-  "Cuando",
-  "Cuanza Norte",
-  "Cuanza Sul",
-  "Cubango",
-  "Cunene",
-  "Huambo",
-  "Huíla",
-  "Icolo e Bengo",
-  "Luanda",
-  "Lunda Norte",
-  "Lunda Sul",
-  "Malanje",
-  "Moxico",
-  "Moxico Leste",
-  "Namibe",
-  "Uíge",
-  "Zaire",
-] as const;
+import { PROVINCES } from "../../../../../../../libs/kernel/src/domain/angola";
+
+/** Províncias de Angola (lista partilhada em libs/kernel). */
+export { PROVINCES };
 
 export interface SchoolData {
   name: string;
