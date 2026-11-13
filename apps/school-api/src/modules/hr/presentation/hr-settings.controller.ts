@@ -30,6 +30,18 @@ export const HR_HTTP: Partial<Record<HrErrorCode, HttpStatus>> = {
   INVALID_STATE: HttpStatus.CONFLICT,
   FORM_NOT_PUBLISHED: HttpStatus.CONFLICT,
   EMAIL_NOT_SENT: HttpStatus.BAD_GATEWAY,
+  INVITE_INVALID: HttpStatus.NOT_FOUND,
+  INVITE_EXPIRED: HttpStatus.GONE,
+  INVITE_LOCKED: HttpStatus.TOO_MANY_REQUESTS,
+  INVALID_CREDENTIALS: HttpStatus.UNAUTHORIZED,
+  SESSION_EXPIRED: HttpStatus.UNAUTHORIZED,
+  EMPLOYEE_NOT_FOUND: HttpStatus.NOT_FOUND,
+  STEP_NOT_FOUND: HttpStatus.NOT_FOUND,
+  REVISION_CONFLICT: HttpStatus.CONFLICT,
+  INCOMPLETE: HttpStatus.UNPROCESSABLE_ENTITY,
+  FILE_INVALID: HttpStatus.UNPROCESSABLE_ENTITY,
+  FILE_TOO_LARGE: HttpStatus.PAYLOAD_TOO_LARGE,
+  FILE_NOT_FOUND: HttpStatus.NOT_FOUND,
 };
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));

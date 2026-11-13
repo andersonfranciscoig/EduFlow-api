@@ -148,9 +148,21 @@ export class PrismaRegistrationRepository implements RegistrationRepository {
     return this.transition(d, ["PENDING"], "REJECTED");
   }
 
+  async employeeOf(requestId: string) {
+    return this.db.employee.findUnique({ where: { requestId }, select: { id: true, status: true } });
+  }
+
   cancel(d: Decision) {
     return this.transition(d, ["PENDING", "APPROVED"], "CANCELLED", async (tx) => {
       await tx.employeeRegistrationInvite.updateMany({ where: { requestId: d.id, revokedAt: null }, data: { revokedAt: d.now } });
+      // o rascunho começado com o convite fecha-se (com o mesmo motivo)
+      const draft = await tx.employee.findFirst({ where: { requestId: d.id, status: { in: ["DRAFT", "CORRECTION_REQUIRED"] } }, select: { id: true, status: true } });
+      if (draft) {
+        await tx.employee.update({ where: { id: draft.id }, data: { status: "REJECTED", updatedAt: d.now, revision: { increment: 1 } } });
+        await tx.employeeApprovalHistory.create({
+          data: { id: randomUUID(), subjectType: "EMPLOYEE", subjectId: draft.id, fromStatus: draft.status, toStatus: "REJECTED", actorId: d.actorId, actorName: d.actorName, reason: `Pedido cancelado: ${d.reason ?? ""}`.slice(0, 500), createdAt: d.now },
+        });
+      }
     });
   }
 

@@ -67,7 +67,9 @@ export interface RegistrationRepository {
   approve(decision: Decision & { employeeTypeId: string | null; invite: NewInvite }): Promise<DecisionOutcome>;
   /** PENDING → REJECTED. */
   reject(decision: Decision): Promise<DecisionOutcome>;
-  /** PENDING ou APPROVED → CANCELLED (o convite ativo deixa de valer). */
+  /** O cadastro começado com este pedido (null = a pessoa ainda não abriu o convite). */
+  employeeOf(requestId: string): Promise<{ id: string; status: string } | null>;
+  /** PENDING ou APPROVED → CANCELLED (o convite ativo deixa de valer; um rascunho fica rejeitado). */
   cancel(decision: Decision): Promise<DecisionOutcome>;
   /** Pedido APPROVED: revoga o convite ativo e cria outro (novo token, nova validade). */
   reissueInvite(input: { requestId: string; actorId: string | null; invite: NewInvite; now: Date }): Promise<DecisionOutcome>;

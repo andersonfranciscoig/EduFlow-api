@@ -491,8 +491,9 @@ model HrEmployeeType {
   createdAt   DateTime @map("created_at")
   updatedAt   DateTime @map("updated_at")
 
-  requests EmployeeRegistrationRequest[]
-  invites  EmployeeRegistrationInvite[]
+  requests  EmployeeRegistrationRequest[]
+  invites   EmployeeRegistrationInvite[]
+  employees Employee[]
 
   @@map("hr_employee_types")
 }
@@ -516,7 +517,8 @@ model EmployeeRegistrationRequest {
   createdAt       DateTime        @map("created_at")
   updatedAt       DateTime        @map("updated_at")
 
-  invites EmployeeRegistrationInvite[]
+  invites  EmployeeRegistrationInvite[]
+  employee Employee?
 
   @@index([status, createdAt])
   @@map("employee_registration_requests")
@@ -539,6 +541,10 @@ model EmployeeRegistrationInvite {
   lastUsedAt     DateTime?                   @map("last_used_at")
   createdById    String?                     @map("created_by_id") @db.Uuid
   createdAt      DateTime                    @map("created_at")
+  /// sessão do formulário (SHA-256 do token; o token só existe no cookie do portal)
+  sessionHash       String?                  @unique @map("session_hash")
+  sessionExpiresAt  DateTime?                @map("session_expires_at")
+  expiredNotifiedAt DateTime?                @map("expired_notified_at")
 
   @@map("employee_registration_invites")
 }
@@ -587,7 +593,68 @@ model HrFormVersion {
   publishedById String?  @map("published_by_id") @db.Uuid
   publishedAt   DateTime @map("published_at")
 
+  employees Employee[]
+
   @@map("hr_form_versions")
+}
+
+/// Cadastro de funcionário, preso à versão do formulário com que começou. Dados em JSONB validados pela API.
+model Employee {
+  id             String                       @id @db.Uuid
+  number         Int?                         @unique
+  requestId      String?                      @unique @map("request_id") @db.Uuid
+  request        EmployeeRegistrationRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  employeeTypeId String?                      @map("employee_type_id") @db.Uuid
+  employeeType   HrEmployeeType?              @relation(fields: [employeeTypeId], references: [id], onDelete: SetNull)
+  formVersionId  String                       @map("form_version_id") @db.Uuid
+  formVersion    HrFormVersion                @relation(fields: [formVersionId], references: [id], onDelete: Restrict)
+  status         String                       @default("DRAFT")
+  progress       String                       @default("NOT_STARTED")
+  lastStep       String?                      @map("last_step")
+  completedSteps String[]                     @default([]) @map("completed_steps")
+  revision       Int                          @default(0)
+  personal       Json                         @default("{}")
+  sections       Json                         @default("{}")
+  fullName       String                       @map("full_name")
+  email          String?
+  phone          String?
+  jobTitle       String?                      @map("job_title")
+  department     String?
+  correctionNote String?                      @map("correction_note")
+  createdById    String?                      @map("created_by_id") @db.Uuid
+  submittedAt    DateTime?                    @map("submitted_at")
+  approvedAt     DateTime?                    @map("approved_at")
+  activatedAt    DateTime?                    @map("activated_at")
+  terminatedAt   DateTime?                    @map("terminated_at")
+  createdAt      DateTime                     @map("created_at")
+  updatedAt      DateTime                     @map("updated_at")
+
+  documents EmployeeDocument[]
+
+  @@index([status, createdAt])
+  @@index([employeeTypeId])
+  @@map("employees")
+}
+
+/// Ficheiro entregue (conteúdo cifrado no armazenamento externo; aqui só a chave interna).
+model EmployeeDocument {
+  id           String   @id @db.Uuid
+  employeeId   String   @map("employee_id") @db.Uuid
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// PHOTO | DOCUMENT | FIELD
+  slot         String
+  itemId       String?  @map("item_id") @db.Uuid
+  label        String
+  fileName     String   @map("file_name")
+  mimeType     String   @map("mime_type")
+  size         Int
+  sha256       String
+  storageKey   String   @map("storage_key")
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime @map("created_at")
+
+  @@index([employeeId, slot, createdAt])
+  @@map("employee_documents")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
