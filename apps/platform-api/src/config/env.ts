@@ -56,8 +56,13 @@ export const envSchema = z.object({
   EMAIL_FROM_NAME: z.string().min(1).default("EduFlow"),
   EMAIL_REPLY_TO: z.email().default("noreply@eduflow.ao"),
   EMAIL_API_KEY_FILE: z.string().min(1).optional(),
-  /** Endereço do portal de cada colégio ({slug}) — vai no email de ativação. */
-  PORTAL_URL_TEMPLATE: z.string().includes("{slug}").default("http://{slug}.localhost:3002"),
+  /** Endereço do portal: "https://{slug}.dominio" ou um endereço fixo (sem domínio próprio ainda). Vai no email de ativação. */
+  PORTAL_URL_TEMPLATE: z
+    .string()
+    .trim()
+    .regex(/^https?:\/\/[^\s]+$/, "tem de ser um endereço http(s)")
+    .transform((s) => s.replace(/\/+$/, ""))
+    .default("http://{slug}.localhost:3002"),
 }).superRefine((env, ctx) => {
   if (env.LOGO_STORAGE === "uploadthing" && (!env.LOGO_UPLOADTHING_TOKEN_FILE || !existsSync(env.LOGO_UPLOADTHING_TOKEN_FILE))) {
     ctx.addIssue({ code: "custom", path: ["LOGO_UPLOADTHING_TOKEN_FILE"], message: "obrigatório (ficheiro existente) com LOGO_STORAGE=uploadthing" });

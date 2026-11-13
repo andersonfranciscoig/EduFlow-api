@@ -36,8 +36,16 @@ export const envSchema = z
     SCHOOL_MFA_KEY_FILE: z.string().min(1),
     JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().min(300).max(86_400).default(28_800),
     DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
-    /** Endereço do portal nos emails; {slug} é substituído pelo colégio. */
-    PORTAL_URL_TEMPLATE: z.string().includes("{slug}").default("http://{slug}.localhost:3002"),
+    /**
+     * Endereço do portal nos emails: "https://{slug}.dominio" (um subdomínio por colégio) ou, sem
+     * domínio próprio ainda, o endereço fixo do portal (ex.: o do Vercel com PORTAL_FIXED_TENANT).
+     */
+    PORTAL_URL_TEMPLATE: z
+      .string()
+      .trim()
+      .regex(/^https?:\/\/[^\s]+$/, "tem de ser um endereço http(s)")
+      .transform((s) => s.replace(/\/+$/, ""))
+      .default("http://{slug}.localhost:3002"),
     /**
      * Chave PÚBLICA dos bilhetes de suporte (a privada só existe no platform-api).
      * Com ela o school-api confirma um bilhete, mas não consegue criar nenhum.

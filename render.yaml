@@ -24,7 +24,7 @@ services:
       - { key: PLATFORM_DATABASE_URL, sync: false }
       # endereço do painel EduFlow (Vercel) — CORS
       - { key: FRONTEND_URL, sync: false }
-      # ex.: https://{slug}.eduflow.ao
+      # ex.: https://{slug}.eduflow.ao — ou, sem domínio próprio, o endereço do portal no Vercel
       - { key: PORTAL_URL_TEMPLATE, sync: false }
       # ex.: https://eduflow-platform-api.onrender.com/api
       - { key: PUBLIC_API_URL, sync: false }
