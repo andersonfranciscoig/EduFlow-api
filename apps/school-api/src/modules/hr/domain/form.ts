@@ -4,9 +4,11 @@ import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/
 
 /**
  * CADASTRO DE FUNCIONÁRIOS — configuração do formulário.
- *   dados pessoais    fixos, iguais em todos os colégios (definidos aqui)
+ *   tipos             de funcionário (Docente, Administrativo, Auxiliar…): cada cadastro é de um tipo
+ *   dados pessoais    fixos, iguais em todos os colégios e tipos (definidos aqui)
  *   secções           formação académica e dados profissionais: campos escolhidos pelo colégio
  *   documentos        o que o colégio pede (formatos, tamanho, um ou vários ficheiros)
+ *   "aplica-se a"     cada campo e documento vale para todos os tipos ou só para alguns
  *   versões           o colégio publica a configuração; cada cadastro fica com a sua versão
  */
 
@@ -19,7 +21,11 @@ export type HrErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "DOCUMENT_EXISTS"
   | "LIMIT_REACHED"
-  | "NOTHING_TO_PUBLISH";
+  | "NOTHING_TO_PUBLISH"
+  | "EMPLOYEE_TYPE_NOT_FOUND"
+  | "EMPLOYEE_TYPE_EXISTS"
+  | "EMPLOYEE_TYPE_IN_USE"
+  | "VERSION_NOT_FOUND";
 
 export type HrError = DomainError<HrErrorCode>;
 export const hrError = (code: HrErrorCode, message: string, meta?: Record<string, unknown>): HrError => new DomainError(code, message, meta);
@@ -49,6 +55,7 @@ export const FILE_FORMATS = ["pdf", "jpg", "png", "webp", "doc", "docx"] as cons
 export type FileFormat = (typeof FILE_FORMATS)[number];
 export const MAX_FIELDS_PER_SECTION = 40;
 export const MAX_DOCUMENT_TYPES = 30;
+export const MAX_EMPLOYEE_TYPES = 20;
 
 // ================================================================ dados pessoais (fixos)
 
@@ -61,7 +68,7 @@ export interface PersonalField {
   help?: string;
 }
 
-/** Iguais em todos os colégios: não se configuram. A validação de cada valor vem com o formulário. */
+/** Iguais em todos os colégios e tipos: não se configuram. A validação de cada valor vem com o formulário. */
 export const PERSONAL_FIELDS: PersonalField[] = [
   { key: "fullName", label: "Nome completo", type: "TEXT", required: true },
   { key: "gender", label: "Sexo", type: "SELECT", required: true, options: ["Masculino", "Feminino"] },
@@ -89,6 +96,25 @@ export const PERSONAL_SCHEMA = 1;
 const clean = (s: string | null | undefined) => s?.replace(/\s+/g, " ").trim() || "";
 const optional = (s: string | null | undefined) => clean(s) || null;
 
+/** A que tipos se aplica: lista sem repetidos (vazia = todos). Que os tipos existem confirma-se no caso de uso. */
+export const cleanTypeIds = (ids: string[] | null | undefined) => [...new Set((ids ?? []).filter(Boolean))];
+
+/** Um campo ou documento aparece a este tipo? (sem lista = a todos) */
+export const appliesTo = (item: { employeeTypeIds?: string[] }, typeId: string) => !item.employeeTypeIds?.length || item.employeeTypeIds.includes(typeId);
+
+export interface EmployeeTypeInput {
+  name: string;
+  description: string | null;
+}
+
+export function checkEmployeeType(input: { name: string; description?: string | null }): Result<EmployeeTypeInput, HrError> {
+  const name = clean(input.name);
+  if (name.length < 2 || name.length > 60) return fail(hrError("INVALID_INPUT", "O nome do tipo tem 2 a 60 caracteres."));
+  const description = optional(input.description);
+  if (description && description.length > 240) return fail(hrError("INVALID_INPUT", "A descrição tem no máximo 240 caracteres."));
+  return ok({ name, description });
+}
+
 export interface FieldSettings {
   /** FILE */
   formats?: FileFormat[];
@@ -105,9 +131,19 @@ export interface FieldInput {
   help: string | null;
   options: string[];
   settings: FieldSettings;
+  /** tipos de funcionário (vazio = todos) */
+  employeeTypeIds: string[];
 }
 
-export function checkField(input: { label: string; type: string; required?: boolean; help?: string | null; options?: string[] | null; settings?: FieldSettings | null }): Result<FieldInput, HrError> {
+export function checkField(input: {
+  label: string;
+  type: string;
+  required?: boolean;
+  help?: string | null;
+  options?: string[] | null;
+  settings?: FieldSettings | null;
+  employeeTypeIds?: string[] | null;
+}): Result<FieldInput, HrError> {
   const label = clean(input.label);
   if (label.length < 2 || label.length > 80) return fail(hrError("INVALID_INPUT", "O nome do campo tem 2 a 80 caracteres."));
   if (!isFieldType(input.type)) return fail(hrError("INVALID_INPUT", "Escolha um tipo de campo válido."));
@@ -137,7 +173,7 @@ export function checkField(input: { label: string; type: string; required?: bool
     settings.min = min;
     settings.max = max;
   }
-  return ok({ label, type: input.type, required: !!input.required, help, options, settings });
+  return ok({ label, type: input.type, required: !!input.required, help, options, settings, employeeTypeIds: cleanTypeIds(input.employeeTypeIds) });
 }
 
 function checkFileRules(formats: string[], maxSizeMb: number): Result<{ formats: FileFormat[]; maxSizeMb: number }, HrError> {
@@ -155,16 +191,26 @@ export interface DocumentTypeInput {
   formats: FileFormat[];
   maxSizeMb: number;
   multiple: boolean;
+  /** tipos de funcionário (vazio = todos) */
+  employeeTypeIds: string[];
 }
 
-export function checkDocumentType(input: { name: string; description?: string | null; required?: boolean; formats: string[]; maxSizeMb: number; multiple?: boolean }): Result<DocumentTypeInput, HrError> {
+export function checkDocumentType(input: {
+  name: string;
+  description?: string | null;
+  required?: boolean;
+  formats: string[];
+  maxSizeMb: number;
+  multiple?: boolean;
+  employeeTypeIds?: string[] | null;
+}): Result<DocumentTypeInput, HrError> {
   const name = clean(input.name);
   if (name.length < 2 || name.length > 80) return fail(hrError("INVALID_INPUT", "O nome do documento tem 2 a 80 caracteres."));
   const description = optional(input.description);
   if (description && description.length > 240) return fail(hrError("INVALID_INPUT", "A descrição tem no máximo 240 caracteres."));
   const rules = checkFileRules(input.formats, input.maxSizeMb);
   if (!rules.ok) return rules;
-  return ok({ name, description, required: !!input.required, ...rules.value, multiple: !!input.multiple });
+  return ok({ name, description, required: !!input.required, ...rules.value, multiple: !!input.multiple, employeeTypeIds: cleanTypeIds(input.employeeTypeIds) });
 }
 
 export interface SectionInput {
@@ -188,7 +234,14 @@ export function checkSection(input: { title: string; description?: string | null
 
 // ================================================================ sugestões (o colégio escolhe se as quer)
 
-type Suggestion = Omit<FieldInput, "help" | "settings"> & { help?: string | null; settings?: FieldSettings };
+export const SUGGESTED_EMPLOYEE_TYPES: EmployeeTypeInput[] = [
+  { name: "Docente", description: "Professores e educadores." },
+  { name: "Administrativo", description: "Secretaria, tesouraria, direção e serviços." },
+  { name: "Auxiliar", description: "Limpeza, segurança, cozinha, transporte e apoio." },
+];
+
+/** `forTypes`: nomes dos tipos a que a sugestão se aplica, se existirem no colégio (senão, a todos). */
+type Suggestion = Omit<FieldInput, "help" | "settings" | "employeeTypeIds"> & { help?: string | null; settings?: FieldSettings; forTypes?: string[] };
 
 export const SUGGESTED_FIELDS: Record<SectionKey, Suggestion[]> = {
   ACADEMIC: [
@@ -198,28 +251,29 @@ export const SUGGESTED_FIELDS: Record<SectionKey, Suggestion[]> = {
     { label: "Instituição de ensino", type: "TEXT", required: true, options: [] },
     { label: "Ano de conclusão", type: "NUMBER", required: true, options: [], settings: { min: 1950, max: 2100 } },
     { label: "País de formação", type: "TEXT", required: false, options: [] },
-    { label: "Tem formação pedagógica?", type: "BOOLEAN", required: false, options: [] },
+    { label: "Tem formação pedagógica?", type: "BOOLEAN", required: true, options: [], forTypes: ["Docente"] },
     { label: "Outras qualificações", type: "LONG_TEXT", required: false, options: [] },
   ],
   PROFESSIONAL: [
-    { label: "Categoria profissional", type: "SELECT", required: true, options: ["Docente", "Administrativo", "Auxiliar", "Direção", "Técnico", "Outro"] },
     { label: "Cargo", type: "TEXT", required: true, options: [] },
     { label: "Departamento", type: "TEXT", required: false, options: [] },
     { label: "Data de admissão", type: "DATE", required: false, options: [] },
     { label: "Tipo de vínculo", type: "SELECT", required: true, options: ["Efetivo", "Contrato a termo", "Prestação de serviços", "Estágio"] },
     { label: "Regime de trabalho", type: "SELECT", required: false, options: ["Tempo inteiro", "Tempo parcial"] },
     { label: "Carga horária semanal (horas)", type: "NUMBER", required: false, options: [], settings: { min: 1, max: 60 } },
+    { label: "Disciplinas que pode lecionar", type: "LONG_TEXT", required: true, options: [], forTypes: ["Docente"] },
+    { label: "Experiência de ensino (anos)", type: "NUMBER", required: false, options: [], settings: { min: 0, max: 60 }, forTypes: ["Docente"] },
     { label: "Experiência profissional", type: "LONG_TEXT", required: false, options: [] },
     { label: "Instituição de origem", type: "TEXT", required: false, options: [] },
   ],
 };
 
-export const SUGGESTED_DOCUMENTS: DocumentTypeInput[] = [
+export const SUGGESTED_DOCUMENTS: (Omit<DocumentTypeInput, "employeeTypeIds"> & { forTypes?: string[] })[] = [
   { name: "Cópia do Bilhete de Identidade", description: "Frente e verso.", required: true, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: true },
   { name: "Curriculum Vitae", description: null, required: true, formats: ["pdf", "doc", "docx"], maxSizeMb: 5, multiple: false },
   { name: "Certificado de habilitações", description: null, required: true, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: true },
   { name: "Diploma", description: null, required: false, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: true },
-  { name: "Certificado de formação pedagógica", description: null, required: false, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: false },
+  { name: "Certificado de formação pedagógica", description: null, required: true, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: false, forTypes: ["Docente"] },
   { name: "Registo criminal", description: "Emitido há menos de 90 dias.", required: false, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: false },
   { name: "Atestado médico", description: null, required: false, formats: ["pdf", "jpg", "png"], maxSizeMb: 5, multiple: false },
 ];
@@ -234,13 +288,42 @@ export interface SnapshotField {
   help: string | null;
   options: string[];
   settings: FieldSettings;
+  /** só quando o campo não é para todos os tipos */
+  employeeTypeIds?: string[];
+}
+
+export type SnapshotDocument = { id: string } & Omit<DocumentTypeInput, "employeeTypeIds"> & { employeeTypeIds?: string[] };
+
+export interface SnapshotSection {
+  key: SectionKey;
+  title: string;
+  description: string | null;
+  repeatable: boolean;
+  entryLabel: string;
+  maxEntries: number;
+  fields: SnapshotField[];
 }
 
 export interface FormSnapshot {
   personalSchema: number;
   personal: PersonalField[];
-  sections: { key: SectionKey; title: string; description: string | null; repeatable: boolean; entryLabel: string; maxEntries: number; fields: SnapshotField[] }[];
-  documents: ({ id: string } & DocumentTypeInput)[];
+  /** tipos de funcionário ativos (só quando o colégio os definiu) */
+  employeeTypes?: { id: string; name: string; description: string | null }[];
+  sections: SnapshotSection[];
+  documents: SnapshotDocument[];
+}
+
+/**
+ * A versão como a vê um funcionário deste tipo: só os campos e documentos que se lhe aplicam.
+ * Sem tipo (ou numa versão sem tipos): tudo.
+ */
+export function forEmployeeType(snapshot: FormSnapshot, typeId: string | null): FormSnapshot {
+  if (!typeId) return snapshot;
+  return {
+    ...snapshot,
+    sections: snapshot.sections.map((s) => ({ ...s, fields: s.fields.filter((f) => appliesTo(f, typeId)) })),
+    documents: snapshot.documents.filter((d) => appliesTo(d, typeId)),
+  };
 }
 
 /** Ordem estável das chaves (o JSONB do Postgres reordena-as): compara configuração e versão publicada. */
@@ -260,6 +343,16 @@ export function canonical(value: unknown): string {
 export function describeChanges(from: FormSnapshot | null, to: FormSnapshot): string[] {
   if (!from) return ["Primeira versão do formulário."];
   const out: string[] = [];
+
+  const beforeTypes = new Map((from.employeeTypes ?? []).map((t) => [t.id, t]));
+  const afterTypes = new Map((to.employeeTypes ?? []).map((t) => [t.id, t]));
+  for (const t of to.employeeTypes ?? []) {
+    const old = beforeTypes.get(t.id);
+    if (!old) out.push(`Tipos de funcionário: novo “${t.name}”.`);
+    else if (canonical(old) !== canonical(t)) out.push(`Tipos de funcionário: “${t.name}” alterado.`);
+  }
+  for (const t of from.employeeTypes ?? []) if (!afterTypes.has(t.id)) out.push(`Tipos de funcionário: “${t.name}” retirado.`);
+
   for (const s of to.sections) {
     const prev = from.sections.find((x) => x.key === s.key);
     const before = new Map((prev?.fields ?? []).map((f) => [f.id, f]));

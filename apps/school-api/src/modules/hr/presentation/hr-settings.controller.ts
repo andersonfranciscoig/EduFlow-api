@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -22,6 +22,10 @@ export const HR_HTTP: Partial<Record<HrErrorCode, HttpStatus>> = {
   DOCUMENT_EXISTS: HttpStatus.CONFLICT,
   LIMIT_REACHED: HttpStatus.CONFLICT,
   NOTHING_TO_PUBLISH: HttpStatus.CONFLICT,
+  EMPLOYEE_TYPE_NOT_FOUND: HttpStatus.NOT_FOUND,
+  EMPLOYEE_TYPE_EXISTS: HttpStatus.CONFLICT,
+  EMPLOYEE_TYPE_IN_USE: HttpStatus.CONFLICT,
+  VERSION_NOT_FOUND: HttpStatus.NOT_FOUND,
 };
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
@@ -40,11 +44,25 @@ const fieldBody = z
     help: z.string().max(240).nullish(),
     options: z.array(z.string().max(80)).max(40).nullish(),
     settings: z.object({ formats: formats.optional(), maxSizeMb: z.number().int().min(1).max(20).optional(), min: z.number().nullish(), max: z.number().nullish() }).nullish(),
+    employeeTypeIds: z.array(z.uuid()).max(20).nullish(),
   })
-  .meta({ title: "HrField", description: "Campo de uma secção: nome, tipo, obrigatório, instrução, opções (escolhas) e regras (ficheiro: formatos e tamanho; número: mínimo e máximo)." });
+  .meta({
+    title: "HrField",
+    description: "Campo de uma secção: nome, tipo, obrigatório, instrução, opções (escolhas), regras (ficheiro: formatos e tamanho; número: mínimo e máximo) e tipos de funcionário a que se aplica (vazio = todos).",
+  });
 const documentBody = z
-  .object({ name: z.string().min(2).max(80), description: z.string().max(240).nullish(), required: z.boolean().default(false), formats, maxSizeMb: z.number().int().min(1).max(20), multiple: z.boolean().default(false) })
-  .meta({ title: "HrDocumentType", description: "Documento pedido: formatos permitidos, tamanho máximo (MB) e se aceita vários ficheiros." });
+  .object({
+    name: z.string().min(2).max(80),
+    description: z.string().max(240).nullish(),
+    required: z.boolean().default(false),
+    formats,
+    maxSizeMb: z.number().int().min(1).max(20),
+    multiple: z.boolean().default(false),
+    employeeTypeIds: z.array(z.uuid()).max(20).nullish(),
+  })
+  .meta({ title: "HrDocumentType", description: "Documento pedido: formatos permitidos, tamanho máximo (MB), se aceita vários ficheiros e a que tipos de funcionário se aplica (vazio = todos)." });
+const typeBody = z.object({ name: z.string().min(2).max(60), description: z.string().max(240).nullish() }).meta({ title: "HrEmployeeType", description: "Tipo de funcionário (ex.: Docente)." });
+const printQuery = z.object({ version: z.coerce.number().int().min(1).optional(), type: z.uuid().optional() });
 const activeBody = z.object({ active: z.boolean() }).meta({ title: "HrActive" });
 const orderBody = z.object({ ids: z.array(z.uuid()).max(60) }).meta({ title: "HrOrder", description: "Todos os ids, pela nova ordem." });
 const labelsBody = z.object({ labels: z.array(z.string().max(80)).min(1).max(20) }).meta({ title: "HrSuggestions" });
@@ -80,6 +98,56 @@ export class HrSettingsController {
   @ApiOperation({ summary: "Configuração: dados pessoais (fixos), secções com campos, documentos, versões e o que está por publicar" })
   async view(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
     return this.settings.view(this.repo(t), await this.can(t, u));
+  }
+
+  // ---------------------------------------------------------------- tipos de funcionário
+
+  @Post("employee-types")
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Criar tipo de funcionário" })
+  @ApiBody({ schema: openApi(typeBody) })
+  async createType(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(typeBody)) body: z.infer<typeof typeBody>) {
+    return unwrap(await this.settings.createEmployeeType(this.repo(t), this.actor(u), body), HR_HTTP);
+  }
+
+  @Post("employee-types/suggestions")
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Juntar tipos sugeridos (Docente, Administrativo, Auxiliar)" })
+  @ApiBody({ schema: openApi(labelsBody) })
+  async addTypeSuggestions(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(labelsBody)) body: z.infer<typeof labelsBody>) {
+    return unwrap(await this.settings.addSuggestedEmployeeTypes(this.repo(t), this.actor(u), body.labels), HR_HTTP);
+  }
+
+  @Put("employee-types/order")
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Ordem dos tipos de funcionário" })
+  @ApiBody({ schema: openApi(orderBody) })
+  async reorderTypes(@CurrentTenant() t: TenantContext, @Body(new ZodValidationPipe(orderBody)) body: z.infer<typeof orderBody>) {
+    return unwrap(await this.settings.reorderEmployeeTypes(this.repo(t), body.ids), HR_HTTP);
+  }
+
+  @Patch("employee-types/:id")
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Alterar tipo de funcionário" })
+  @ApiBody({ schema: openApi(typeBody) })
+  async updateType(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) typeId: string, @Body(new ZodValidationPipe(typeBody)) body: z.infer<typeof typeBody>) {
+    return unwrap(await this.settings.updateEmployeeType(this.repo(t), this.actor(u), typeId, body), HR_HTTP);
+  }
+
+  @Post("employee-types/:id/active")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Ativar ou desativar tipo de funcionário" })
+  @ApiBody({ schema: openApi(activeBody) })
+  async setTypeActive(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) typeId: string, @Body(new ZodValidationPipe(activeBody)) body: z.infer<typeof activeBody>) {
+    return unwrap(await this.settings.setEmployeeTypeActive(this.repo(t), this.actor(u), typeId, body.active), HR_HTTP);
+  }
+
+  @Delete("employee-types/:id")
+  @RequirePermission("hr.settings.manage")
+  @ApiOperation({ summary: "Eliminar tipo de funcionário (só sem campos/documentos só para ele)", description: "409 EMPLOYEE_TYPE_IN_USE." })
+  async deleteType(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) typeId: string) {
+    return unwrap(await this.settings.deleteEmployeeType(this.repo(t), this.actor(u), typeId), HR_HTTP);
   }
 
   // ---------------------------------------------------------------- secções e campos
@@ -198,5 +266,12 @@ export class HrSettingsController {
   @ApiOperation({ summary: "Publicar a configuração atual como nova versão", description: "Exige hr.settings.manage ou hr.documents.manage. 409 NOTHING_TO_PUBLISH." })
   async publish(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
     return unwrap(await this.settings.publish(this.repo(t), this.actor(u), await this.can(t, u)), HR_HTTP);
+  }
+
+  @Get("print")
+  @RequirePermission("hr.access")
+  @ApiOperation({ summary: "Ficha de inscrição para imprimir (versão publicada, vista por um tipo de funcionário)", description: "?version= (omissão: a última) · ?type= (omissão: todos os campos). 404 VERSION_NOT_FOUND." })
+  async print(@CurrentTenant() t: TenantContext, @Query(new ZodValidationPipe(printQuery)) q: z.infer<typeof printQuery>) {
+    return unwrap(await this.settings.printableForm(this.repo(t), { version: q.version ?? null, typeId: q.type ?? null }), HR_HTTP);
   }
 }
