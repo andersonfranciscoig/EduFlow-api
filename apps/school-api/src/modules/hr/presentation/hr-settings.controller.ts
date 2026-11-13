@@ -42,6 +42,8 @@ export const HR_HTTP: Partial<Record<HrErrorCode, HttpStatus>> = {
   FILE_INVALID: HttpStatus.UNPROCESSABLE_ENTITY,
   FILE_TOO_LARGE: HttpStatus.PAYLOAD_TOO_LARGE,
   FILE_NOT_FOUND: HttpStatus.NOT_FOUND,
+  STORAGE_NOT_CONFIGURED: HttpStatus.CONFLICT,
+  STORAGE_UNAVAILABLE: HttpStatus.BAD_GATEWAY,
 };
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));

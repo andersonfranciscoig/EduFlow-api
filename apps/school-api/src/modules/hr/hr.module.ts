@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { BcryptPasswordHasher } from "../../../../../libs/kernel/src/infrastructure/BcryptPasswordHasher";
@@ -9,17 +9,15 @@ import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infra
 import type { Env } from "../../config/env";
 import { IdentityModule } from "../identity/identity.module";
 import { Employees } from "./application/Employees";
-import type { HrFileStore } from "./application/employee-ports";
 import { HrSettings } from "./application/HrSettings";
 import { Registration } from "./application/Registration";
-import { LocalHrFiles, UploadThingHrFiles } from "./infrastructure/hr-file-store";
+import { HrFileStores } from "./infrastructure/hr-file-store";
 import { EmailRegistrationMailer, employeeMailer } from "./infrastructure/registration-mailer";
 import { ApplicantFormController, EmployeesController } from "./presentation/employees.controller";
 import { HrSettingsController } from "./presentation/hr-settings.controller";
 import { PublicRegistrationController, RegistrationRequestsController } from "./presentation/registration.controller";
 
 const HR_MAILER = Symbol("HrMailer");
-const HR_FILES = Symbol("HrFiles");
 
 /**
  * Contexto "Recursos Humanos" do portal (na BD de cada colégio).
@@ -44,18 +42,21 @@ const HR_FILES = Symbol("HrFiles");
       },
     },
     {
-      // documentos dos funcionários: a app do UploadThing SÓ do RH, cifrados antes de sair
-      provide: HR_FILES,
+      // documentos dos funcionários: na app do UploadThing de CADA colégio, cifrados antes de sair
+      provide: HrFileStores,
       inject: [ConfigService],
-      useFactory: (config: ConfigService<Env, true>): HrFileStore => {
+      useFactory: (config: ConfigService<Env, true>) => {
         const keyFile = config.get("HR_FILES_KEY_FILE", { infer: true });
-        const key = keyFile ? readBackupKey(readFileSync(keyFile, "utf8")) : null;
-        const store =
-          config.get("HR_FILE_STORAGE", { infer: true }) === "uploadthing"
-            ? new UploadThingHrFiles(readFileSync(config.get("HR_UPLOADTHING_TOKEN_FILE", { infer: true })!, "utf8"), key!, config.get("HR_UPLOADTHING_ACL", { infer: true }))
-            : new LocalHrFiles(config.get("HR_STORAGE_DIR", { infer: true }), key);
-        console.log(`[school-api] documentos do RH: ${store.name}`);
-        return store;
+        const sharedFile = config.get("HR_UPLOADTHING_TOKEN_FILE", { infer: true });
+        const stores = new HrFileStores(config.get("HR_FILE_STORAGE", { infer: true }), {
+          localDir: config.get("HR_STORAGE_DIR", { infer: true }),
+          key: keyFile ? readBackupKey(readFileSync(keyFile, "utf8")) : null,
+          acl: config.get("HR_UPLOADTHING_ACL", { infer: true }),
+          sharedToken: sharedFile && existsSync(sharedFile) ? readFileSync(sharedFile, "utf8").trim() : null,
+          tenantPrivateKeyPem: readKeyFile(config.get("TENANT_CREDENTIALS_PRIVATE_KEY_FILE", { infer: true })),
+        });
+        console.log(`[school-api] documentos do RH: ${stores.name}`);
+        return stores;
       },
     },
     {
@@ -66,9 +67,9 @@ const HR_FILES = Symbol("HrFiles");
     },
     {
       provide: Employees,
-      inject: [ConfigService, HR_MAILER, HR_FILES],
-      useFactory: (config: ConfigService<Env, true>, mailer: EmailRegistrationMailer, files: HrFileStore) =>
-        new Employees(files, employeeMailer(mailer), new BcryptPasswordHasher(), uuidGenerator, systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })),
+      inject: [ConfigService, HR_MAILER],
+      useFactory: (config: ConfigService<Env, true>, mailer: EmailRegistrationMailer) =>
+        new Employees(employeeMailer(mailer), new BcryptPasswordHasher(), uuidGenerator, systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })),
     },
   ],
 })

@@ -48,6 +48,7 @@ copy() { mkdir -p "$OUT/$1"; for f in "${@:2}"; do cp "$ALL/$f" "$OUT/$1/$f"; do
 copy platform-api staff-jwt.key staff-jwt.pub customer-jwt.key customer-jwt.pub mfa.key server-credentials.pub support-ticket.key files.key
 copy school-api school-jwt.key school-jwt.pub school-mfa.key tenant-credentials.key support-ticket.pub
 copy provisioner tenant-credentials.pub server-credentials.key backup.key
+copy platform-api tenant-credentials.pub
 chmod -R go-rwx "$OUT"
 
 cat <<'EOF'

@@ -63,8 +63,12 @@ export const envSchema = z
     EMAIL_API_KEY_FILE: z.string().min(1).optional(),
 
     // ---------------------------------------------------------------- documentos do RH
-    /** UploadThing (app SÓ do RH, ficheiros cifrados) ou pasta local (desenvolvimento). */
+    /**
+     * "uploadthing": cada colégio usa a SUA app do UploadThing (configurada no painel; o token
+     * chega selado pelo diretório) — sem app, os envios são recusados. "local": pasta (desenvolvimento).
+     */
     HR_FILE_STORAGE: z.enum(["uploadthing", "local"]).default("local"),
+    /** Opcional: a app partilhada antiga do RH, só para ler/apagar os ficheiros enviados antes. */
     HR_UPLOADTHING_TOKEN_FILE: z.string().min(1).optional(),
     /** O plano grátis do UploadThing só tem "public-read": o conteúdo vai cifrado de qualquer forma. */
     HR_UPLOADTHING_ACL: z.enum(["private", "public-read"]).default("private"),
@@ -73,10 +77,8 @@ export const envSchema = z
     HR_STORAGE_DIR: z.string().min(1).default("storage/hr"),
   })
   .superRefine((env, ctx) => {
-    if (env.HR_FILE_STORAGE === "uploadthing") {
-      for (const k of ["HR_UPLOADTHING_TOKEN_FILE", "HR_FILES_KEY_FILE"] as const) {
-        if (!env[k] || !existsSync(env[k])) ctx.addIssue({ code: "custom", path: [k], message: "obrigatório (ficheiro existente) com HR_FILE_STORAGE=uploadthing" });
-      }
+    if (env.HR_FILE_STORAGE === "uploadthing" && (!env.HR_FILES_KEY_FILE || !existsSync(env.HR_FILES_KEY_FILE))) {
+      ctx.addIssue({ code: "custom", path: ["HR_FILES_KEY_FILE"], message: "obrigatório (ficheiro existente) com HR_FILE_STORAGE=uploadthing" });
     }
     // documentos de funcionários nunca em disco efémero nem sem cifra em produção
     if (env.NODE_ENV === "production" && env.HR_FILE_STORAGE !== "uploadthing") {

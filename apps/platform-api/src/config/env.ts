@@ -20,6 +20,16 @@ export const envSchema = z.object({
   MFA_ENCRYPTION_KEY_FILE: z.string().min(1),
   /** Chave PÚBLICA do provisioner: sela os URLs dos servidores de BD (a plataforma não os consegue abrir). */
   SERVER_CREDENTIALS_PUBLIC_KEY_FILE: z.string().min(1),
+  /**
+   * Chave PÚBLICA das credenciais dos colégios: sela o token do UploadThing de cada colégio
+   * para o school-api (a plataforma sela, mas não consegue abrir). Sem ela não se configura armazenamento.
+   */
+  TENANT_CREDENTIALS_PUBLIC_KEY_FILE: z.string().min(1).optional(),
+  /** Confirmar o token junto do UploadThing ao guardar (false só em testes, sem rede). */
+  STORAGE_VERIFY_TOKEN: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 8),
   DEFAULT_PHONE_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default("244"),
   /** Pasta local: comprovativos antigos (e todos, com FILE_STORAGE=local). */

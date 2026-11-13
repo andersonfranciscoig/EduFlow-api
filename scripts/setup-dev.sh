@@ -128,6 +128,7 @@ CUSTOMER_JWT_PRIVATE_KEY_FILE=secrets/customer-jwt.key
 CUSTOMER_JWT_PUBLIC_KEY_FILE=secrets/customer-jwt.pub
 MFA_ENCRYPTION_KEY_FILE=secrets/mfa.key
 SERVER_CREDENTIALS_PUBLIC_KEY_FILE=secrets/server-credentials.pub
+TENANT_CREDENTIALS_PUBLIC_KEY_FILE=secrets/tenant-credentials.pub
 JWT_EXPIRES_IN_SECONDS=28800
 DEFAULT_PHONE_COUNTRY_CODE="244"
 STORAGE_DIR=./storage/platform

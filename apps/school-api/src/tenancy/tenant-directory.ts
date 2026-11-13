@@ -16,6 +16,8 @@ export interface TenantEntry {
   passwordCiphertext: string;
   /** disable | require | verify-ca | verify-full */
   sslMode: string;
+  /** A app do UploadThing do colégio (token SELADO; abre-se com a chave privada das credenciais). null = por configurar. */
+  storage: { appId: string; tokenSealed: string } | null;
 }
 
 /** Colégio encontrado: revalidado a cada minuto (desativar tem efeito em ≤ 60 s). */
@@ -76,7 +78,7 @@ export class TenantDirectory implements OnModuleDestroy {
         sslMode: true,
         active: true,
         // da tabela schools só pode ler id e logo_url (ver infra/db/grants.sql)
-        school: { select: { logoUrl: true } },
+        school: { select: { logoUrl: true, storage: { select: { appId: true, tokenSealed: true } } } },
       },
     });
     const entry: TenantEntry | null = row?.active
@@ -91,6 +93,7 @@ export class TenantDirectory implements OnModuleDestroy {
           dbUser: row.dbUser,
           passwordCiphertext: row.passwordCiphertext,
           sslMode: row.sslMode,
+          storage: row.school.storage ? { appId: row.school.storage.appId, tokenSealed: row.school.storage.tokenSealed } : null,
         }
       : null;
 

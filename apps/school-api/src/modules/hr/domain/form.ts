@@ -43,7 +43,9 @@ export type HrErrorCode =
   | "INCOMPLETE"
   | "FILE_INVALID"
   | "FILE_TOO_LARGE"
-  | "FILE_NOT_FOUND";
+  | "FILE_NOT_FOUND"
+  | "STORAGE_NOT_CONFIGURED"
+  | "STORAGE_UNAVAILABLE";
 
 export type HrError = DomainError<HrErrorCode>;
 export const hrError = (code: HrErrorCode, message: string, meta?: Record<string, unknown>): HrError => new DomainError(code, message, meta);

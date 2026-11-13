@@ -223,9 +223,36 @@ model School {
   allocations  DatabaseAllocation[]
   backups      DatabaseBackup[]
   restores     DatabaseRestore[]
+  storage      SchoolStorage?
 
   @@index([status])
   @@map("schools")
+}
+
+/// A app do UploadThing do colégio. Token selado para o school-api + cifrado para a plataforma (uso).
+model SchoolStorage {
+  schoolId        String    @id @map("school_id") @db.Uuid
+  school          School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  provider        String    @default("UPLOADTHING")
+  appId           String    @unique @map("app_id")
+  keyHint         String    @map("key_hint")
+  /// só o school-api o abre (chave privada das credenciais dos colégios)
+  tokenSealed     String    @map("token_sealed")
+  /// só a plataforma o decifra (para consultar o uso)
+  tokenCiphertext String    @map("token_ciphertext")
+  /// FREE | PAID | UNKNOWN
+  plan            String    @default("UNKNOWN")
+  usedBytes       BigInt?   @map("used_bytes")
+  appBytes        BigInt?   @map("app_bytes")
+  limitBytes      BigInt?   @map("limit_bytes")
+  filesCount      Int?      @map("files_count")
+  usageCheckedAt  DateTime? @map("usage_checked_at")
+  usageError      String?   @map("usage_error")
+  configuredById  String?   @map("configured_by_id") @db.Uuid
+  createdAt       DateTime  @map("created_at")
+  updatedAt       DateTime  @map("updated_at")
+
+  @@map("school_storage")
 }
 
 // =============================================================================

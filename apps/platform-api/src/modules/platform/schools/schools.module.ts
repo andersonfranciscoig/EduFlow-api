@@ -43,6 +43,9 @@ import { LocalLogoStorage, UploadThingLogoStorage } from "./infrastructure/logo-
 import { EncryptedUploadThingFileStorage } from "./infrastructure/proof-storage";
 import { readBackupKey } from "../../../../../../libs/kernel/src/infrastructure/backup-crypto";
 import { PrismaSchoolRepository } from "./infrastructure/PrismaSchoolRepository";
+import { SchoolStorage } from "./application/SchoolStorage";
+import { PrismaStorageRepository, StorageTokenVault, UploadThingUsageProbe } from "./infrastructure/school-storage";
+import { SchoolStorageController } from "./presentation/http/school-storage.controller";
 import { SchoolOwnerGuard } from "./presentation/http/school-auth";
 import {
   SchoolLogoFilesController,
@@ -73,7 +76,7 @@ import {
       }),
     }),
   ],
-  controllers: [SchoolOnboardingController, SchoolLogoFilesController, SchoolPortalController, SchoolsAdminController],
+  controllers: [SchoolOnboardingController, SchoolLogoFilesController, SchoolPortalController, SchoolsAdminController, SchoolStorageController],
   providers: [
     { provide: SHARED_TOKENS.Clock, useValue: systemClock },
     { provide: SHARED_TOKENS.IdGenerator, useValue: uuidGenerator },
@@ -193,6 +196,16 @@ import {
       inject: [T.SchoolRepository, T.SchoolDatabases, T.SupportTicketIssuer, T.SchoolSettings, SHARED_TOKENS.Clock],
       useFactory: (repo: SchoolRepository, databases: SchoolDatabasePort, tickets: SupportTicketIssuer, settings: SchoolSettings, clock: Clock) =>
         new SchoolSupport(repo, databases, tickets, settings, clock),
+    },
+    {
+      // a app do UploadThing de cada colégio (token selado para o school-api + cifrado para o uso)
+      provide: SchoolStorage,
+      inject: [PlatformPrismaService, ConfigService],
+      useFactory: (prisma: PlatformPrismaService, config: ConfigService<Env, true>) => {
+        const pubFile = config.get("TENANT_CREDENTIALS_PUBLIC_KEY_FILE", { infer: true });
+        const vault = new StorageTokenVault(pubFile ? readKeyFile(pubFile) : null, readKeyFile(config.get("MFA_ENCRYPTION_KEY_FILE", { infer: true })));
+        return new SchoolStorage(new PrismaStorageRepository(prisma), vault, new UploadThingUsageProbe(), systemClock, config.get("STORAGE_VERIFY_TOKEN", { infer: true }));
+      },
     },
     SchoolOwnerGuard,
     EmailDeadlineSweeper,

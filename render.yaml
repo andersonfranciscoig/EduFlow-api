@@ -34,6 +34,8 @@ services:
       - { key: CUSTOMER_JWT_PUBLIC_KEY_FILE, value: /etc/secrets/customer-jwt.pub }
       - { key: MFA_ENCRYPTION_KEY_FILE, value: /etc/secrets/mfa.key }
       - { key: SERVER_CREDENTIALS_PUBLIC_KEY_FILE, value: /etc/secrets/server-credentials.pub }
+      # sela o token do UploadThing de cada colégio para o school-api (só a chave PÚBLICA)
+      - { key: TENANT_CREDENTIALS_PUBLIC_KEY_FILE, value: /etc/secrets/tenant-credentials.pub }
       - { key: SUPPORT_TICKET_PRIVATE_KEY_FILE, value: /etc/secrets/support-ticket.key }
       # o disco do plano gratuito apaga-se a cada deploy: logótipos no UploadThing
       - { key: LOGO_STORAGE, value: uploadthing }
@@ -78,8 +80,8 @@ services:
       - { key: EMAIL_FROM, sync: false }
       - { key: EMAIL_REPLY_TO, sync: false }
       - { key: DEFAULT_PHONE_COUNTRY_CODE, value: "244" }
-      # documentos dos funcionários: app do UploadThing SÓ do RH, cifrados (AES-256-GCM) antes de sair
-      # Secret Files: hr-uploadthing.token e hr-files.key (de secrets-prod/school-api/)
+      # documentos dos funcionários: na app do UploadThing de CADA colégio (configurada no painel), cifrados (AES-256-GCM)
+      # Secret Files: hr-files.key (obrigatório) e hr-uploadthing.token (opcional: só para ler ficheiros antigos da app partilhada)
       - { key: HR_FILE_STORAGE, value: uploadthing }
       - { key: HR_UPLOADTHING_TOKEN_FILE, value: /etc/secrets/hr-uploadthing.token }
       - { key: HR_UPLOADTHING_ACL, value: public-read }
