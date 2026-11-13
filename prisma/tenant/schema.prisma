@@ -491,7 +491,72 @@ model HrEmployeeType {
   createdAt   DateTime @map("created_at")
   updatedAt   DateTime @map("updated_at")
 
+  requests EmployeeRegistrationRequest[]
+  invites  EmployeeRegistrationInvite[]
+
   @@map("hr_employee_types")
+}
+
+/// Pedido de cadastro (página pública do colégio). PENDING → APPROVED | REJECTED | CANCELLED.
+model EmployeeRegistrationRequest {
+  id              String          @id @db.Uuid
+  fullName        String          @map("full_name")
+  email           String
+  phone           String?
+  passwordHash    String          @map("password_hash")
+  employeeTypeId  String?         @map("employee_type_id") @db.Uuid
+  employeeType    HrEmployeeType? @relation(fields: [employeeTypeId], references: [id], onDelete: SetNull)
+  status          String          @default("PENDING")
+  termsAcceptedAt DateTime        @map("terms_accepted_at")
+  ip              String?
+  userAgent       String?         @map("user_agent")
+  decidedById     String?         @map("decided_by_id") @db.Uuid
+  decidedAt       DateTime?       @map("decided_at")
+  decisionReason  String?         @map("decision_reason")
+  createdAt       DateTime        @map("created_at")
+  updatedAt       DateTime        @map("updated_at")
+
+  invites EmployeeRegistrationInvite[]
+
+  @@index([status, createdAt])
+  @@map("employee_registration_requests")
+}
+
+/// Convite para o formulário: só o SHA-256 do token; validade; reenviar revoga o anterior.
+model EmployeeRegistrationInvite {
+  id             String                      @id @db.Uuid
+  requestId      String                      @map("request_id") @db.Uuid
+  request        EmployeeRegistrationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  tokenHash      String                      @unique @map("token_hash")
+  employeeTypeId String?                     @map("employee_type_id") @db.Uuid
+  employeeType   HrEmployeeType?             @relation(fields: [employeeTypeId], references: [id], onDelete: SetNull)
+  expiresAt      DateTime                    @map("expires_at")
+  sentAt         DateTime?                   @map("sent_at")
+  sendError      String?                     @map("send_error")
+  revokedAt      DateTime?                   @map("revoked_at")
+  failedAttempts Int                         @default(0) @map("failed_attempts")
+  lockedUntil    DateTime?                   @map("locked_until")
+  lastUsedAt     DateTime?                   @map("last_used_at")
+  createdById    String?                     @map("created_by_id") @db.Uuid
+  createdAt      DateTime                    @map("created_at")
+
+  @@map("employee_registration_invites")
+}
+
+/// Quem decidiu o quê (pedidos e cadastros): estado anterior, novo, justificação.
+model EmployeeApprovalHistory {
+  id          String   @id @db.Uuid
+  subjectType String   @map("subject_type")
+  subjectId   String   @map("subject_id") @db.Uuid
+  fromStatus  String?  @map("from_status")
+  toStatus    String   @map("to_status")
+  actorId     String?  @map("actor_id") @db.Uuid
+  actorName   String?  @map("actor_name")
+  reason      String?
+  createdAt   DateTime @map("created_at")
+
+  @@index([subjectType, subjectId, createdAt])
+  @@map("employee_approval_history")
 }
 
 /// Documento pedido aos funcionários.
