@@ -26,6 +26,10 @@ export const HR_HTTP: Partial<Record<HrErrorCode, HttpStatus>> = {
   EMPLOYEE_TYPE_EXISTS: HttpStatus.CONFLICT,
   EMPLOYEE_TYPE_IN_USE: HttpStatus.CONFLICT,
   VERSION_NOT_FOUND: HttpStatus.NOT_FOUND,
+  REQUEST_NOT_FOUND: HttpStatus.NOT_FOUND,
+  INVALID_STATE: HttpStatus.CONFLICT,
+  FORM_NOT_PUBLISHED: HttpStatus.CONFLICT,
+  EMAIL_NOT_SENT: HttpStatus.BAD_GATEWAY,
 };
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));

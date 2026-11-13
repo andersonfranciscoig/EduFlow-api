@@ -25,7 +25,12 @@ export type HrErrorCode =
   | "EMPLOYEE_TYPE_NOT_FOUND"
   | "EMPLOYEE_TYPE_EXISTS"
   | "EMPLOYEE_TYPE_IN_USE"
-  | "VERSION_NOT_FOUND";
+  | "VERSION_NOT_FOUND"
+  // pedidos de cadastro e convites
+  | "REQUEST_NOT_FOUND"
+  | "INVALID_STATE"
+  | "FORM_NOT_PUBLISHED"
+  | "EMAIL_NOT_SENT";
 
 export type HrError = DomainError<HrErrorCode>;
 export const hrError = (code: HrErrorCode, message: string, meta?: Record<string, unknown>): HrError => new DomainError(code, message, meta);
