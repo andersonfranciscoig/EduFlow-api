@@ -26,7 +26,13 @@ export type IdentityErrorCode =
   | "INVALID_SUPPORT_TICKET"
   | "SUPPORT_TICKET_USED"
   | "SUPPORT_NOT_AUTHORIZED"
-  | "SUPPORT_FORBIDDEN";
+  | "SUPPORT_FORBIDDEN"
+  // utilizadores do colégio (gestão pelo responsável)
+  | "FORBIDDEN"
+  | "INVALID_INPUT"
+  | "INVALID_PERMISSION"
+  | "USER_NOT_FOUND"
+  | "EMAIL_TAKEN";
 
 export type IdentityError = DomainError<IdentityErrorCode>;
 

@@ -36,6 +36,7 @@ import {
   verifyCodeSchema,
 } from "./auth.schemas";
 import { Client, orThrow } from "./http-support";
+import { permissionsOf } from "./permissions";
 import { CurrentUser, SchoolAuth, SupportMayCall } from "./school-auth";
 
 const MINUTE = 60_000;
@@ -168,10 +169,12 @@ export class AuthController {
   @ApiOperation({ summary: "Perfil do utilizador autenticado (ou da sessão de suporte EduFlow)" })
   @ApiResponse({ status: 401, description: "Sessão inválida, terminada, expirada ou de outro colégio", schema: error })
   async me(@CurrentTenant() tenant: TenantContext, @CurrentUser() user: SchoolAccess) {
-    if (user.support) return supportProfile(user, tenant);
+    // permissões efetivas (o portal mostra só o que se pode usar; a API volta a confirmar)
+    const permissions = await permissionsOf(tenant.db, user);
+    if (user.support) return { ...supportProfile(user, tenant), permissions };
     const profile = await this.profile.execute(this.scopes.for(tenant), user.id);
     if (!profile) throw new NotFoundException({ code: "ACCOUNT_NOT_FOUND", message: "Conta não encontrada." });
-    return { ...profile, support: null };
+    return { ...profile, permissions, support: null };
   }
 
   @Post("sign-out")

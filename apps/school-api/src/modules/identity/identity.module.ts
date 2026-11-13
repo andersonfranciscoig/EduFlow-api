@@ -36,6 +36,10 @@ import { TenantScopes } from "./infrastructure/tenant-scopes";
 import { AuthController } from "./presentation/http/auth.controller";
 import { SchoolAuthGuard } from "./presentation/http/school-auth";
 import { SupportAccessController } from "./presentation/http/support.controller";
+import { ManageUsers } from "./application/ManageUsers";
+import { EmailUserInviteMailer } from "./infrastructure/user-invite-mailer";
+import { PermissionsGuard } from "./presentation/http/permissions";
+import { UsersController } from "./presentation/http/users.controller";
 
 /**
  * Contexto "Identity" do portal do colégio — composition root.
@@ -54,7 +58,7 @@ import { SupportAccessController } from "./presentation/http/support.controller"
       }),
     }),
   ],
-  controllers: [AuthController, SupportAccessController],
+  controllers: [AuthController, SupportAccessController, UsersController],
   providers: [
     // --- portas → adaptadores
     { provide: T.Clock, useValue: systemClock },
@@ -135,6 +139,18 @@ import { SupportAccessController } from "./presentation/http/support.controller"
       ) => new AccountRecovery(challenges, mailer, hasher, security, ids, clock, settings),
     },
     { provide: GetProfile, useFactory: () => new GetProfile() },
+    {
+      // utilizadores do colégio (convites e permissões) — só o responsável
+      provide: ManageUsers,
+      inject: [ConfigService, T.IdGenerator, T.Clock],
+      useFactory: (config: ConfigService<Env, true>, ids: IdGenerator, clock: Clock) => {
+        const keyFile = config.get("EMAIL_API_KEY_FILE", { infer: true });
+        const settings = { from: config.get("EMAIL_FROM", { infer: true }), fromName: config.get("EMAIL_FROM_NAME", { infer: true }), replyTo: config.get("EMAIL_REPLY_TO", { infer: true }) };
+        const mailer = config.get("EMAIL_PROVIDER", { infer: true }) === "brevo" && keyFile ? new BrevoMailer(readKeyFile(keyFile), settings) : new ConsoleMailer();
+        return new ManageUsers(new EmailUserInviteMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })), ids, clock);
+      },
+    },
+    PermissionsGuard,
 
     // --- suporte EduFlow (bilhetes da plataforma: aqui só a chave PÚBLICA)
     {
@@ -167,6 +183,6 @@ import { SupportAccessController } from "./presentation/http/support.controller"
     // --- guard (exportado para os próximos contextos do portal: turmas, alunos…)
     SchoolAuthGuard,
   ],
-  exports: [T.AccessTokenService, T.SupportTokenService, SchoolSecurity, SupportAccess, TenantScopes, SchoolAuthGuard],
+  exports: [T.AccessTokenService, T.SupportTokenService, SchoolSecurity, SupportAccess, TenantScopes, SchoolAuthGuard, PermissionsGuard],
 })
 export class IdentityModule {}

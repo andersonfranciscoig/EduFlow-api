@@ -75,10 +75,24 @@ model SchoolUser {
   createdAt                  DateTime         @default(now()) @map("created_at")
   updatedAt                  DateTime         @updatedAt @map("updated_at")
 
-  sessions SchoolSession[]
-  codes    EmailCode[]
+  sessions    SchoolSession[]
+  codes       EmailCode[]
+  permissions SchoolUserPermission[]
 
   @@map("school_users")
+}
+
+/// Permissão granular de um utilizador (ex.: "hr.access"). O responsável tem todas, sem linhas.
+model SchoolUserPermission {
+  userId      String     @map("user_id") @db.Uuid
+  user        SchoolUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission  String
+  grantedById String?    @map("granted_by_id") @db.Uuid
+  grantedAt   DateTime   @map("granted_at")
+
+  @@id([userId, permission])
+  @@index([permission])
+  @@map("school_user_permissions")
 }
 
 /// Sessão aberta depois da 2FA. Revogar invalida o token de imediato.
@@ -422,6 +436,76 @@ model FeePlan {
   updatedAt      DateTime     @map("updated_at")
 
   @@map("fee_plans")
+}
+
+// =============================================================================
+//  RECURSOS HUMANOS — configuração do cadastro de funcionários
+// =============================================================================
+
+/// Secção configurável do cadastro (ACADEMIC | PROFESSIONAL).
+model HrFormSection {
+  key         String   @id
+  title       String
+  description String?
+  repeatable  Boolean  @default(false)
+  entryLabel  String   @map("entry_label")
+  maxEntries  Int      @default(10) @map("max_entries")
+  position    Int
+  updatedAt   DateTime @map("updated_at")
+
+  fields HrFormField[]
+
+  @@map("hr_form_sections")
+}
+
+/// Campo pedido numa secção (tipo, obrigatório, ajuda, opções, regras).
+model HrFormField {
+  id         String        @id @db.Uuid
+  sectionKey String        @map("section")
+  section    HrFormSection @relation(fields: [sectionKey], references: [key], onDelete: Restrict)
+  label      String
+  /// TEXT | LONG_TEXT | NUMBER | DATE | EMAIL | PHONE | SELECT | MULTI_SELECT | BOOLEAN | FILE
+  type       String
+  required   Boolean       @default(false)
+  help       String?
+  options    Json          @default("[]")
+  settings   Json          @default("{}")
+  position   Int
+  active     Boolean       @default(true)
+  createdAt  DateTime      @map("created_at")
+  updatedAt  DateTime      @map("updated_at")
+
+  @@index([sectionKey, position])
+  @@map("hr_form_fields")
+}
+
+/// Documento pedido aos funcionários.
+model HrDocumentType {
+  id          String   @id @db.Uuid
+  name        String
+  description String?
+  required    Boolean  @default(false)
+  /// pdf, jpg, png, webp, doc, docx
+  formats     String[]
+  maxSizeMb   Int      @default(5) @map("max_size_mb")
+  multiple    Boolean  @default(false)
+  position    Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @map("created_at")
+  updatedAt   DateTime @map("updated_at")
+
+  @@map("hr_document_types")
+}
+
+/// Versão publicada da configuração (fotografia em JSON). Os cadastros ficam presos à sua versão.
+model HrFormVersion {
+  id            String   @id @db.Uuid
+  number        Int      @unique
+  snapshot      Json
+  publishedById String?  @map("published_by_id") @db.Uuid
+  publishedAt   DateTime @map("published_at")
+
+  @@map("hr_form_versions")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida

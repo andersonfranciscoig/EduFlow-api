@@ -31,6 +31,11 @@ const STATUS: Record<IdentityErrorCode, HttpStatus> = {
   SUPPORT_TICKET_USED: HttpStatus.CONFLICT,
   SUPPORT_NOT_AUTHORIZED: HttpStatus.FORBIDDEN,
   SUPPORT_FORBIDDEN: HttpStatus.FORBIDDEN,
+  FORBIDDEN: HttpStatus.FORBIDDEN,
+  INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
+  INVALID_PERMISSION: HttpStatus.UNPROCESSABLE_ENTITY,
+  USER_NOT_FOUND: HttpStatus.NOT_FOUND,
+  EMAIL_TAKEN: HttpStatus.CONFLICT,
 };
 
 /** Desembrulha o Result do caso de uso ou lança o erro HTTP correspondente. */
