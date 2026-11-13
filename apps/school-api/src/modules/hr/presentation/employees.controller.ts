@@ -34,6 +34,7 @@ import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/s
 import { type Editor, Employees } from "../application/Employees";
 import type { EmployeeRow } from "../application/employee-ports";
 import { hrError } from "../domain/form";
+import { HrFileStores } from "../infrastructure/hr-file-store";
 import { PrismaApplicantAccess, PrismaEmployeeRepository } from "../infrastructure/prisma-employees";
 import { PrismaHrSettingsRepository } from "../infrastructure/prisma-hr-settings";
 import { PrismaRegistrationRepository } from "../infrastructure/prisma-registration";
@@ -103,7 +104,10 @@ function sendFile(res: Response, f: { fileName: string; mimeType: string; conten
 @Controller("v1/public/hr/cadastro")
 @UseGuards(TenantGuard)
 export class ApplicantFormController {
-  constructor(private readonly employees: Employees) {}
+  constructor(
+    private readonly employees: Employees,
+    private readonly stores: HrFileStores,
+  ) {}
 
   private repos(t: TenantContext) {
     return { repo: new PrismaEmployeeRepository(t.db), access: new PrismaApplicantAccess(t.db) };
@@ -146,7 +150,7 @@ export class ApplicantFormController {
   @ApiOperation({ summary: "O meu cadastro: formulário da versão, passos, respostas, ficheiros e o que falta" })
   async view(@CurrentTenant() t: TenantContext, @Headers(SESSION_HEADER) session?: string) {
     const { e } = await this.me(t, session);
-    return { school: t.entry.schoolName, employee: this.employees.view(e) };
+    return { school: t.entry.schoolName, employee: this.employees.view(e), storageReady: this.stores.for(t.entry).ready };
   }
 
   @Put("steps/:step")
@@ -165,21 +169,21 @@ export class ApplicantFormController {
   @ApiOperation({ summary: "Enviar um ficheiro (fotografia, documento pedido ou campo de ficheiro)", description: "O formato confirma-se pelos bytes; cifrado antes de ir para o armazenamento." })
   async upload(@CurrentTenant() t: TenantContext, @UploadedFile() file: Upload, @Body(new ZodValidationPipe(uploadBody)) body: z.infer<typeof uploadBody>, @Headers(SESSION_HEADER) session?: string) {
     const { repo, e } = await this.me(t, session);
-    return unwrap(await this.employees.upload(repo, e, { kind: "applicant" }, { ...body, file }), HR_HTTP);
+    return unwrap(await this.employees.upload(repo, this.stores.for(t.entry), e, { kind: "applicant" }, { ...body, file }), HR_HTTP);
   }
 
   @Get("documents/:docId")
   @ApiOperation({ summary: "Ver um ficheiro do meu cadastro" })
   async file(@CurrentTenant() t: TenantContext, @Param("docId", id) docId: string, @Res({ passthrough: true }) res: Response, @Headers(SESSION_HEADER) session?: string) {
     const { e } = await this.me(t, session);
-    return sendFile(res, unwrap(await this.employees.readFile(e, docId), HR_HTTP));
+    return sendFile(res, unwrap(await this.employees.readFile(this.stores.for(t.entry), e, docId), HR_HTTP));
   }
 
   @Delete("documents/:docId")
   @ApiOperation({ summary: "Retirar um ficheiro do meu cadastro" })
   async remove(@CurrentTenant() t: TenantContext, @Param("docId", id) docId: string, @Headers(SESSION_HEADER) session?: string) {
     const { repo, e } = await this.me(t, session);
-    return unwrap(await this.employees.removeFile(repo, e, { kind: "applicant" }, docId), HR_HTTP);
+    return unwrap(await this.employees.removeFile(repo, this.stores.for(t.entry), e, { kind: "applicant" }, docId), HR_HTTP);
   }
 
   @Post("submit")
@@ -189,7 +193,7 @@ export class ApplicantFormController {
   @ApiBody({ schema: openApi(revisionBody) })
   async submit(@CurrentTenant() t: TenantContext, @Body(new ZodValidationPipe(revisionBody)) body: z.infer<typeof revisionBody>, @Headers(SESSION_HEADER) session?: string) {
     const { repo, e } = await this.me(t, session);
-    return unwrap(await this.employees.submit(repo, e, { kind: "applicant" }, school(t), body), HR_HTTP);
+    return unwrap(await this.employees.submit(repo, this.stores.for(t.entry), e, { kind: "applicant" }, school(t), body), HR_HTTP);
   }
 }
 
@@ -203,7 +207,10 @@ export class ApplicantFormController {
 @Controller("v1/hr/employees")
 @UseGuards(TenantGuard, SchoolAuthGuard)
 export class EmployeesController {
-  constructor(private readonly employees: Employees) {}
+  constructor(
+    private readonly employees: Employees,
+    private readonly stores: HrFileStores,
+  ) {}
 
   private repo(t: TenantContext) {
     return new PrismaEmployeeRepository(t.db);
@@ -244,7 +251,7 @@ export class EmployeesController {
   @RequirePermission("hr.employees.view")
   @ApiOperation({ summary: "Cadastro completo: dados, ficheiros, o que falta e histórico" })
   async detail(@CurrentTenant() t: TenantContext, @Param("id", id) employeeId: string) {
-    return unwrap(await this.employees.detail(this.repo(t), employeeId), HR_HTTP);
+    return { ...unwrap(await this.employees.detail(this.repo(t), employeeId), HR_HTTP), storageReady: this.stores.for(t.entry).ready };
   }
 
   @Put(":id/steps/:step")
@@ -263,7 +270,7 @@ export class EmployeesController {
   @ApiOperation({ summary: "Juntar um ficheiro ao cadastro (RH)" })
   async upload(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string, @UploadedFile() file: Upload, @Body(new ZodValidationPipe(uploadBody)) body: z.infer<typeof uploadBody>) {
     const { repo, e } = await this.load(t, employeeId);
-    return unwrap(await this.employees.upload(repo, e, await this.editor(t, u, e), { ...body, file }), HR_HTTP);
+    return unwrap(await this.employees.upload(repo, this.stores.for(t.entry), e, await this.editor(t, u, e), { ...body, file }), HR_HTTP);
   }
 
   @Get(":id/documents/:docId")
@@ -271,7 +278,7 @@ export class EmployeesController {
   @ApiOperation({ summary: "Ver um ficheiro do cadastro (decifrado pela API; nunca há link direto)" })
   async file(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string, @Param("docId", id) docId: string, @Res({ passthrough: true }) res: Response) {
     const { repo, e } = await this.load(t, employeeId);
-    const f = unwrap(await this.employees.readFile(e, docId), HR_HTTP);
+    const f = unwrap(await this.employees.readFile(this.stores.for(t.entry), e, docId), HR_HTTP);
     await repo.record("HR_EMPLOYEE_FILE_VIEWED", e.id, u.support ? null : u.id, { docId }, new Date());
     return sendFile(res, f);
   }
@@ -281,7 +288,7 @@ export class EmployeesController {
   @ApiOperation({ summary: "Retirar um ficheiro do cadastro (RH)" })
   async remove(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string, @Param("docId", id) docId: string) {
     const { repo, e } = await this.load(t, employeeId);
-    return unwrap(await this.employees.removeFile(repo, e, await this.editor(t, u, e), docId), HR_HTTP);
+    return unwrap(await this.employees.removeFile(repo, this.stores.for(t.entry), e, await this.editor(t, u, e), docId), HR_HTTP);
   }
 
   @Post(":id/submit")
@@ -291,7 +298,7 @@ export class EmployeesController {
   @ApiBody({ schema: openApi(revisionBody) })
   async submit(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string, @Body(new ZodValidationPipe(revisionBody)) body: z.infer<typeof revisionBody>) {
     const { repo, e } = await this.load(t, employeeId);
-    return unwrap(await this.employees.submit(repo, e, await this.editor(t, u, e), school(t), body), HR_HTTP);
+    return unwrap(await this.employees.submit(repo, this.stores.for(t.entry), e, await this.editor(t, u, e), school(t), body), HR_HTTP);
   }
 
   @Post(":id/approve")

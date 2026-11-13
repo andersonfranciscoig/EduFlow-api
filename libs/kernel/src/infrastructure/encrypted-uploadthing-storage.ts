@@ -37,6 +37,8 @@ export class EncryptedUploadThingFileStorage implements FileStorage {
     private readonly key: Buffer,
     private readonly acl: "private" | "public-read",
     private readonly legacy?: FileStorage,
+    /** distingue apps diferentes na mesma BD (ex.: "uts:" = app do próprio colégio) */
+    private readonly prefix: string = UT_PREFIX,
   ) {
     // "None": o SDK escreveria o pedido inteiro (URL assinado) no log
     this.api = new UTApi({ token: token.trim(), logLevel: "None" });
@@ -52,15 +54,15 @@ export class EncryptedUploadThingFileStorage implements FileStorage {
       if (!result?.data) throw new Error(`UploadThing: ${redactSecrets(result?.error?.message ?? "sem resposta")}`);
       return result.data.key;
     });
-    return { key: `${UT_PREFIX}${key}`, fileName: file.fileName, mimeType: file.mimeType, size: file.content.length };
+    return { key: `${this.prefix}${key}`, fileName: file.fileName, mimeType: file.mimeType, size: file.content.length };
   }
 
   async read(key: string): Promise<Buffer> {
-    if (!key.startsWith(UT_PREFIX)) {
+    if (!key.startsWith(this.prefix)) {
       if (!this.legacy) throw new Error("Ficheiro fora do UploadThing");
       return this.legacy.read(key);
     }
-    const utKey = key.slice(UT_PREFIX.length);
+    const utKey = key.slice(this.prefix.length);
     const sealed = await retry(async () => {
       const { ufsUrl } = await withoutSecrets("UploadThing", () => this.api.generateSignedURL(utKey, { expiresIn: 60 }));
       const res = await fetch(ufsUrl, { signal: AbortSignal.timeout(60_000) }).catch((e: Error) => {
@@ -74,8 +76,8 @@ export class EncryptedUploadThingFileStorage implements FileStorage {
 
   /** Apaga UM ficheiro pela chave exata (nunca por padrão). */
   async remove(key: string): Promise<void> {
-    if (!key.startsWith(UT_PREFIX)) return;
-    const utKey = key.slice(UT_PREFIX.length);
+    if (!key.startsWith(this.prefix)) return;
+    const utKey = key.slice(this.prefix.length);
     await retry(() => withoutSecrets("UploadThing", () => this.api.deleteFiles(utKey)));
   }
 }

@@ -161,8 +161,10 @@ export interface ApplicantAccessRepository {
   markExpiredNotified(inviteId: string, now: Date): Promise<boolean>;
 }
 
-/** Ficheiros do RH: cifrados antes de sair da API (UploadThing próprio do RH, ou disco em dev). */
+/** Ficheiros do RH: cifrados antes de sair da API (app do UploadThing do colégio, ou disco em dev). */
 export interface HrFileStore {
+  /** false = o colégio ainda não tem armazenamento configurado (envios recusados) */
+  readonly ready: boolean;
   save(folder: string, file: { fileName: string; mimeType: string; content: Buffer }): Promise<{ key: string }>;
   read(key: string): Promise<Buffer>;
   remove(key: string): Promise<void>;

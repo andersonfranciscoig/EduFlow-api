@@ -87,8 +87,7 @@ const refs = (e: EmployeeRow): DocRef[] => e.documents.map((d) => ({ id: d.id, s
  */
 export class Employees {
   constructor(
-    private readonly files: HrFileStore,
-    private readonly mailer: EmployeeMailer,
+   private readonly mailer: EmployeeMailer,
     private readonly hasher: PasswordHasher,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
@@ -299,9 +298,10 @@ export class Employees {
   // ================================================================ ficheiros
 
   /** Recebe um ficheiro: confirma o formato pelos bytes, o tamanho e se o documento existe nesta versão. */
-  async upload(repo: EmployeeRepository, e: EmployeeRow, editor: Editor, input: { slot: string; itemId?: string | null; file?: { originalname: string; buffer: Buffer } | null }) {
+  async upload(repo: EmployeeRepository, files: HrFileStore, e: EmployeeRow, editor: Editor, input: { slot: string; itemId?: string | null; file?: { originalname: string; buffer: Buffer } | null }) {
     const editable = editor.kind === "applicant" ? APPLICANT_EDITABLE.includes(e.status) : e.status !== "TERMINATED" && e.status !== "REJECTED";
     if (!editable) return fail(hrError("INVALID_STATE", "Este cadastro já não aceita ficheiros."));
+    if (!files.ready) return fail(hrError("STORAGE_NOT_CONFIGURED", "O envio de ficheiros ainda não está disponível neste colégio (falta configurar o armazenamento). Fale com a EduFlow."));
     if (!input.file?.buffer?.length) return fail(hrError("FILE_INVALID", "Escolha um ficheiro."));
     if (e.documents.length >= MAX_FILES) return fail(hrError("LIMIT_REACHED", `No máximo ${MAX_FILES} ficheiros por cadastro.`));
 
@@ -332,7 +332,13 @@ export class Employees {
     }
 
     const fileName = safeFileName(originalname, format);
-    const stored = await this.files.save(`hr-${e.id}`, { fileName, mimeType: FORMAT_MIME[format], content: buffer });
+    let stored: { key: string };
+    try {
+      stored = await files.save(`hr-${e.id}`, { fileName, mimeType: FORMAT_MIME[format], content: buffer });
+    } catch (err) {
+      console.error(`[hr] não foi possível guardar um ficheiro do cadastro ${e.id}: ${err instanceof Error ? err.message.slice(0, 200) : "erro"}`);
+      return fail(hrError("STORAGE_UNAVAILABLE", "Não foi possível guardar o ficheiro agora (ligação ao armazenamento). Tente de novo dentro de instantes."));
+    }
     const now = this.clock.now();
     const doc = {
       id: this.ids.next(),
@@ -348,38 +354,44 @@ export class Employees {
       now,
     };
     // substitui (fotografia, documento de um só ficheiro): primeiro sai o antigo da BD
-    for (const old of rules.replace) await this.dropDocument(repo, e.id, old.id);
+    for (const old of rules.replace) await this.dropDocument(repo, files, e.id, old.id);
     await repo.addDocument(e.id, doc);
     await repo.record("HR_EMPLOYEE_FILE_ADDED", e.id, editor.kind === "hr" ? editor.actor.id : null, { slot, itemId: doc.itemId, size: doc.size, format }, now);
     return ok(documentDto({ ...doc, createdAt: now }));
   }
 
-  private async dropDocument(repo: EmployeeRepository, employeeId: string, docId: string) {
+  private async dropDocument(repo: EmployeeRepository, files: HrFileStore, employeeId: string, docId: string) {
     const removed = await repo.removeDocument(employeeId, docId);
     // o ficheiro externo sai depois; se falhar fica órfão mas ilegível (cifrado)
-    if (removed) await this.quietly(() => this.files.remove(removed.storageKey));
+    if (removed) await this.quietly(() => files.remove(removed.storageKey));
     return removed;
   }
 
-  async removeFile(repo: EmployeeRepository, e: EmployeeRow, editor: Editor, docId: string) {
+  async removeFile(repo: EmployeeRepository, files: HrFileStore, e: EmployeeRow, editor: Editor, docId: string) {
     const editable = editor.kind === "applicant" ? APPLICANT_EDITABLE.includes(e.status) : e.status !== "TERMINATED" && e.status !== "REJECTED";
     if (!editable) return fail(hrError("INVALID_STATE", "Este cadastro já não aceita alterações."));
-    const removed = await this.dropDocument(repo, e.id, docId);
+    const removed = await this.dropDocument(repo, files, e.id, docId);
     if (!removed) return fail(hrError("FILE_NOT_FOUND", "Ficheiro não encontrado."));
     await repo.record("HR_EMPLOYEE_FILE_REMOVED", e.id, editor.kind === "hr" ? editor.actor.id : null, { slot: removed.slot, itemId: removed.itemId }, this.clock.now());
     return ok({ removed: true });
   }
 
   /** O conteúdo de um ficheiro DESTE cadastro (decifrado aqui; nunca há link direto). */
-  async readFile(e: EmployeeRow, docId: string) {
+  async readFile(files: HrFileStore, e: EmployeeRow, docId: string) {
     const d = e.documents.find((x) => x.id === docId);
     if (!d) return fail(hrError("FILE_NOT_FOUND", "Ficheiro não encontrado."));
-    return ok({ fileName: d.fileName, mimeType: d.mimeType, content: await this.files.read(d.storageKey) });
+    try {
+      return ok({ fileName: d.fileName, mimeType: d.mimeType, content: await files.read(d.storageKey) });
+    } catch (e) {
+      // a app do colégio foi desligada (ou trocada): o ficheiro está lá, mas não há como o ler daqui
+      if (e instanceof Error && e.name === "StorageNotConfiguredError") return fail(hrError("STORAGE_NOT_CONFIGURED", "Não é possível abrir este ficheiro: o armazenamento do colégio não está configurado. Fale com a EduFlow."));
+      throw e;
+    }
   }
 
   // ================================================================ submeter
 
-  async submit(repo: EmployeeRepository, e: EmployeeRow, editor: Editor, school: School, input: { revision: number }) {
+  async submit(repo: EmployeeRepository, files: HrFileStore, e: EmployeeRow, editor: Editor, school: School, input: { revision: number }) {
     if (!SUBMITTABLE.includes(e.status)) return fail(hrError("INVALID_STATE", "Este cadastro já foi submetido."));
     const form = formOf(e);
     const issues = checkAll(form, { personal: e.personal, sections: e.sections }, this.ctx(e));
@@ -389,7 +401,7 @@ export class Employees {
     }
     // ficheiros de campos que já não estão em nenhuma resposta (substituídos) saem
     const used = new Set(Object.values(e.sections).flatMap((entries) => (entries ?? []).flatMap((entry) => Object.values(entry))).filter((v): v is string => typeof v === "string"));
-    for (const d of e.documents.filter((x) => x.slot === "FIELD" && !used.has(x.id))) await this.dropDocument(repo, e.id, d.id);
+    for (const d of e.documents.filter((x) => x.slot === "FIELD" && !used.has(x.id))) await this.dropDocument(repo, files, e.id, d.id);
 
     const now = this.clock.now();
     const admin = adminFromProfessional(form, e.sections);
