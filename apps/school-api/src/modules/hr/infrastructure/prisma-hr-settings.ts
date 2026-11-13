@@ -1,7 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
-import type { ConfigOutcome, DocumentRow, FieldRow, HrSettingsRepository, SectionRow, VersionInfo } from "../application/ports";
-import { type DocumentTypeInput, type FieldInput, type FieldSettings, type FieldType, type FileFormat, type FormSnapshot, MAX_DOCUMENT_TYPES, MAX_FIELDS_PER_SECTION, type SectionInput, type SectionKey } from "../domain/form";
+import type { ConfigOutcome, DocumentRow, EmployeeTypeRow, FieldRow, HrSettingsRepository, SectionRow, VersionInfo } from "../application/ports";
+import {
+  type DocumentTypeInput,
+  type EmployeeTypeInput,
+  type FieldInput,
+  type FieldSettings,
+  type FieldType,
+  type FileFormat,
+  type FormSnapshot,
+  MAX_DOCUMENT_TYPES,
+  MAX_EMPLOYEE_TYPES,
+  MAX_FIELDS_PER_SECTION,
+  type SectionInput,
+  type SectionKey,
+} from "../domain/form";
 
 const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 const notFound = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025";
@@ -29,6 +42,7 @@ const toField = (f: Prisma.HrFormFieldGetPayload<object>): FieldRow => ({
   settings: (f.settings && typeof f.settings === "object" && !Array.isArray(f.settings) ? f.settings : {}) as FieldSettings,
   position: f.position,
   active: f.active,
+  employeeTypeIds: f.employeeTypeIds,
 });
 
 const toDocument = (d: Prisma.HrDocumentTypeGetPayload<object>): DocumentRow => ({
@@ -41,7 +55,10 @@ const toDocument = (d: Prisma.HrDocumentTypeGetPayload<object>): DocumentRow => 
   multiple: d.multiple,
   position: d.position,
   active: d.active,
+  employeeTypeIds: d.employeeTypeIds,
 });
+
+const toType = (t: Prisma.HrEmployeeTypeGetPayload<object>): EmployeeTypeRow => ({ id: t.id, name: t.name, description: t.description, position: t.position, active: t.active });
 
 const fieldData = (input: FieldInput) => ({
   label: input.label,
@@ -50,10 +67,82 @@ const fieldData = (input: FieldInput) => ({
   help: input.help,
   options: input.options as Prisma.InputJsonValue,
   settings: input.settings as Prisma.InputJsonValue,
+  employeeTypeIds: input.employeeTypeIds,
 });
 
 export class PrismaHrSettingsRepository implements HrSettingsRepository {
   constructor(private readonly db: PrismaClient) {}
+
+  // ================================================================ tipos de funcionário
+
+  async employeeTypes() {
+    return (await this.db.hrEmployeeType.findMany({ orderBy: [{ position: "asc" }, { createdAt: "asc" }] })).map(toType);
+  }
+
+  async createEmployeeType(input: EmployeeTypeInput & { id: string; now: Date }): Promise<ConfigOutcome<EmployeeTypeRow>> {
+    try {
+      return await this.db.$transaction(async (tx) => {
+        const agg = await tx.hrEmployeeType.aggregate({ _count: { _all: true }, _max: { position: true } });
+        if (agg._count._all >= MAX_EMPLOYEE_TYPES) return { ok: false, reason: "limit" } as const;
+        const row = await tx.hrEmployeeType.create({
+          data: { id: input.id, name: input.name, description: input.description, position: (agg._max.position ?? 0) + 1, createdAt: input.now, updatedAt: input.now },
+        });
+        return { ok: true, value: toType(row) } as const;
+      });
+    } catch (e) {
+      if (isUnique(e)) return { ok: false, reason: "exists" };
+      throw e;
+    }
+  }
+
+  async updateEmployeeType(id: string, input: EmployeeTypeInput, now: Date): Promise<ConfigOutcome<EmployeeTypeRow>> {
+    try {
+      return { ok: true, value: toType(await this.db.hrEmployeeType.update({ where: { id }, data: { ...input, updatedAt: now } })) };
+    } catch (e) {
+      if (isUnique(e)) return { ok: false, reason: "exists" };
+      if (notFound(e)) return { ok: false, reason: "not_found" };
+      throw e;
+    }
+  }
+
+  async setEmployeeTypeActive(id: string, active: boolean, now: Date): Promise<ConfigOutcome<EmployeeTypeRow>> {
+    try {
+      return { ok: true, value: toType(await this.db.hrEmployeeType.update({ where: { id }, data: { active, updatedAt: now } })) };
+    } catch (e) {
+      if (notFound(e)) return { ok: false, reason: "not_found" };
+      throw e;
+    }
+  }
+
+  async deleteEmployeeType(id: string): Promise<ConfigOutcome<EmployeeTypeRow>> {
+    return this.db.$transaction(async (tx) => {
+      const row = await tx.hrEmployeeType.findUnique({ where: { id } });
+      if (!row) return { ok: false, reason: "not_found" } as const;
+      const [fields, docs] = await Promise.all([tx.hrFormField.count({ where: { employeeTypeIds: { has: id } } }), tx.hrDocumentType.count({ where: { employeeTypeIds: { has: id } } })]);
+      if (fields || docs) return { ok: false, reason: "in_use" } as const;
+      await tx.hrEmployeeType.delete({ where: { id } });
+      return { ok: true, value: toType(row) } as const;
+    });
+  }
+
+  async reorderEmployeeTypes(ids: string[], now: Date): Promise<ConfigOutcome<void>> {
+    return this.db.$transaction(async (tx) => {
+      const current = await tx.hrEmployeeType.findMany({ select: { id: true } });
+      if (current.length !== ids.length || current.some((t) => !ids.includes(t.id))) return { ok: false, reason: "not_found" } as const;
+      for (const [i, id] of ids.entries()) await tx.hrEmployeeType.update({ where: { id }, data: { position: i + 1, updatedAt: now } });
+      return { ok: true, value: undefined } as const;
+    });
+  }
+
+  async employeeTypeUsage() {
+    const [fields, docs] = await Promise.all([
+      this.db.hrFormField.findMany({ where: { employeeTypeIds: { isEmpty: false } }, select: { employeeTypeIds: true } }),
+      this.db.hrDocumentType.findMany({ where: { employeeTypeIds: { isEmpty: false } }, select: { employeeTypeIds: true } }),
+    ]);
+    const usage: Record<string, number> = {};
+    for (const r of [...fields, ...docs]) for (const id of r.employeeTypeIds) usage[id] = (usage[id] ?? 0) + 1;
+    return usage;
+  }
 
   async sections() {
     return (await this.db.hrFormSection.findMany({ orderBy: { position: "asc" } })).map(toSection);
@@ -81,6 +170,13 @@ export class PrismaHrSettingsRepository implements HrSettingsRepository {
 
   async latest() {
     const row = await this.db.hrFormVersion.findFirst({ orderBy: { number: "desc" } });
+    if (!row) return null;
+    const [info] = await this.withAuthors([row]);
+    return { ...info, snapshot: row.snapshot as unknown as FormSnapshot };
+  }
+
+  async version(number: number) {
+    const row = await this.db.hrFormVersion.findUnique({ where: { number } });
     if (!row) return null;
     const [info] = await this.withAuthors([row]);
     return { ...info, snapshot: row.snapshot as unknown as FormSnapshot };

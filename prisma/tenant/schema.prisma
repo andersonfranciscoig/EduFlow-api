@@ -472,11 +472,26 @@ model HrFormField {
   settings   Json          @default("{}")
   position   Int
   active     Boolean       @default(true)
+  /// tipos de funcionário a que se aplica (vazio = todos)
+  employeeTypeIds String[] @default([]) @map("employee_type_ids") @db.Uuid
   createdAt  DateTime      @map("created_at")
   updatedAt  DateTime      @map("updated_at")
 
   @@index([sectionKey, position])
   @@map("hr_form_fields")
+}
+
+/// Tipo de funcionário (ex.: Docente, Administrativo, Auxiliar): define que campos e documentos lhe aparecem.
+model HrEmployeeType {
+  id          String   @id @db.Uuid
+  name        String
+  description String?
+  position    Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @map("created_at")
+  updatedAt   DateTime @map("updated_at")
+
+  @@map("hr_employee_types")
 }
 
 /// Documento pedido aos funcionários.
@@ -491,6 +506,8 @@ model HrDocumentType {
   multiple    Boolean  @default(false)
   position    Int
   active      Boolean  @default(true)
+  /// tipos de funcionário a que se aplica (vazio = todos)
+  employeeTypeIds String[] @default([]) @map("employee_type_ids") @db.Uuid
   createdAt   DateTime @map("created_at")
   updatedAt   DateTime @map("updated_at")
 
