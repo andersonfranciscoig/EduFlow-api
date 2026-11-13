@@ -137,10 +137,12 @@ export class Registration {
   }
 
   async detail(repo: RegistrationRepository, settings: HrSettingsRepository, id: string) {
-    const [r, history, latest] = await Promise.all([repo.find(id), repo.history(id), settings.latest()]);
+    const [r, history, latest, employee] = await Promise.all([repo.find(id), repo.history(id), settings.latest(), repo.employeeOf(id)]);
     if (!r) return fail(hrError("REQUEST_NOT_FOUND", "Pedido não encontrado."));
     return ok({
       request: requestDto(r, this.clock.now()),
+      // o cadastro que a pessoa começou pelo convite (para abrir em Funcionários)
+      employee,
       history: history.map(historyDto),
       // tipos da versão em uso (o RH confirma ou corrige a função ao aprovar)
       employeeTypes: latest?.snapshot.employeeTypes ?? [],
@@ -202,6 +204,11 @@ export class Registration {
   async cancel(repo: RegistrationRepository, actor: HrActor, id: string, input: { reason: string }) {
     const reason = checkReason(input.reason, true);
     if (!reason.ok) return reason;
+    // um cadastro já submetido trata-se em Funcionários (aprovar, rejeitar, pedir correções)
+    const employee = (await repo.employeeOf(id))?.status;
+    if (employee && employee !== "DRAFT" && employee !== "CORRECTION_REQUIRED") {
+      return fail(hrError("INVALID_STATE", "O cadastro desta pessoa já foi submetido: trate-o em Funcionários."));
+    }
     const now = this.clock.now();
     const r = await repo.cancel({ id, actorId: actor.id, actorName: actor.name, reason: reason.value, now });
     if (!r.ok) return fail(decisionError(r));

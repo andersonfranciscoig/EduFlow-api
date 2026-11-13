@@ -30,7 +30,20 @@ export type HrErrorCode =
   | "REQUEST_NOT_FOUND"
   | "INVALID_STATE"
   | "FORM_NOT_PUBLISHED"
-  | "EMAIL_NOT_SENT";
+  | "EMAIL_NOT_SENT"
+  // formulário pelo convite e cadastros
+  | "INVITE_INVALID"
+  | "INVITE_EXPIRED"
+  | "INVITE_LOCKED"
+  | "INVALID_CREDENTIALS"
+  | "SESSION_EXPIRED"
+  | "EMPLOYEE_NOT_FOUND"
+  | "STEP_NOT_FOUND"
+  | "REVISION_CONFLICT"
+  | "INCOMPLETE"
+  | "FILE_INVALID"
+  | "FILE_TOO_LARGE"
+  | "FILE_NOT_FOUND";
 
 export type HrError = DomainError<HrErrorCode>;
 export const hrError = (code: HrErrorCode, message: string, meta?: Record<string, unknown>): HrError => new DomainError(code, message, meta);

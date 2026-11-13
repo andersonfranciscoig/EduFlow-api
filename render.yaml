@@ -78,6 +78,12 @@ services:
       - { key: EMAIL_FROM, sync: false }
       - { key: EMAIL_REPLY_TO, sync: false }
       - { key: DEFAULT_PHONE_COUNTRY_CODE, value: "244" }
+      # documentos dos funcionários: app do UploadThing SÓ do RH, cifrados (AES-256-GCM) antes de sair
+      # Secret Files: hr-uploadthing.token e hr-files.key (de secrets-prod/school-api/)
+      - { key: HR_FILE_STORAGE, value: uploadthing }
+      - { key: HR_UPLOADTHING_TOKEN_FILE, value: /etc/secrets/hr-uploadthing.token }
+      - { key: HR_UPLOADTHING_ACL, value: public-read }
+      - { key: HR_FILES_KEY_FILE, value: /etc/secrets/hr-files.key }
 
   # ---------------------------------------------------------------- provisioner (DESLIGADO na fase gratuita)
   # O Render só tem "background workers" pagos. Sem o provisioner não há criação

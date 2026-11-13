@@ -1,4 +1,5 @@
 import { escapeHtml, type Mailer } from "../../../../../../libs/kernel/src/infrastructure/mail";
+import type { EmployeeMailer } from "../application/employee-ports";
 import type { RegistrationMailer, School } from "../application/registration-ports";
 
 const dateFmt = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Luanda" });
@@ -106,4 +107,94 @@ ${paragraphs.map((p) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.
     );
     await this.mailer.send({ to, subject: `Pedido de cadastro · ${school.name}`, html, text, tags: ["eduflow-portal", "hr-request-rejected"] });
   }
+
+  // ================================================================ cadastro (EmployeeMailer)
+
+  async submittedForHr({ to, school, employee, employeeId, resubmitted }: Parameters<EmployeeMailer["submittedForHr"]>[0]) {
+    const url = `${this.portal(school)}/rh/funcionarios/${employeeId}`;
+    const what = resubmitted ? "corrigiu e voltou a submeter o cadastro" : "submeteu o cadastro";
+    for (const r of to) {
+      const text = [`Olá, ${this.first(r.name)}.`, "", `${employee} ${what}. Está à espera de análise.`, `Ver no portal: ${url}`].join("\n");
+      const html = this.html(school, `Olá, ${this.first(r.name)}.`, [`<strong>${escapeHtml(employee)}</strong> ${what}. Está à espera de análise.`], { label: "Analisar o cadastro", url }, "Recebe este aviso porque aprova cadastros de funcionários no portal.");
+      await this.mailer.send({ to: r, subject: `Cadastro por analisar · ${employee}`, html, text, tags: ["eduflow-portal", "hr-employee-submitted"] });
+    }
+  }
+
+  async submittedConfirmation({ to, school }: Parameters<EmployeeMailer["submittedConfirmation"]>[0]) {
+    const text = [`Olá, ${this.first(to.name)}.`, "", `Recebemos o seu cadastro no ${school.name}. Os Recursos Humanos vão analisá-lo e recebe um email com a decisão.`].join("\n");
+    const html = this.html(school, `Olá, ${this.first(to.name)}.`, [`Recebemos o seu cadastro no <strong>${escapeHtml(school.name)}</strong>.`, "Os Recursos Humanos vão analisá-lo e recebe um email com a decisão."], null, "EduFlow · portal do colégio");
+    await this.mailer.send({ to, subject: `Cadastro recebido · ${school.name}`, html, text, tags: ["eduflow-portal", "hr-employee-received"] });
+  }
+
+  async approved({ to, school, number }: Parameters<EmployeeMailer["approved"]>[0]) {
+    const text = [`Olá, ${this.first(to.name)}.`, "", `O seu cadastro no ${school.name} foi aprovado.`, ...(number ? [`O seu n.º de funcionário é ${number}.`] : []), "Os Recursos Humanos tratam consigo dos passos seguintes."].join("\n");
+    const html = this.html(
+      school,
+      `Olá, ${this.first(to.name)}.`,
+      [`O seu cadastro no <strong>${escapeHtml(school.name)}</strong> foi aprovado.`, ...(number ? [`O seu n.º de funcionário é <strong>${escapeHtml(number)}</strong>.`] : []), "Os Recursos Humanos tratam consigo dos passos seguintes."],
+      null,
+      "EduFlow · portal do colégio",
+    );
+    await this.mailer.send({ to, subject: `Cadastro aprovado · ${school.name}`, html, text, tags: ["eduflow-portal", "hr-employee-approved"] });
+  }
+
+  async employeeRejected({ to, school, reason }: Parameters<EmployeeMailer["rejected"]>[0]) {
+    const text = [`Olá, ${this.first(to.name)}.`, "", `O seu cadastro no ${school.name} não foi aprovado.`, ...(reason ? [`Motivo: ${reason}`] : []), "Se tiver dúvidas, fale com os Recursos Humanos do colégio."].join("\n");
+    const html = this.html(
+      school,
+      `Olá, ${this.first(to.name)}.`,
+      [`O seu cadastro no <strong>${escapeHtml(school.name)}</strong> não foi aprovado.`, ...(reason ? [`Motivo: ${escapeHtml(reason)}`] : []), "Se tiver dúvidas, fale com os Recursos Humanos do colégio."],
+      null,
+      "EduFlow · portal do colégio",
+    );
+    await this.mailer.send({ to, subject: `Cadastro · ${school.name}`, html, text, tags: ["eduflow-portal", "hr-employee-rejected"] });
+  }
+
+  async correctionRequested({ to, school, note, token, expiresAt }: Parameters<EmployeeMailer["correctionRequested"]>[0]) {
+    const url = `${this.portal(school)}/rh/cadastro?convite=${encodeURIComponent(token)}`;
+    const until = dateFmt.format(expiresAt);
+    const text = [
+      `Olá, ${this.first(to.name)}.`,
+      "",
+      `Os Recursos Humanos do ${school.name} pedem-lhe correções no cadastro:`,
+      note,
+      "",
+      `Corrija neste link (válido até ${until}), com a mesma palavra-passe: ${url}`,
+      "O link anterior deixou de valer. Não partilhe este link.",
+    ].join("\n");
+    const html = this.html(
+      school,
+      `Olá, ${this.first(to.name)}.`,
+      [
+        `Os Recursos Humanos do <strong>${escapeHtml(school.name)}</strong> pedem-lhe correções no cadastro:`,
+        `<span style="display:block;border-left:3px solid #8EB69B;padding:4px 0 4px 12px;color:#051F20">${escapeHtml(note)}</span>`,
+        `Corrija pelo botão abaixo (válido até <strong>${escapeHtml(until)}</strong>), com a mesma palavra-passe. O link anterior deixou de valer.`,
+      ],
+      { label: "Corrigir o cadastro", url },
+      "Não partilhe este link: é pessoal.",
+    );
+    await this.mailer.send({ to, subject: `Correções no cadastro · ${school.name}`, html, text, tags: ["eduflow-portal", "hr-employee-correction"] });
+  }
+
+  async inviteExpiredForHr({ to, school, applicant }: Parameters<EmployeeMailer["inviteExpiredForHr"]>[0]) {
+    const url = `${this.portal(school)}/rh/pedidos?estado=APPROVED`;
+    for (const r of to) {
+      const text = [`Olá, ${this.first(r.name)}.`, "", `${applicant} tentou abrir o convite de cadastro, mas o link já expirou.`, `Pode reenviar o convite no portal: ${url}`].join("\n");
+      const html = this.html(school, `Olá, ${this.first(r.name)}.`, [`<strong>${escapeHtml(applicant)}</strong> tentou abrir o convite de cadastro, mas o link já expirou.`], { label: "Reenviar o convite", url }, "Recebe este aviso porque aprova pedidos de cadastro no portal.");
+      await this.mailer.send({ to: r, subject: `Convite expirado · ${applicant}`, html, text, tags: ["eduflow-portal", "hr-invite-expired"] });
+    }
+  }
 }
+
+/**
+ * Os emails do cadastro com a forma que o caso de uso espera (o "rejected" do pedido e o
+ * do cadastro têm textos diferentes, por isso vivem com nomes distintos na classe acima).
+ */
+export const employeeMailer = (m: EmailRegistrationMailer): EmployeeMailer => ({
+  submittedForHr: (i) => m.submittedForHr(i),
+  submittedConfirmation: (i) => m.submittedConfirmation(i),
+  approved: (i) => m.approved(i),
+  rejected: (i) => m.employeeRejected(i),
+  correctionRequested: (i) => m.correctionRequested(i),
+  inviteExpiredForHr: (i) => m.inviteExpiredForHr(i),
+});
