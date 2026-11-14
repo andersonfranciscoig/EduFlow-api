@@ -47,6 +47,24 @@ export interface TeacherLoad extends TeacherCandidate {
   coordinates: { id: string; label: string }[];
 }
 
+/** Uma turma onde o professor dá aulas ou que coordena (para "As minhas turmas"). */
+export interface TeacherGroup {
+  id: string;
+  name: string;
+  label: string;
+  grade: number;
+  course: string | null;
+  courseCode: string | null;
+  shift: Shift;
+  room: string | null;
+  coordinator: TeacherRef | null;
+  isCoordinator: boolean;
+  /** disciplinas do plano da classe */
+  planSubjects: number;
+  /** as disciplinas que ele dá nesta turma, com os tempos do plano e as aulas já marcadas */
+  subjects: { subject: { id: string; name: string; code: string; color: string }; weeklyPeriods: number; scheduled: number }[];
+}
+
 export type TeachingOutcome<T = void> = { ok: true; value: T } | { ok: false; reason: "not_found" | "closed" | "not_in_curriculum" | "teacher_invalid" | "taken" };
 
 export interface QualificationCatalog {
@@ -84,6 +102,10 @@ export interface TeachingRepository {
   saveQualification(input: { id?: string; employeeId: string; data: QualificationData; now: Date }): Promise<string | null>;
   deleteQualification(employeeId: string, id: string): Promise<boolean>;
   yearPlan(yearId: string): Promise<YearPlanGroup[]>;
+  /** As turmas do ano onde o professor dá aulas ou que coordena. */
+  teacherGroups(employeeId: string, yearId: string): Promise<TeacherGroup[]>;
+  /** O professor dá aulas nesta turma (disciplinas) ou coordena-a? null se nenhum dos dois. */
+  groupAccess(employeeId: string, groupId: string): Promise<{ subjectIds: string[]; coordinates: boolean } | null>;
   teacherLessons(employeeId: string, yearId: string): Promise<TeacherLesson[]>;
   loads(yearId: string): Promise<TeacherLoad[]>;
   yearInfo(yearId: string): Promise<{ id: string; name: string; status: YearStatus } | null>;

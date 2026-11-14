@@ -10,7 +10,9 @@ import { NoTeachersGuard, TeacherMay } from "../../identity/presentation/http/pe
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import type { PedagogyActor } from "../application/ports";
 import { Teaching } from "../application/Teaching";
+import { Timetable } from "../application/Timetable";
 import { PrismaTeachingRepository } from "../infrastructure/prisma-teaching";
+import { PrismaTimetableRepository } from "../infrastructure/prisma-timetable";
 import { PEDAGOGY_HTTP } from "./pedagogy.controller";
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
@@ -43,7 +45,10 @@ const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, i
 @Controller("v1/pedagogy")
 @UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
 export class TeachingController {
-  constructor(private readonly teaching: Teaching) {}
+  constructor(
+    private readonly teaching: Teaching,
+    private readonly timetable: Timetable,
+  ) {}
 
   private repo(t: TenantContext) {
     return new PrismaTeachingRepository(t.db);
@@ -85,6 +90,25 @@ export class TeachingController {
   @ApiOperation({ summary: "Horário de um professor: dias, tempos, turmas, disciplinas e salas" })
   async teacherTimetable(@CurrentTenant() t: TenantContext, @Param("employeeId", id) employeeId: string, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
     return unwrap(await this.teaching.teacherTimetable(this.repo(t), employeeId, q), PEDAGOGY_HTTP);
+  }
+
+  @Get("my-classes")
+  @TeacherMay()
+  @ApiOperation({ summary: "As minhas turmas: onde dou aulas ou que coordeno, e as disciplinas que leciono" })
+  async myClasses(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
+    return unwrap(await this.teaching.myClasses(this.repo(t), u.id, q), PEDAGOGY_HTTP);
+  }
+
+  @Get("my-classes/:id")
+  @TeacherMay()
+  @ApiOperation({
+    summary: "Uma das minhas turmas: o horário completo (só leitura), as disciplinas e os professores",
+    description: "Só turmas onde o professor dá aulas ou que coordena; as outras respondem 404.",
+  })
+  async myClass(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
+    const access = unwrap(await this.teaching.myGroupAccess(this.repo(t), u.id, groupId), PEDAGOGY_HTTP);
+    const timetable = unwrap(await this.timetable.groupTimetable(new PrismaTimetableRepository(t.db), actorOf(u), groupId), PEDAGOGY_HTTP);
+    return { ...timetable, canManage: false, mine: { subjectIds: access.subjectIds, coordinates: access.coordinates } };
   }
 
   @Get("teachers/:employeeId/qualifications")
