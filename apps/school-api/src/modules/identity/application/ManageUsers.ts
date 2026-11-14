@@ -111,6 +111,23 @@ export class ManageUsers {
     return ok({ user: dto(created.value), emailSent });
   }
 
+  /**
+   * Conta de PROFESSOR para um funcionário (o RH dá o acesso a partir do cadastro; a permissão
+   * hr.employees.edit confirma-se no controller do RH). Sem outras permissões: só o que é do professor.
+   */
+  async inviteTeacher(repo: UserAdminRepository, inviter: { id: string; fullName: string }, school: { slug: string; name: string }, input: { fullName: string; email: string }) {
+    const name = FullName.create(input.fullName);
+    if (!name.ok) return fail(identityError(name.error.code, name.error.message));
+    const email = EmailAddress.create(input.email);
+    if (!email.ok) return fail(identityError(email.error.code, email.error.message));
+    const now = this.clock.now();
+    const created = await repo.create({ id: this.ids.next(), fullName: name.value.value, email: email.value.value, role: "PROFESSOR", permissions: [], grantedById: inviter.id, now });
+    if (!created.ok) return fail(identityError("EMAIL_TAKEN", "Já existe um utilizador com este email."));
+    await repo.record("USER_INVITED", created.value.id, inviter.id, { role: "PROFESSOR", permissions: [], via: "hr" }, now);
+    const emailSent = await this.sendInvite(created.value, school, { fullName: inviter.fullName } as SchoolAccess);
+    return ok({ user: dto(created.value), emailSent });
+  }
+
   /** O email não pode impedir o convite: se falhar, o responsável reenvia mais tarde. */
   private async sendInvite(u: UserAdminRow, school: { slug: string; name: string }, actor: SchoolAccess) {
     if (!u.email) return false;

@@ -43,10 +43,12 @@ export interface EmployeeRow {
   createdAt: Date;
   updatedAt: Date;
   documents: EmployeeDocumentRow[];
+  /** conta do portal ligada (ex.: professor) */
+  portalUser: { id: string; status: string; email: string | null } | null;
 }
 
 /** Na lista: sem os dados do formulário. */
-export type EmployeeListRow = Omit<EmployeeRow, "formVersion" | "personal" | "sections" | "documents"> & { hasPhoto: boolean; photoId: string | null };
+export type EmployeeListRow = Omit<EmployeeRow, "formVersion" | "personal" | "sections" | "documents" | "portalUser"> & { hasPhoto: boolean; photoId: string | null };
 
 export interface StepPatch {
   personal?: PersonalData;

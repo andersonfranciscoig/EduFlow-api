@@ -45,7 +45,11 @@ export interface LessonRow {
 }
 
 export interface GroupTimetable {
-  group: { id: string; name: string; shift: Shift; room: string | null; capacity: number | null };
+  group: { id: string; name: string; shift: Shift; room: string | null; capacity: number | null; coordinator: { id: string; fullName: string } | null };
+  /** professor de cada disciplina nesta turma (subjectId → professor) */
+  teachers: Record<string, { id: string; fullName: string }>;
+  /** aulas desta turma em que o professor tem outra aula à mesma hora (lessonId → onde) */
+  clashes: Record<string, string>;
   cls: { id: string; grade: number; course: string | null; courseCode: string | null };
   year: { id: string; name: string; status: YearStatus };
   periods: PeriodRow[];
@@ -60,6 +64,7 @@ export type TimetableOutcome<T> =
   | { ok: false; reason: "not_found" | "closed" | "slot_invalid" | "not_in_curriculum" }
   | { ok: false; reason: "weekly_limit"; limit: number }
   | { ok: false; reason: "room_busy"; room: string; by: string }
+  | { ok: false; reason: "teacher_busy"; teacher: string; by: string }
   | { ok: false; reason: "in_lessons"; subjectId: string; count: number }
   | { ok: false; reason: "period_in_use"; position: number; count: number };
 

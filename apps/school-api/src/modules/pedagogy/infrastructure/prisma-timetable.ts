@@ -208,12 +208,16 @@ export class PrismaTimetableRepository implements TimetableRepository {
         schoolClass: { include: { course: { select: { name: true, code: true } }, subjects: { include: { subject: { include: WITH_COUNTS } }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] } } },
         academicYear: { select: { id: true, name: true, status: true } },
         lessons: true,
+        coordinator: { select: { id: true, fullName: true } },
+        teachers: { include: { employee: { select: { id: true, fullName: true } } } },
       },
     });
     if (!g) return null;
     const periods = await this.periods(g.shift as Shift, now);
     return {
-      group: { id: g.id, name: g.name, shift: g.shift as Shift, room: g.room, capacity: g.capacity },
+      group: { id: g.id, name: g.name, shift: g.shift as Shift, room: g.room, capacity: g.capacity, coordinator: g.coordinator },
+      teachers: Object.fromEntries(g.teachers.map((t) => [t.subjectId, t.employee])),
+      clashes: await this.groupClashes(g.academicYearId, g.id),
       cls: { id: g.schoolClass.id, grade: g.schoolClass.grade, course: g.schoolClass.course?.name ?? null, courseCode: g.schoolClass.course?.code ?? null },
       year: { id: g.academicYear.id, name: g.academicYear.name, status: g.academicYear.status as YearStatus },
       periods,
@@ -225,6 +229,31 @@ export class PrismaTimetableRepository implements TimetableRepository {
   async yearTimetables(yearId: string) {
     const rows = await this.db.lesson.groupBy({ by: ["groupId"], where: { academicYearId: yearId }, _count: { _all: true } });
     return rows.map((r) => ({ groupId: r.groupId, scheduled: r._count._all }));
+  }
+
+  /** Outra aula do professor no mesmo dia, a uma hora que se sobrepõe (noutra turma). */
+  private async teacherBusy(db: Tx | PrismaClient, yearId: string, teacherId: string, weekday: number, period: { startsAt: Date; endsAt: Date }, exceptGroup: string) {
+    const others = await db.lesson.findMany({
+      where: { academicYearId: yearId, teacherId, weekday, groupId: { not: exceptGroup } },
+      include: { period: true, subject: { select: { code: true } }, group: { include: { schoolClass: { include: { course: { select: { code: true } } } } } } },
+    });
+    const s = hhmm(period.startsAt);
+    const e = hhmm(period.endsAt);
+    const hit = others.find((o) => hhmm(o.period.startsAt) < e && s < hhmm(o.period.endsAt));
+    if (!hit) return null;
+    const c = hit.group.schoolClass;
+    return `${c.grade === 0 ? "Iniciação" : `${c.grade}.ª`}${c.course?.code ? ` ${c.course.code}` : ""} · turma ${hit.group.name}, ${hit.subject.code}, ${hhmm(hit.period.startsAt)}–${hhmm(hit.period.endsAt)}`;
+  }
+
+  /** Aulas desta turma cujo professor tem outra aula à mesma hora noutra turma (lessonId → descrição). */
+  private async groupClashes(yearId: string, groupId: string): Promise<Record<string, string>> {
+    const mine = await this.db.lesson.findMany({ where: { groupId, teacherId: { not: null } }, include: { period: true } });
+    const out: Record<string, string> = {};
+    for (const l of mine) {
+      const busy = await this.teacherBusy(this.db, yearId, l.teacherId!, l.weekday, l.period, groupId);
+      if (busy) out[l.id] = busy;
+    }
+    return out;
   }
 
   /** Quem está na sala nesse tempo (para a mensagem): "10.ª CFB · turma A". */
@@ -265,10 +294,19 @@ export class PrismaTimetableRepository implements TimetableRepository {
           const busy = await this.roomUser(tx, g.academicYearId, input.weekday, input.periodId, room, input.groupId);
           if (busy) return { ok: false, reason: "room_busy", room: busy.room, by: busy.by } as const;
         }
+        // o professor da disciplina nesta turma não pode estar noutra turma à mesma hora
+        const assigned = await tx.groupTeacher.findUnique({ where: { groupId_subjectId: { groupId: input.groupId, subjectId: input.subjectId } }, include: { employee: { select: { fullName: true } } } });
+        const teacherId = assigned?.employeeId ?? null;
+        if (assigned) {
+          // duas turmas a marcar o mesmo professor ao mesmo tempo: uma de cada vez
+          await tx.$queryRaw`SELECT id FROM employees WHERE id = ${assigned.employeeId}::uuid FOR UPDATE`;
+          const busy = await this.teacherBusy(tx, g.academicYearId, assigned.employeeId, input.weekday, period, input.groupId);
+          if (busy) return { ok: false, reason: "teacher_busy", teacher: assigned.employee.fullName, by: busy } as const;
+        }
         const l = await tx.lesson.upsert({
           where: slot,
-          create: { id: input.id, academicYearId: g.academicYearId, groupId: input.groupId, weekday: input.weekday, periodId: input.periodId, subjectId: input.subjectId, room, createdAt: input.now, updatedAt: input.now },
-          update: { subjectId: input.subjectId, room, updatedAt: input.now },
+          create: { id: input.id, academicYearId: g.academicYearId, groupId: input.groupId, weekday: input.weekday, periodId: input.periodId, subjectId: input.subjectId, teacherId, room, createdAt: input.now, updatedAt: input.now },
+          update: { subjectId: input.subjectId, teacherId, room, updatedAt: input.now },
         });
         return { ok: true, value: toLesson(l) } as const;
       });

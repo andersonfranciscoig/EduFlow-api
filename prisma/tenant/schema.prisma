@@ -78,6 +78,8 @@ model SchoolUser {
   sessions    SchoolSession[]
   codes       EmailCode[]
   permissions SchoolUserPermission[]
+  /// o funcionário a quem pertence esta conta (ex.: professor)
+  employee    Employee?
 
   @@map("school_users")
 }
@@ -268,11 +270,15 @@ model ClassGroup {
   shift          String
   room           String?
   capacity       Int?
+  /// coordenador (diretor) de turma
+  coordinatorId  String?      @map("coordinator_id") @db.Uuid
+  coordinator    Employee?    @relation("GroupCoordinator", fields: [coordinatorId], references: [id], onDelete: SetNull)
   createdAt      DateTime     @map("created_at")
   updatedAt      DateTime     @map("updated_at")
 
   reservations SeatReservation[]
   lessons      Lesson[]
+  teachers     GroupTeacher[]
 
   @@index([academicYearId])
   @@map("class_groups")
@@ -290,10 +296,27 @@ model Subject {
   createdAt  DateTime  @map("created_at")
   updatedAt  DateTime  @map("updated_at")
 
-  classes ClassSubject[]
-  lessons Lesson[]
+  classes  ClassSubject[]
+  lessons  Lesson[]
+  teachers GroupTeacher[]
 
   @@map("subjects")
+}
+
+/// Quem dá cada disciplina em cada turma.
+model GroupTeacher {
+  groupId      String     @map("group_id") @db.Uuid
+  group        ClassGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  subjectId    String     @map("subject_id") @db.Uuid
+  subject      Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  employeeId   String     @map("employee_id") @db.Uuid
+  employee     Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assignedById String?    @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime   @map("assigned_at")
+
+  @@id([groupId, subjectId])
+  @@index([employeeId])
+  @@map("group_teachers")
 }
 
 /// Plano curricular: disciplina de uma classe (no ano) e tempos por semana.
@@ -346,14 +369,16 @@ model Lesson {
   period         SchoolPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
   subjectId      String       @map("subject_id") @db.Uuid
   subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Restrict)
-  /// professor — vazio até existir o módulo de professores
+  /// professor da aula = o da disciplina nesta turma (mantido pela API)
   teacherId      String?      @map("teacher_id") @db.Uuid
+  teacher        Employee?    @relation(fields: [teacherId], references: [id], onDelete: SetNull)
   room           String?
   createdAt      DateTime     @map("created_at")
   updatedAt      DateTime     @map("updated_at")
 
   @@unique([groupId, weekday, periodId])
   @@index([subjectId])
+  @@index([teacherId, weekday], map: "lessons_teacher_day_idx")
   @@map("lessons")
 }
 
@@ -628,8 +653,14 @@ model Employee {
   terminatedAt   DateTime?                    @map("terminated_at")
   createdAt      DateTime                     @map("created_at")
   updatedAt      DateTime                     @map("updated_at")
+  /// conta do portal (o RH dá acesso; ex.: o professor vê o seu horário)
+  userId         String?                      @unique @map("user_id") @db.Uuid
+  user           SchoolUser?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  documents EmployeeDocument[]
+  documents     EmployeeDocument[]
+  teaching      GroupTeacher[]
+  lessons       Lesson[]
+  coordinatedOf ClassGroup[]                  @relation("GroupCoordinator")
 
   @@index([status, createdAt])
   @@index([employeeTypeId])
