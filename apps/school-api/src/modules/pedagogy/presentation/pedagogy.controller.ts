@@ -6,6 +6,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
+import { NoTeachersGuard } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import type { PedagogyActor } from "../application/ports";
 import { Pedagogy } from "../application/Pedagogy";
@@ -85,7 +86,7 @@ const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, i
 @ApiHeader({ name: "X-Tenant", required: false })
 @ApiBearerAuth()
 @Controller("v1/pedagogy")
-@UseGuards(TenantGuard, SchoolAuthGuard)
+@UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
 export class PedagogyController {
   constructor(private readonly pedagogy: Pedagogy) {}
 
