@@ -46,6 +46,7 @@ export const PEDAGOGY_HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   ROOM_BUSY: HttpStatus.CONFLICT,
   TEACHER_NOT_FOUND: HttpStatus.NOT_FOUND,
   TEACHER_BUSY: HttpStatus.CONFLICT,
+  QUALIFICATION_NOT_FOUND: HttpStatus.NOT_FOUND,
 };
 const HTTP = PEDAGOGY_HTTP;
 

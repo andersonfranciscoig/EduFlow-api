@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -16,6 +16,20 @@ import { PEDAGOGY_HTTP } from "./pedagogy.controller";
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const teacherBody = z.object({ employeeId: z.uuid().nullable() }).meta({ title: "TeacherAssign", description: "Professor (funcionário aprovado ou ativo); null = retirar." });
 const yearQuery = z.object({ yearId: z.uuid().optional() });
+const qualificationBody = z
+  .object({
+    level: z.enum(["pre", "primario", "ciclo1", "ciclo2"], { error: "Escolha o tipo de ensino." }),
+    grades: z.array(z.number().int().min(0).max(13)).min(1, { error: "Escolha pelo menos uma classe." }).max(14),
+    courseIds: z.array(z.uuid()).max(50).optional(),
+    subjectIds: z.array(z.uuid()).min(1, { error: "Escolha pelo menos uma disciplina." }).max(60),
+  })
+  .meta({ title: "TeacherQualification", description: "Tipo de ensino → classes (e cursos, no II Ciclo) → disciplinas." });
+const applyTeachersBody = z
+  .object({ assignments: z.array(z.object({ groupId: z.uuid(), subjectId: z.uuid(), employeeId: z.uuid() })).min(1).max(2000) })
+  .meta({ title: "ApplyTeachers", description: "As atribuições da proposta a gravar." });
+const applyCoordinatorsBody = z
+  .object({ coordinators: z.array(z.object({ groupId: z.uuid(), employeeId: z.uuid() })).min(1).max(500) })
+  .meta({ title: "ApplyCoordinators", description: "Os coordenadores da proposta a gravar." });
 
 const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, isOwner: u.isOwner, support: u.support ? { mode: u.support.mode } : undefined });
 
@@ -63,14 +77,93 @@ export class TeachingController {
 
   @Get("teachers")
   @ApiOperation({ summary: "Professores do ano (?yearId=; por omissão o ano em curso): carga, coordenações e choques" })
-  async teachers(@CurrentTenant() t: TenantContext, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
-    return unwrap(await this.teaching.teachers(this.repo(t), q), PEDAGOGY_HTTP);
+  async teachers(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
+    return unwrap(await this.teaching.teachers(this.repo(t), actorOf(u), q), PEDAGOGY_HTTP);
   }
 
   @Get("teachers/:employeeId/timetable")
   @ApiOperation({ summary: "Horário de um professor: dias, tempos, turmas, disciplinas e salas" })
   async teacherTimetable(@CurrentTenant() t: TenantContext, @Param("employeeId", id) employeeId: string, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
     return unwrap(await this.teaching.teacherTimetable(this.repo(t), employeeId, q), PEDAGOGY_HTTP);
+  }
+
+  @Get("teachers/:employeeId/qualifications")
+  @ApiOperation({ summary: "Habilitações do professor (tipo de ensino → classes/cursos → disciplinas) e o catálogo para as escolher" })
+  async qualifications(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("employeeId", id) employeeId: string) {
+    return unwrap(await this.teaching.qualifications(this.repo(t), actorOf(u), employeeId), PEDAGOGY_HTTP);
+  }
+
+  @Post("teachers/:employeeId/qualifications")
+  @ApiOperation({ summary: "Nova habilitação", description: "As disciplinas valem para todas as classes (e cursos) escolhidas. Cursos só no II Ciclo (obrigatórios)." })
+  @ApiBody({ schema: openApi(qualificationBody) })
+  async addQualification(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("employeeId", id) employeeId: string,
+    @Body(new ZodValidationPipe(qualificationBody)) body: z.infer<typeof qualificationBody>,
+  ) {
+    return unwrap(await this.teaching.saveQualification(this.repo(t), actorOf(u), employeeId, body), PEDAGOGY_HTTP);
+  }
+
+  @Put("teachers/:employeeId/qualifications/:qualificationId")
+  @ApiOperation({ summary: "Alterar uma habilitação" })
+  @ApiBody({ schema: openApi(qualificationBody) })
+  async updateQualification(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("employeeId", id) employeeId: string,
+    @Param("qualificationId", id) qualificationId: string,
+    @Body(new ZodValidationPipe(qualificationBody)) body: z.infer<typeof qualificationBody>,
+  ) {
+    return unwrap(await this.teaching.saveQualification(this.repo(t), actorOf(u), employeeId, body, qualificationId), PEDAGOGY_HTTP);
+  }
+
+  @Delete("teachers/:employeeId/qualifications/:qualificationId")
+  @ApiOperation({ summary: "Retirar uma habilitação" })
+  async removeQualification(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("employeeId", id) employeeId: string, @Param("qualificationId", id) qualificationId: string) {
+    return unwrap(await this.teaching.removeQualification(this.repo(t), actorOf(u), employeeId, qualificationId), PEDAGOGY_HTTP);
+  }
+
+  @Get("years/:yearId/teaching/proposal")
+  @ApiOperation({
+    summary: "Proposta automática de professores (não grava)",
+    description: "Para cada disciplina de cada turma sem professor: um habilitado, livre às horas das aulas já marcadas, com a menor carga.",
+  })
+  async proposeTeachers(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("yearId", id) yearId: string) {
+    return unwrap(await this.teaching.proposeTeachers(this.repo(t), actorOf(u), yearId), PEDAGOGY_HTTP);
+  }
+
+  @Post("years/:yearId/teaching/apply")
+  @ApiOperation({ summary: "Aplicar a proposta de professores", description: "Cada atribuição é confirmada contra o estado de agora; as que já não servem voltam em skipped." })
+  @ApiBody({ schema: openApi(applyTeachersBody) })
+  async applyTeachers(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("yearId", id) yearId: string,
+    @Body(new ZodValidationPipe(applyTeachersBody)) body: z.infer<typeof applyTeachersBody>,
+  ) {
+    return unwrap(await this.teaching.applyTeachers(this.repo(t), actorOf(u), yearId, body.assignments), PEDAGOGY_HTTP);
+  }
+
+  @Get("years/:yearId/coordinators/proposal")
+  @ApiOperation({
+    summary: "Proposta automática de coordenadores (não grava)",
+    description: "Para cada turma sem coordenador: um professor livre (não coordena nenhuma turma), primeiro quem já dá aulas na turma.",
+  })
+  async proposeCoordinators(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("yearId", id) yearId: string) {
+    return unwrap(await this.teaching.proposeCoordinators(this.repo(t), actorOf(u), yearId), PEDAGOGY_HTTP);
+  }
+
+  @Post("years/:yearId/coordinators/apply")
+  @ApiOperation({ summary: "Aplicar a proposta de coordenadores" })
+  @ApiBody({ schema: openApi(applyCoordinatorsBody) })
+  async applyCoordinators(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("yearId", id) yearId: string,
+    @Body(new ZodValidationPipe(applyCoordinatorsBody)) body: z.infer<typeof applyCoordinatorsBody>,
+  ) {
+    return unwrap(await this.teaching.applyCoordinators(this.repo(t), actorOf(u), yearId, body.coordinators), PEDAGOGY_HTTP);
   }
 
   @Get("my-timetable")

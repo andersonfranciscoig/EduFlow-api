@@ -1,4 +1,5 @@
 import type { Shift, YearStatus } from "../domain/academic";
+import type { Qualification, QualificationData } from "../domain/qualifications";
 
 export interface TeacherRef {
   id: string;
@@ -15,7 +16,7 @@ export interface TeacherCandidate extends TeacherRef {
 
 export interface GroupTeaching {
   group: { id: string; name: string; shift: Shift; room: string | null; coordinator: TeacherRef | null };
-  cls: { id: string; grade: number; course: string | null; courseCode: string | null };
+  cls: { id: string; grade: number; courseId: string | null; course: string | null; courseCode: string | null };
   year: { id: string; name: string; status: YearStatus };
   subjects: { subject: { id: string; name: string; code: string; color: string }; weeklyPeriods: number; scheduled: number; teacher: TeacherRef | null }[];
 }
@@ -46,7 +47,23 @@ export interface TeacherLoad extends TeacherCandidate {
   coordinates: { id: string; label: string }[];
 }
 
-export type TeachingOutcome<T = void> = { ok: true; value: T } | { ok: false; reason: "not_found" | "closed" | "not_in_curriculum" | "teacher_invalid" };
+export type TeachingOutcome<T = void> = { ok: true; value: T } | { ok: false; reason: "not_found" | "closed" | "not_in_curriculum" | "teacher_invalid" | "taken" };
+
+export interface QualificationCatalog {
+  courses: { id: string; name: string; code: string | null; archived: boolean }[];
+  subjects: { id: string; name: string; code: string; color: string; archived: boolean }[];
+}
+
+/** Uma turma do ano, para as propostas automáticas. */
+export interface YearPlanGroup {
+  id: string;
+  label: string;
+  grade: number;
+  courseId: string | null;
+  coordinatorId: string | null;
+  subjects: { subjectId: string; weeklyPeriods: number; teacherId: string | null }[];
+  lessons: { subjectId: string; teacherId: string | null; weekday: number; startsAt: string; endsAt: string }[];
+}
 
 /** Professores (na BD do PRÓPRIO colégio). */
 export interface TeachingRepository {
@@ -57,8 +74,16 @@ export interface TeachingRepository {
   findTeacher(employeeId: string): Promise<TeacherCandidate | null>;
   employeeOfUser(userId: string): Promise<TeacherCandidate | null>;
   /** Atribui (ou retira, com null) o professor da disciplina na turma; as aulas já marcadas passam a ser dele. */
-  assign(input: { groupId: string; subjectId: string; employeeId: string | null; actorId: string | null; now: Date }): Promise<TeachingOutcome>;
-  setCoordinator(groupId: string, employeeId: string | null, now: Date): Promise<TeachingOutcome>;
+  /** onlyIfEmpty: não substitui um professor já atribuído ("taken"). */
+  assign(input: { groupId: string; subjectId: string; employeeId: string | null; actorId: string | null; now: Date; onlyIfEmpty?: boolean }): Promise<TeachingOutcome>;
+  setCoordinator(groupId: string, employeeId: string | null, now: Date, onlyIfEmpty?: boolean): Promise<TeachingOutcome>;
+  qualifications(employeeId: string): Promise<Qualification[]>;
+  allQualifications(): Promise<(Qualification & { employeeId: string })[]>;
+  qualificationCatalog(): Promise<QualificationCatalog>;
+  /** Cria (sem id) ou altera uma habilitação do professor; false se não existir. */
+  saveQualification(input: { id?: string; employeeId: string; data: QualificationData; now: Date }): Promise<string | null>;
+  deleteQualification(employeeId: string, id: string): Promise<boolean>;
+  yearPlan(yearId: string): Promise<YearPlanGroup[]>;
   teacherLessons(employeeId: string, yearId: string): Promise<TeacherLesson[]>;
   loads(yearId: string): Promise<TeacherLoad[]>;
   yearInfo(yearId: string): Promise<{ id: string; name: string; status: YearStatus } | null>;

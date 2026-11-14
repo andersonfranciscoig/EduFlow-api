@@ -50,7 +50,8 @@ export type PedagogyErrorCode =
   | "ROOM_BUSY"
   // professores
   | "TEACHER_NOT_FOUND"
-  | "TEACHER_BUSY";
+  | "TEACHER_BUSY"
+  | "QUALIFICATION_NOT_FOUND";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>
