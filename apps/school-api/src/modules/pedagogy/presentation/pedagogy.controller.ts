@@ -43,6 +43,8 @@ export const PEDAGOGY_HTTP: Partial<Record<PedagogyErrorCode, HttpStatus>> = {
   SLOT_INVALID: HttpStatus.UNPROCESSABLE_ENTITY,
   WEEKLY_LIMIT: HttpStatus.CONFLICT,
   ROOM_BUSY: HttpStatus.CONFLICT,
+  TEACHER_NOT_FOUND: HttpStatus.NOT_FOUND,
+  TEACHER_BUSY: HttpStatus.CONFLICT,
 };
 const HTTP = PEDAGOGY_HTTP;
 

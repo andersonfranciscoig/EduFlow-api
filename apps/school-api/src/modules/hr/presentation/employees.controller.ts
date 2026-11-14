@@ -34,7 +34,10 @@ import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/s
 import { type Editor, Employees } from "../application/Employees";
 import type { EmployeeRow } from "../application/employee-ports";
 import { hrError } from "../domain/form";
+import { PrismaUserAdminRepository } from "../../identity/infrastructure/user-admin-repository";
+import { PortalAccess } from "../application/PortalAccess";
 import { HrFileStores } from "../infrastructure/hr-file-store";
+import { PrismaPortalAccess } from "../infrastructure/prisma-portal-access";
 import { PrismaApplicantAccess, PrismaEmployeeRepository } from "../infrastructure/prisma-employees";
 import { PrismaHrSettingsRepository } from "../infrastructure/prisma-hr-settings";
 import { PrismaRegistrationRepository } from "../infrastructure/prisma-registration";
@@ -210,10 +213,35 @@ export class EmployeesController {
   constructor(
     private readonly employees: Employees,
     private readonly stores: HrFileStores,
+    private readonly access: PortalAccess,
   ) {}
 
   private repo(t: TenantContext) {
     return new PrismaEmployeeRepository(t.db);
+  }
+
+  /** Dar/retirar acesso ao portal: um utilizador do colégio (nunca uma sessão de suporte). */
+  private staff(u: SchoolAccess) {
+    if (u.support) throw new ForbiddenException({ code: "FORBIDDEN", message: "Numa sessão de suporte não se dá acesso ao portal." });
+    return { id: u.id, name: u.fullName };
+  }
+
+  @Post(":id/portal-access")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("hr.employees.edit")
+  @ApiOperation({
+    summary: "Dar acesso ao portal (conta de professor ligada ao funcionário)",
+    description: "Convite por email (ativação normal: código → senha → 2FA). Se já existir uma conta com o email, liga-se a ela.",
+  })
+  async grantAccess(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string) {
+    return unwrap(await this.access.grant(new PrismaPortalAccess(t.db), new PrismaUserAdminRepository(t.db), this.staff(u), school(t), employeeId), HR_HTTP);
+  }
+
+  @Delete(":id/portal-access")
+  @RequirePermission("hr.employees.edit")
+  @ApiOperation({ summary: "Retirar o acesso ao portal (convite cancelado ou conta suspensa)" })
+  async revokeAccess(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string) {
+    return unwrap(await this.access.revoke(new PrismaPortalAccess(t.db), new PrismaUserAdminRepository(t.db), this.staff(u), employeeId), HR_HTTP);
   }
 
   private async load(t: TenantContext, employeeId: string) {

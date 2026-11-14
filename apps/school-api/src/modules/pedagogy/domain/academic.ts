@@ -47,7 +47,10 @@ export type PedagogyErrorCode =
   | "PERIOD_IN_USE"
   | "SLOT_INVALID"
   | "WEEKLY_LIMIT"
-  | "ROOM_BUSY";
+  | "ROOM_BUSY"
+  // professores
+  | "TEACHER_NOT_FOUND"
+  | "TEACHER_BUSY";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>

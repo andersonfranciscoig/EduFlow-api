@@ -174,7 +174,9 @@ export class AuthController {
     if (user.support) return { ...supportProfile(user, tenant), permissions };
     const profile = await this.profile.execute(this.scopes.for(tenant), user.id);
     if (!profile) throw new NotFoundException({ code: "ACCOUNT_NOT_FOUND", message: "Conta não encontrada." });
-    return { ...profile, permissions, support: null };
+    // conta ligada a um professor (funcionário): o portal mostra "O meu horário"
+    const teacher = await tenant.db.employee.findUnique({ where: { userId: user.id }, select: { id: true } });
+    return { ...profile, permissions, support: null, teacher: teacher ? { employeeId: teacher.id } : null };
   }
 
   @Post("sign-out")

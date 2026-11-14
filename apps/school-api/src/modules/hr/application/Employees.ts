@@ -142,6 +142,8 @@ export class Employees {
       data: { personal: e.personal, sections: e.sections },
       documents: e.documents.map(documentDto),
       photoId: e.documents.find((d) => d.slot === "PHOTO")?.id ?? null,
+      /** conta do portal: INVITED (convite por ativar), ACTIVE, SUSPENDED; null = sem acesso */
+      portalAccess: e.portalUser ? { status: e.portalUser.status, email: e.portalUser.email } : null,
       issues,
       complete: Object.keys(issues).length === 0,
     };

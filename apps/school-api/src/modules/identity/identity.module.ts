@@ -183,6 +183,7 @@ import { UsersController } from "./presentation/http/users.controller";
     // --- guard (exportado para os próximos contextos do portal: turmas, alunos…)
     SchoolAuthGuard,
   ],
-  exports: [T.AccessTokenService, T.SupportTokenService, SchoolSecurity, SupportAccess, TenantScopes, SchoolAuthGuard, PermissionsGuard],
+  // ManageUsers: o RH dá acesso ao portal aos professores (conta ligada ao funcionário)
+  exports: [T.AccessTokenService, T.SupportTokenService, SchoolSecurity, SupportAccess, TenantScopes, SchoolAuthGuard, PermissionsGuard, ManageUsers],
 })
 export class IdentityModule {}

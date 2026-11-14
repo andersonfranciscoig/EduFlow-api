@@ -10,6 +10,8 @@ import type { Env } from "../../config/env";
 import { IdentityModule } from "../identity/identity.module";
 import { Employees } from "./application/Employees";
 import { HrSettings } from "./application/HrSettings";
+import { ManageUsers } from "../identity/application/ManageUsers";
+import { PortalAccess } from "./application/PortalAccess";
 import { Registration } from "./application/Registration";
 import { HrFileStores } from "./infrastructure/hr-file-store";
 import { EmailRegistrationMailer, employeeMailer } from "./infrastructure/registration-mailer";
@@ -71,6 +73,8 @@ const HR_MAILER = Symbol("HrMailer");
       useFactory: (config: ConfigService<Env, true>, mailer: EmailRegistrationMailer) =>
         new Employees(employeeMailer(mailer), new BcryptPasswordHasher(), uuidGenerator, systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })),
     },
+    // acesso ao portal (conta de professor ligada ao funcionário) — reutiliza o convite dos utilizadores
+    { provide: PortalAccess, inject: [ManageUsers], useFactory: (users: ManageUsers) => new PortalAccess(users, systemClock) },
   ],
 })
 export class HrModule {}

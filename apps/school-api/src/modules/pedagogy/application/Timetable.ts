@@ -49,6 +49,8 @@ function timetableError(r: Exclude<TimetableOutcome<unknown>, { ok: true }>, nam
       return pedagogyError("WEEKLY_LIMIT", `A disciplina já tem os ${r.limit} tempos semanais do plano nesta turma.`, { limit: r.limit });
     case "room_busy":
       return pedagogyError("ROOM_BUSY", `A sala ${r.room} já está ocupada nesse tempo (${r.by}).`, { room: r.room, by: r.by });
+    case "teacher_busy":
+      return pedagogyError("TEACHER_BUSY", `${r.teacher} já tem aula a essa hora (${r.by}).`, { teacher: r.teacher, by: r.by });
     case "in_lessons":
       return pedagogyError(
         "SUBJECT_IN_USE",
@@ -201,17 +203,24 @@ export class Timetable {
       group: { ...t.group, shiftLabel: SHIFT_LABELS[t.group.shift] },
       weekdays: WEEKDAYS,
       periods: t.periods,
+      coordinator: t.group.coordinator,
       lessons: t.lessons.map((l) => {
         const s = subjects.get(l.subjectId);
+        const teacher = t.teachers[l.subjectId] ?? null;
         return {
           ...l,
           subject: s ? { id: s.id, name: s.name, code: s.code, color: s.color } : null,
-          // professores: ainda não existe o módulo → sempre sem professor
-          teacher: null,
-          teacherLabel: NO_TEACHER,
+          teacher,
+          teacherLabel: teacher?.fullName ?? NO_TEACHER,
+          /** o professor tem outra aula a esta hora (onde) */
+          clash: t.clashes[l.id] ?? null,
         };
       }),
-      curriculum: t.curriculum.map((c) => ({ subject: subjectDto(c.subject), weeklyPeriods: c.weeklyPeriods, scheduled: count(c.subject.id), teacherLabel: NO_TEACHER })),
+      curriculum: t.curriculum.map((c) => {
+        const teacher = t.teachers[c.subject.id] ?? null;
+        return { subject: subjectDto(c.subject), weeklyPeriods: c.weeklyPeriods, scheduled: count(c.subject.id), teacher, teacherLabel: teacher?.fullName ?? NO_TEACHER };
+      }),
+      clashes: Object.keys(t.clashes).length,
       totals: { weekly: t.curriculum.reduce((n, c) => n + c.weeklyPeriods, 0), scheduled: t.lessons.length, slots: t.periods.filter((p) => p.kind === "AULA").length * WEEKDAYS.length },
     });
   }
