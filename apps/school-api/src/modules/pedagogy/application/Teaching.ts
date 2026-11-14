@@ -179,6 +179,51 @@ export class Teaching {
     return this.teacherTimetable(repo, me.id, input);
   }
 
+  /**
+   * "As minhas turmas": as turmas do professor ligado a esta conta (onde dá aulas ou que
+   * coordena), as disciplinas que dá em cada uma e, por disciplina, em que turmas a dá.
+   */
+  async myClasses(repo: TeachingRepository, userId: string, input: { yearId?: string | null }) {
+    const me = await repo.employeeOfUser(userId);
+    if (!me) return fail(pedagogyError("TEACHER_NOT_FOUND", "Esta conta não está ligada a nenhum professor."));
+    const yearId = input.yearId ?? (await repo.currentYearId());
+    const year = yearId ? await repo.yearInfo(yearId) : null;
+    const [groups, quals, catalog] = await Promise.all([year ? repo.teacherGroups(me.id, year.id) : [], repo.qualifications(me.id), repo.qualificationCatalog()]);
+    const bySubject = new Map<string, { subject: { id: string; name: string; code: string; color: string }; groups: { id: string; label: string; weeklyPeriods: number; scheduled: number }[] }>();
+    for (const g of groups) {
+      for (const s of g.subjects) {
+        const entry = bySubject.get(s.subject.id) ?? { subject: s.subject, groups: [] };
+        entry.groups.push({ id: g.id, label: g.label, weeklyPeriods: s.weeklyPeriods, scheduled: s.scheduled });
+        bySubject.set(s.subject.id, entry);
+      }
+    }
+    const subjects = [...bySubject.values()]
+      .map((s) => ({ ...s, weeklyPeriods: s.groups.reduce((n, g) => n + g.weeklyPeriods, 0), scheduled: s.groups.reduce((n, g) => n + g.scheduled, 0) }))
+      .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
+    return ok({
+      teacher: me,
+      year: year ? { ...year, statusLabel: YEAR_STATUS_LABELS[year.status] } : null,
+      groups: groups.map((g) => ({ ...g, gradeLabel: gradeLabel(g.grade), shiftLabel: SHIFT_LABELS[g.shift] })),
+      subjects,
+      qualifications: quals.map((q) => qualificationSummary(q, catalog)),
+      totals: {
+        groups: groups.length,
+        subjects: subjects.length,
+        weeklyPeriods: subjects.reduce((n, s) => n + s.weeklyPeriods, 0),
+        coordinates: groups.filter((g) => g.isCoordinator).length,
+      },
+    });
+  }
+
+  /** O professor só abre as turmas onde dá aulas ou que coordena (as outras: "não encontrada"). */
+  async myGroupAccess(repo: TeachingRepository, userId: string, groupId: string) {
+    const me = await repo.employeeOfUser(userId);
+    if (!me) return fail(pedagogyError("TEACHER_NOT_FOUND", "Esta conta não está ligada a nenhum professor."));
+    const access = await repo.groupAccess(me.id, groupId);
+    if (!access) return fail(pedagogyError("GROUP_NOT_FOUND", "Turma não encontrada."));
+    return ok({ employeeId: me.id, ...access });
+  }
+
   // ================================================================ habilitações
 
   /** As habilitações do professor e o catálogo para as escolher (tipos de ensino, classes, cursos, disciplinas). */

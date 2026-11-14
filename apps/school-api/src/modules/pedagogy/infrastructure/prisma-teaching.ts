@@ -8,6 +8,7 @@ import type {
   GroupTeaching,
   QualificationCatalog,
   TeacherCandidate,
+  TeacherGroup,
   TeacherLesson,
   TeacherLoad,
   TeachingOutcome,
@@ -243,6 +244,56 @@ export class PrismaTeachingRepository implements TeachingRepository {
         };
       })
       .sort((a, b) => a.grade - b.grade || a.label.localeCompare(b.label));
+  }
+
+  // ------------------------------------------------------------ as turmas do professor
+
+  async teacherGroups(employeeId: string, yearId: string): Promise<TeacherGroup[]> {
+    const groups = await this.db.classGroup.findMany({
+      where: { academicYearId: yearId, OR: [{ teachers: { some: { employeeId } } }, { coordinatorId: employeeId }] },
+      include: {
+        coordinator: { select: { id: true, fullName: true } },
+        teachers: { where: { employeeId }, select: { subjectId: true } },
+        lessons: { where: { teacherId: employeeId }, select: { subjectId: true } },
+        schoolClass: {
+          include: {
+            course: { select: { name: true, code: true } },
+            subjects: { include: { subject: { select: { id: true, name: true, code: true, color: true } } }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
+          },
+        },
+      },
+    });
+    return groups
+      .map((g) => {
+        const mine = new Set(g.teachers.map((t) => t.subjectId));
+        return {
+          id: g.id,
+          name: g.name,
+          label: label(g.schoolClass.grade, g.schoolClass.course?.code ?? null, g.name),
+          grade: g.schoolClass.grade,
+          course: g.schoolClass.course?.name ?? null,
+          courseCode: g.schoolClass.course?.code ?? null,
+          shift: g.shift as Shift,
+          room: g.room,
+          coordinator: g.coordinator,
+          isCoordinator: g.coordinatorId === employeeId,
+          planSubjects: g.schoolClass.subjects.length,
+          subjects: g.schoolClass.subjects
+            .filter((s) => mine.has(s.subjectId))
+            .map((s) => ({ subject: s.subject, weeklyPeriods: s.weeklyPeriods, scheduled: g.lessons.filter((l) => l.subjectId === s.subjectId).length })),
+        };
+      })
+      .sort((a, b) => a.grade - b.grade || a.label.localeCompare(b.label));
+  }
+
+  async groupAccess(employeeId: string, groupId: string) {
+    const [teaches, group] = await Promise.all([
+      this.db.groupTeacher.findMany({ where: { groupId, employeeId }, select: { subjectId: true } }),
+      this.db.classGroup.findUnique({ where: { id: groupId }, select: { coordinatorId: true } }),
+    ]);
+    if (!group) return null;
+    const coordinates = group.coordinatorId === employeeId;
+    return teaches.length || coordinates ? { subjectIds: teaches.map((t) => t.subjectId), coordinates } : null;
   }
 }
 
