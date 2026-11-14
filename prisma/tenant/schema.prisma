@@ -303,6 +303,23 @@ model Subject {
   @@map("subjects")
 }
 
+/// Habilitação de um professor: tipo de ensino → classes (e cursos no II Ciclo) → disciplinas.
+model TeacherQualification {
+  id         String   @id @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// pre | primario | ciclo1 | ciclo2
+  level      String
+  grades     Int[]
+  courseIds  String[] @default([]) @map("course_ids") @db.Uuid
+  subjectIds String[] @map("subject_ids") @db.Uuid
+  createdAt  DateTime @map("created_at")
+  updatedAt  DateTime @map("updated_at")
+
+  @@index([employeeId])
+  @@map("teacher_qualifications")
+}
+
 /// Quem dá cada disciplina em cada turma.
 model GroupTeacher {
   groupId      String     @map("group_id") @db.Uuid
@@ -657,7 +674,8 @@ model Employee {
   userId         String?                      @unique @map("user_id") @db.Uuid
   user           SchoolUser?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  documents     EmployeeDocument[]
+  documents      EmployeeDocument[]
+  qualifications TeacherQualification[]
   teaching      GroupTeacher[]
   lessons       Lesson[]
   coordinatedOf ClassGroup[]                  @relation("GroupCoordinator")
