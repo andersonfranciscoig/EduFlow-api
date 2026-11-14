@@ -6,6 +6,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
+import { NoTeachersGuard, TeacherMay } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import type { PedagogyActor } from "../application/ports";
 import { Teaching } from "../application/Teaching";
@@ -26,7 +27,7 @@ const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, i
 @ApiHeader({ name: "X-Tenant", required: false })
 @ApiBearerAuth()
 @Controller("v1/pedagogy")
-@UseGuards(TenantGuard, SchoolAuthGuard)
+@UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
 export class TeachingController {
   constructor(private readonly teaching: Teaching) {}
 
@@ -73,6 +74,7 @@ export class TeachingController {
   }
 
   @Get("my-timetable")
+  @TeacherMay()
   @ApiOperation({ summary: "O meu horário (a conta tem de estar ligada a um professor)" })
   async myTimetable(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
     return unwrap(await this.teaching.myTimetable(this.repo(t), u.id, q), PEDAGOGY_HTTP);

@@ -45,6 +45,9 @@ const groupDto = (g: GroupRow) => ({
   confirmed: g.confirmed,
   /** lugares livres (null = turma sem lotação) */
   free: g.capacity === null ? null : Math.max(0, g.capacity - g.confirmed),
+  coordinator: g.coordinator,
+  /** aulas já marcadas no horário (0 = ainda sem horário) */
+  scheduled: g.scheduled,
 });
 
 const classDto = (c: ClassRow) => ({

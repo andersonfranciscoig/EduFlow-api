@@ -6,6 +6,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
+import { NoTeachersGuard } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import type { FinanceActor } from "../application/ports";
 import { Pricing } from "../application/Pricing";
@@ -62,7 +63,7 @@ const actorOf = (u: SchoolAccess): FinanceActor => ({ id: u.id, role: u.role, is
 @ApiHeader({ name: "X-Tenant", required: false })
 @ApiBearerAuth()
 @Controller("v1/finance")
-@UseGuards(TenantGuard, SchoolAuthGuard)
+@UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
 export class PricingController {
   constructor(private readonly pricing: Pricing) {}
 

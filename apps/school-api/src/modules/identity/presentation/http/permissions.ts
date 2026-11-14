@@ -45,3 +45,25 @@ export class PermissionsGuard implements CanActivate {
 
 /** `@RequirePermission("hr.settings.manage")` — num controller que já tem TenantGuard + SchoolAuthGuard. */
 export const RequirePermission = (...permissions: Permission[]) => applyDecorators(SetMetadata(REQUIRED, permissions), UseGuards(PermissionsGuard));
+
+const TEACHER_OK = "school:teacher-ok";
+
+/**
+ * Áreas de gestão (pedagógico, finanças): um PROFESSOR não entra — só no que é dele
+ * (rotas marcadas com `@TeacherMay()`, ex.: "o meu horário"). Direção, secretaria, o
+ * responsável e o suporte não são afetados. Corre DEPOIS do SchoolAuthGuard.
+ */
+@Injectable()
+export class NoTeachersGuard implements CanActivate {
+  constructor(private readonly reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const access = context.switchToHttp().getRequest<PermissionRequest>().schoolUser;
+    if (!access || access.support || access.isOwner || access.role !== "PROFESSOR") return true;
+    if (this.reflector.getAllAndOverride<boolean>(TEACHER_OK, [context.getHandler(), context.getClass()])) return true;
+    throw new ForbiddenException({ code: "FORBIDDEN", message: "Esta área não é de professores." });
+  }
+}
+
+/** Rota que um professor também pode usar (num controller com NoTeachersGuard). */
+export const TeacherMay = () => SetMetadata(TEACHER_OK, true);

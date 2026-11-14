@@ -29,6 +29,10 @@ export interface GroupRow {
   capacity: number | null;
   /** alunos já colocados nesta turma (reservas confirmadas) */
   confirmed: number;
+  /** coordenador de turma (null = por definir) */
+  coordinator: { id: string; fullName: string } | null;
+  /** aulas já marcadas no horário */
+  scheduled: number;
 }
 
 export interface ClassRow {

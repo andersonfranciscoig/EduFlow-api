@@ -23,7 +23,20 @@ const toYear = (y: { id: string; name: string; startsOn: Date; endsOn: Date; sta
   createdAt: y.createdAt,
 });
 
-const toGroup = (g: { id: string; classId: string; academicYearId: string; name: string; shift: string; room: string | null; capacity: number | null }, confirmed = 0): GroupRow => ({
+const toGroup = (
+  g: {
+    id: string;
+    classId: string;
+    academicYearId: string;
+    name: string;
+    shift: string;
+    room: string | null;
+    capacity: number | null;
+    coordinator?: { id: string; fullName: string } | null;
+    _count?: { lessons: number };
+  },
+  confirmed = 0,
+): GroupRow => ({
   id: g.id,
   classId: g.classId,
   academicYearId: g.academicYearId,
@@ -32,6 +45,8 @@ const toGroup = (g: { id: string; classId: string; academicYearId: string; name:
   room: g.room,
   capacity: g.capacity,
   confirmed,
+  coordinator: g.coordinator ?? null,
+  scheduled: g._count?.lessons ?? 0,
 });
 
 const toReservation = (r: { id: string; academicYearId: string; classId: string; groupId: string | null; status: string; reference: string; expiresAt: Date | null; createdAt: Date }): ReservationRow => ({
@@ -49,7 +64,11 @@ const toReservation = (r: { id: string; academicYearId: string; classId: string;
 const byName = (a: GroupRow, b: GroupRow) => a.name.localeCompare(b.name, "pt", { numeric: true });
 
 /** Classe com o curso do catálogo (nome e sigla) e as contagens de vagas. */
-const WITH_COURSE = { groups: true, course: { select: { name: true, code: true } } } as const;
+const WITH_COURSE = {
+  // turmas com o coordenador e quantas aulas já têm no horário
+  groups: { include: { coordinator: { select: { id: true, fullName: true } }, _count: { select: { lessons: true } } } },
+  course: { select: { name: true, code: true } },
+} as const;
 type ClassWithCourse = Prisma.SchoolClassGetPayload<{ include: typeof WITH_COURSE }>;
 
 function toClassRow(c: ClassWithCourse, counts: { held: Map<string, number>; confirmedByGroup: Map<string, number> }): ClassRow {
