@@ -82,7 +82,7 @@ const school = (t: TenantContext) => ({ slug: t.entry.slug, name: t.entry.school
 const actorOf = (u: SchoolAccess) => (u.support ? { id: null, name: null } : { id: u.id, name: u.fullName });
 
 /** Entrega um ficheiro decifrado: imagens e PDF abrem no navegador, o resto descarrega. */
-function sendFile(res: Response, f: { fileName: string; mimeType: string; content: Buffer }) {
+export function sendFile(res: Response, f: { fileName: string; mimeType: string; content: Buffer }) {
   const inline = /^(image\/(jpeg|png|webp)|application\/pdf)$/.test(f.mimeType);
   const ascii = f.fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "");
   res.set({

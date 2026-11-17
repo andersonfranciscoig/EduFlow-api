@@ -320,6 +320,43 @@ model TeacherQualification {
   @@map("teacher_qualifications")
 }
 
+/// Contrato de um funcionário (o estado calcula-se pelas datas). base_salary em kwanzas; null = por definir.
+model EmployeeContract {
+  id                String             @id @db.Uuid
+  number            Int                @unique
+  employeeId        String             @map("employee_id") @db.Uuid
+  employee          Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// INDETERMINADO | DETERMINADO | PRESTACAO_SERVICOS | ESTAGIO
+  kind              String
+  /// TEMPO_INTEIRO | TEMPO_PARCIAL
+  regime            String
+  weeklyHours       Int                @map("weekly_hours")
+  jobTitle          String             @map("job_title")
+  department        String?
+  startsOn          DateTime           @map("starts_on") @db.Date
+  endsOn            DateTime?          @map("ends_on") @db.Date
+  trialEndsOn       DateTime?          @map("trial_ends_on") @db.Date
+  baseSalary        Int?               @map("base_salary")
+  notes             String?
+  previousId        String?            @map("previous_id") @db.Uuid
+  previous          EmployeeContract?  @relation("ContractRenewal", fields: [previousId], references: [id], onDelete: SetNull)
+  renewals          EmployeeContract[] @relation("ContractRenewal")
+  terminatedOn      DateTime?          @map("terminated_on") @db.Date
+  terminationReason String?            @map("termination_reason")
+  fileName          String?            @map("file_name")
+  fileMimeType      String?            @map("file_mime_type")
+  fileSize          Int?               @map("file_size")
+  fileSha256        String?            @map("file_sha256")
+  fileStorageKey    String?            @map("file_storage_key")
+  fileUploadedAt    DateTime?          @map("file_uploaded_at")
+  createdById       String?            @map("created_by_id") @db.Uuid
+  createdAt         DateTime           @map("created_at")
+  updatedAt         DateTime           @map("updated_at")
+
+  @@index([employeeId, startsOn], map: "employee_contracts_employee_idx")
+  @@map("employee_contracts")
+}
+
 /// Quem dá cada disciplina em cada turma.
 model GroupTeacher {
   groupId      String     @map("group_id") @db.Uuid
@@ -676,6 +713,7 @@ model Employee {
 
   documents      EmployeeDocument[]
   qualifications TeacherQualification[]
+  contracts      EmployeeContract[]
   teaching      GroupTeacher[]
   lessons       Lesson[]
   coordinatedOf ClassGroup[]                  @relation("GroupCoordinator")

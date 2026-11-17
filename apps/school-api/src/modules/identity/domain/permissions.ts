@@ -15,6 +15,9 @@ export const PERMISSIONS = {
   "hr.employees.edit": { group: "hr", label: "Editar funcionários", hint: "Alterar dados e o estado do vínculo." },
   "hr.employees.approve": { group: "hr", label: "Aprovar cadastros", hint: "Aprovar ou pedir correções a um cadastro submetido." },
   "hr.employees.reject": { group: "hr", label: "Rejeitar cadastros", hint: "Recusar um cadastro submetido." },
+  "hr.contracts.view": { group: "hr", label: "Consultar contratos", hint: "Ver os contratos dos funcionários (sem o salário)." },
+  "hr.contracts.manage": { group: "hr", label: "Gerir contratos", hint: "Criar, alterar, renovar e rescindir contratos; juntar a cópia assinada." },
+  "hr.contracts.salary": { group: "hr", label: "Ver e definir salários", hint: "O salário base de cada contrato. Informação sensível." },
   "hr.settings.manage": { group: "hr", label: "Configurar o formulário", hint: "Campos da formação e dos dados profissionais; publicar versões." },
   "hr.documents.manage": { group: "hr", label: "Configurar os documentos", hint: "Documentos pedidos, formatos e tamanhos." },
 } as const;
