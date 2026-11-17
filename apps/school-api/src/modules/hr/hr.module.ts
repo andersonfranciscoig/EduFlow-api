@@ -8,7 +8,9 @@ import { BrevoMailer, ConsoleMailer } from "../../../../../libs/kernel/src/infra
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
 import type { Env } from "../../config/env";
 import { IdentityModule } from "../identity/identity.module";
+import { Attendance } from "./application/Attendance";
 import { Contracts } from "./application/Contracts";
+import { AttendanceController } from "./presentation/attendance.controller";
 import { Employees } from "./application/Employees";
 import { ContractsController } from "./presentation/contracts.controller";
 import { HrSettings } from "./application/HrSettings";
@@ -32,8 +34,10 @@ const HR_MAILER = Symbol("HrMailer");
  */
 @Module({
   imports: [IdentityModule], // SchoolAuthGuard + PermissionsGuard
-  controllers: [HrSettingsController, PublicRegistrationController, RegistrationRequestsController, ApplicantFormController, EmployeesController, ContractsController],
+  controllers: [HrSettingsController, PublicRegistrationController, RegistrationRequestsController, ApplicantFormController, EmployeesController, ContractsController, AttendanceController],
   providers: [
+    // assiduidade (folha do dia e mapa mensal; comprovativos no armazenamento do RH)
+    { provide: Attendance, useFactory: () => new Attendance(uuidGenerator, systemClock) },
     // contratos (o salário tem permissão própria; a cópia assinada usa o armazenamento do RH)
     { provide: Contracts, useFactory: () => new Contracts(uuidGenerator, systemClock) },
     { provide: HrSettings, useFactory: () => new HrSettings(uuidGenerator, systemClock) },

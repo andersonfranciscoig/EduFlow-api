@@ -320,6 +320,31 @@ model TeacherQualification {
   @@map("teacher_qualifications")
 }
 
+/// Assiduidade: um registo por funcionário e por dia (sem registo = por marcar).
+model EmployeeAttendance {
+  id              String    @id @db.Uuid
+  employeeId      String    @map("employee_id") @db.Uuid
+  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  day             DateTime  @db.Date
+  /// PRESENTE | ATRASO | FALTA | FALTA_JUSTIFICADA
+  status          String
+  minutesLate     Int?      @map("minutes_late")
+  note            String?
+  proofName       String?   @map("proof_name")
+  proofMimeType   String?   @map("proof_mime_type")
+  proofSize       Int?      @map("proof_size")
+  proofSha256     String?   @map("proof_sha256")
+  proofStorageKey String?   @map("proof_storage_key")
+  proofUploadedAt DateTime? @map("proof_uploaded_at")
+  recordedById    String?   @map("recorded_by_id") @db.Uuid
+  createdAt       DateTime  @map("created_at")
+  updatedAt       DateTime  @map("updated_at")
+
+  @@unique([employeeId, day], map: "employee_attendance_employee_day_key")
+  @@index([day], map: "employee_attendance_day_idx")
+  @@map("employee_attendance")
+}
+
 /// Contrato de um funcionário (o estado calcula-se pelas datas). base_salary em kwanzas; null = por definir.
 model EmployeeContract {
   id                String             @id @db.Uuid
@@ -714,6 +739,7 @@ model Employee {
   documents      EmployeeDocument[]
   qualifications TeacherQualification[]
   contracts      EmployeeContract[]
+  attendance     EmployeeAttendance[]
   teaching      GroupTeacher[]
   lessons       Lesson[]
   coordinatedOf ClassGroup[]                  @relation("GroupCoordinator")
