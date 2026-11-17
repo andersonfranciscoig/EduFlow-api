@@ -8,7 +8,9 @@ import { BrevoMailer, ConsoleMailer } from "../../../../../libs/kernel/src/infra
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
 import type { Env } from "../../config/env";
 import { IdentityModule } from "../identity/identity.module";
+import { Contracts } from "./application/Contracts";
 import { Employees } from "./application/Employees";
+import { ContractsController } from "./presentation/contracts.controller";
 import { HrSettings } from "./application/HrSettings";
 import { ManageUsers } from "../identity/application/ManageUsers";
 import { PortalAccess } from "./application/PortalAccess";
@@ -30,8 +32,10 @@ const HR_MAILER = Symbol("HrMailer");
  */
 @Module({
   imports: [IdentityModule], // SchoolAuthGuard + PermissionsGuard
-  controllers: [HrSettingsController, PublicRegistrationController, RegistrationRequestsController, ApplicantFormController, EmployeesController],
+  controllers: [HrSettingsController, PublicRegistrationController, RegistrationRequestsController, ApplicantFormController, EmployeesController, ContractsController],
   providers: [
+    // contratos (o salário tem permissão própria; a cópia assinada usa o armazenamento do RH)
+    { provide: Contracts, useFactory: () => new Contracts(uuidGenerator, systemClock) },
     { provide: HrSettings, useFactory: () => new HrSettings(uuidGenerator, systemClock) },
     {
       provide: HR_MAILER,

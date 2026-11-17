@@ -45,6 +45,9 @@ export type HrErrorCode =
   | "FILE_TOO_LARGE"
   | "FILE_NOT_FOUND"
   | "STORAGE_NOT_CONFIGURED"
+  // contratos
+  | "CONTRACT_NOT_FOUND"
+  | "CONTRACT_OVERLAP"
   | "STORAGE_UNAVAILABLE";
 
 export type HrError = DomainError<HrErrorCode>;
