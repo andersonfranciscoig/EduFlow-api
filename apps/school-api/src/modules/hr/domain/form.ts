@@ -48,6 +48,8 @@ export type HrErrorCode =
   // contratos
   | "CONTRACT_NOT_FOUND"
   | "CONTRACT_OVERLAP"
+  // assiduidade
+  | "ATTENDANCE_NOT_FOUND"
   | "STORAGE_UNAVAILABLE";
 
 export type HrError = DomainError<HrErrorCode>;

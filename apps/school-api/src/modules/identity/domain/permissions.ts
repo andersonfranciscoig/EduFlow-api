@@ -18,6 +18,8 @@ export const PERMISSIONS = {
   "hr.contracts.view": { group: "hr", label: "Consultar contratos", hint: "Ver os contratos dos funcionários (sem o salário)." },
   "hr.contracts.manage": { group: "hr", label: "Gerir contratos", hint: "Criar, alterar, renovar e rescindir contratos; juntar a cópia assinada." },
   "hr.contracts.salary": { group: "hr", label: "Ver e definir salários", hint: "O salário base de cada contrato. Informação sensível." },
+  "hr.attendance.view": { group: "hr", label: "Consultar a assiduidade", hint: "Ver as presenças, faltas e atrasos e o mapa mensal." },
+  "hr.attendance.manage": { group: "hr", label: "Registar a assiduidade", hint: "Marcar presenças, atrasos e faltas; juntar comprovativos." },
   "hr.settings.manage": { group: "hr", label: "Configurar o formulário", hint: "Campos da formação e dos dados profissionais; publicar versões." },
   "hr.documents.manage": { group: "hr", label: "Configurar os documentos", hint: "Documentos pedidos, formatos e tamanhos." },
 } as const;
