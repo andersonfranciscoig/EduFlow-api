@@ -239,6 +239,70 @@ model AdmissionPeriods {
   @@map("admission_periods")
 }
 
+/// Modo de um dado fixo do aluno/encarregado que o colégio pode mudar (os campos vêm do código).
+model AdmissionFixedField {
+  /// STUDENT | GUARDIAN
+  scope     String
+  key       String
+  /// REQUIRED | OPTIONAL | HIDDEN
+  mode      String
+  updatedAt DateTime @map("updated_at")
+
+  @@id([scope, key])
+  @@map("admission_fixed_fields")
+}
+
+/// Secção do formulário de inscrição definida pelo colégio.
+model AdmissionFormSection {
+  id           String               @id @db.Uuid
+  title        String
+  description  String?
+  repeatable   Boolean              @default(false)
+  entryLabel   String               @default("Registo") @map("entry_label")
+  maxEntries   Int                  @default(1) @map("max_entries")
+  processTypes String[]             @default([]) @map("process_types")
+  position     Int
+  active       Boolean              @default(true)
+  createdAt    DateTime             @map("created_at")
+  updatedAt    DateTime             @map("updated_at")
+  fields       AdmissionFormField[]
+
+  @@map("admission_form_sections")
+}
+
+/// Campo de uma secção (tipo, regras, processos e condição).
+model AdmissionFormField {
+  id           String               @id @db.Uuid
+  sectionId    String               @map("section_id") @db.Uuid
+  section      AdmissionFormSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  label        String
+  type         String
+  required     Boolean              @default(false)
+  help         String?
+  options      Json                 @default("[]")
+  settings     Json                 @default("{}")
+  processTypes String[]             @default([]) @map("process_types")
+  condition    Json?
+  position     Int
+  active       Boolean              @default(true)
+  createdAt    DateTime             @map("created_at")
+  updatedAt    DateTime             @map("updated_at")
+
+  @@index([sectionId, position], map: "admission_form_fields_section_idx")
+  @@map("admission_form_fields")
+}
+
+/// Versão publicada dos formulários (fotografia em JSON).
+model AdmissionFormVersion {
+  id            String   @id @db.Uuid
+  number        Int      @unique
+  snapshot      Json
+  publishedById String?  @map("published_by_id") @db.Uuid
+  publishedAt   DateTime @map("published_at")
+
+  @@map("admission_form_versions")
+}
+
 /// Documento pedido nas inscrições/matrículas: a quem (aluno, encarregado ou ambos), em que processos, formatos e regras.
 model AdmissionDocumentType {
   id           String   @id @db.Uuid

@@ -9,7 +9,20 @@
 import { DomainError } from "../../../../../../libs/kernel/src/domain/DomainError";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 
-export type AdmissionErrorCode = "INVALID_INPUT" | "YEAR_NOT_FOUND" | "YEAR_CLOSED" | "DOCUMENT_NOT_FOUND" | "DOCUMENT_EXISTS" | "LIMIT_REACHED" | "FORBIDDEN";
+export type AdmissionErrorCode =
+  | "INVALID_INPUT"
+  | "YEAR_NOT_FOUND"
+  | "YEAR_CLOSED"
+  | "DOCUMENT_NOT_FOUND"
+  | "DOCUMENT_EXISTS"
+  | "LIMIT_REACHED"
+  | "FORBIDDEN"
+  // formulários
+  | "SECTION_NOT_FOUND"
+  | "FIELD_NOT_FOUND"
+  | "FIELD_IN_USE"
+  | "NOTHING_TO_PUBLISH"
+  | "VERSION_NOT_FOUND";
 export type AdmissionError = DomainError<AdmissionErrorCode>;
 export const admissionError = (code: AdmissionErrorCode, message: string, meta?: Record<string, unknown>): AdmissionError => new DomainError(code, message, meta);
 
