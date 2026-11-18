@@ -22,29 +22,45 @@ export const PERMISSIONS = {
   "hr.attendance.manage": { group: "hr", label: "Registar a assiduidade", hint: "Marcar presenças, atrasos e faltas; juntar comprovativos." },
   "hr.settings.manage": { group: "hr", label: "Configurar o formulário", hint: "Campos da formação e dos dados profissionais; publicar versões." },
   "hr.documents.manage": { group: "hr", label: "Configurar os documentos", hint: "Documentos pedidos, formatos e tamanhos." },
+  // ---- Secretaria: inscrições e matrículas (as restantes chegam com cada fase)
+  "admissions.access": { group: "admissions", label: "Aceder às inscrições e matrículas", hint: "Sem esta, nenhuma das outras das inscrições funciona." },
+  "admissions.settings.manage": { group: "admissions", label: "Configurar os períodos", hint: "Quando abrem e fecham as inscrições, as matrículas e as renovações." },
+  "admissions.documents.manage": { group: "admissions", label: "Configurar os documentos", hint: "Documentos pedidos ao aluno e ao encarregado, formatos e regras." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
+type Group = (typeof PERMISSIONS)[Permission]["group"];
 
-export const PERMISSION_GROUPS = [{ key: "hr", label: "Recursos Humanos", permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === "hr") }];
+/** Cada grupo tem uma permissão de acesso: sem ela, as outras do grupo não servem. */
+export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access" };
+
+export const PERMISSION_GROUPS = (
+  [
+    { key: "hr", label: "Recursos Humanos" },
+    { key: "admissions", label: "Inscrições e matrículas" },
+  ] as const
+).map((g) => ({ ...g, permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === g.key) }));
+
+/** A permissão de acesso do grupo de uma permissão (ex.: hr.settings.manage → hr.access). */
+export const accessOf = (p: Permission) => GROUP_ACCESS[PERMISSIONS[p].group];
 
 /**
- * Sessões de SUPORTE EduFlow: podem ajudar a configurar o formulário (sem dados
- * pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
+ * Sessões de SUPORTE EduFlow: podem ajudar a configurar os formulários e os períodos
+ * (sem dados pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
  */
-export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage"];
+export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage"];
 
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 
 /**
- * Lista a gravar: só permissões conhecidas, sem repetidas; qualquer permissão do RH
- * traz consigo "hr.access" (sem ela as outras não serviriam de nada).
+ * Lista a gravar: só permissões conhecidas, sem repetidas; qualquer permissão de um grupo
+ * traz consigo a de acesso desse grupo (sem ela as outras não serviriam de nada).
  */
 export function normalizePermissions(list: string[]): Result<Permission[], { code: "INVALID_PERMISSION"; message: string }> {
   const unknown = list.find((p) => !isPermission(p));
   if (unknown) return fail({ code: "INVALID_PERMISSION", message: `Permissão desconhecida: ${unknown}.` });
   const set = new Set(list as Permission[]);
-  if ([...set].some((p) => p.startsWith("hr."))) set.add("hr.access");
+  for (const p of [...set]) set.add(accessOf(p));
   return ok(ALL_PERMISSIONS.filter((p) => set.has(p)));
 }
