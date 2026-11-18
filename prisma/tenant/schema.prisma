@@ -213,9 +213,54 @@ model AcademicYear {
   lessons        Lesson[]
   classFees      ClassFee[]
   feePlan        FeePlan?
+  admissionPeriods AdmissionPeriods?
 
   @@index([startsOn])
   @@map("academic_years")
+}
+
+// =============================================================================
+//  SECRETARIA — inscrições e matrículas (configuração)
+// =============================================================================
+
+/// Períodos de inscrição, matrícula e renovação de um ano letivo (cada par: os dois ou nenhum).
+model AdmissionPeriods {
+  academicYearId   String       @id @map("academic_year_id") @db.Uuid
+  academicYear     AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  applicationsFrom DateTime?    @map("applications_from") @db.Date
+  applicationsTo   DateTime?    @map("applications_to") @db.Date
+  enrollmentsFrom  DateTime?    @map("enrollments_from") @db.Date
+  enrollmentsTo    DateTime?    @map("enrollments_to") @db.Date
+  renewalsFrom     DateTime?    @map("renewals_from") @db.Date
+  renewalsTo       DateTime?    @map("renewals_to") @db.Date
+  updatedById      String?      @map("updated_by_id") @db.Uuid
+  updatedAt        DateTime     @map("updated_at")
+
+  @@map("admission_periods")
+}
+
+/// Documento pedido nas inscrições/matrículas: a quem (aluno, encarregado ou ambos), em que processos, formatos e regras.
+model AdmissionDocumentType {
+  id           String   @id @db.Uuid
+  name         String
+  description  String?
+  required     Boolean  @default(false)
+  /// STUDENT | GUARDIAN | BOTH
+  target       String
+  /// NOVA | RENOVACAO | TRANSFERENCIA | REINGRESSO (vazio = todos)
+  processTypes String[] @default([]) @map("process_types")
+  /// pdf, jpg, png, webp, doc, docx
+  formats      String[]
+  maxSizeMb    Int      @default(5) @map("max_size_mb")
+  maxFiles     Int      @default(1) @map("max_files")
+  /// pedir a data de validade do documento (ex.: atestado médico)
+  needsExpiry  Boolean  @default(false) @map("needs_expiry")
+  position     Int
+  active       Boolean  @default(true)
+  createdAt    DateTime @map("created_at")
+  updatedAt    DateTime @map("updated_at")
+
+  @@map("admission_document_types")
 }
 
 model SchoolClass {

@@ -4,6 +4,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { validateEnv } from "./config/env";
+import { AdmissionsModule } from "./modules/admissions/admissions.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HrModule } from "./modules/hr/hr.module";
 import { IdentityModule } from "./modules/identity/identity.module";
@@ -41,6 +42,7 @@ class HealthController {
     PedagogyModule,
     FinanceModule,
     HrModule,
+    AdmissionsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

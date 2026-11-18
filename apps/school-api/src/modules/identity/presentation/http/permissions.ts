@@ -3,7 +3,7 @@ import { Reflector } from "@nestjs/core";
 import type { PrismaClient } from ".prisma/tenant-client";
 import type { TenantRequest } from "../../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../application/ports";
-import { ALL_PERMISSIONS, isPermission, type Permission, SUPPORT_PERMISSIONS } from "../../domain/permissions";
+import { ALL_PERMISSIONS, accessOf, isPermission, type Permission, SUPPORT_PERMISSIONS } from "../../domain/permissions";
 
 const REQUIRED = "school:permissions";
 
@@ -22,7 +22,7 @@ export async function permissionsOf(db: PrismaClient, access: SchoolAccess): Pro
 
 /**
  * Corre DEPOIS do TenantGuard e do SchoolAuthGuard (que estão no controller).
- * Exige TODAS as permissões indicadas; as do RH exigem também "hr.access".
+ * Exige TODAS as permissões indicadas e a de acesso do grupo de cada uma.
  */
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -35,7 +35,8 @@ export class PermissionsGuard implements CanActivate {
     const access = request.schoolUser;
     if (!access || !request.tenant) throw new ForbiddenException({ code: "FORBIDDEN", message: "Sem permissão." });
     const have = (request.permissions ??= await permissionsOf(request.tenant.db, access));
-    const needed = required.some((p) => p.startsWith("hr.")) ? ["hr.access" as Permission, ...required] : required;
+    // cada permissão exige também a de acesso do seu grupo (hr.access, admissions.access…)
+    const needed = [...new Set([...required.map(accessOf), ...required])];
     if (!needed.every((p) => have.includes(p))) {
       throw new ForbiddenException({ code: "FORBIDDEN", message: "Não tem permissão para esta ação. Peça acesso ao responsável do colégio." });
     }
