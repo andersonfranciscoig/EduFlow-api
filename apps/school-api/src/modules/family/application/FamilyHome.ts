@@ -1,7 +1,7 @@
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { FullName, PhoneNumber } from "../../../../../../libs/kernel/src/domain/contact";
 import { fail, ok } from "../../../../../../libs/kernel/src/domain/Result";
-import { ageOn, canAccessStudent, familyError, isAdult, luandaToday, STUDENT_STATUS_LABELS } from "../domain/family";
+import { ACCOUNT_KINDS, ageOn, canAccessStudent, familyError, isAdult, luandaToday, STUDENT_STATUS_LABELS } from "../domain/family";
 import type { FamilyAccountRow, FamilyRepository } from "./ports";
 
 /**
@@ -31,7 +31,16 @@ export class FamilyHome {
       relationship: s.self ? null : s.relationship,
     });
     return {
-      account: { id: account.id, fullName: account.fullName, email: account.email, phone: account.phone, memberSince: account.createdAt.toISOString() },
+      account: {
+        id: account.id,
+        fullName: account.fullName,
+        email: account.email,
+        phone: account.phone,
+        kind: account.kind,
+        kindLabel: ACCOUNT_KINDS[account.kind].label,
+        birthDate: account.birthDate,
+        memberSince: account.createdAt.toISOString(),
+      },
       // a conta é aluno ela própria?
       self: visible.find((s) => s.self) ? dto(visible.find((s) => s.self)!) : null,
       guardian: guardian ? { id: guardian.id, fullName: guardian.fullName } : null,

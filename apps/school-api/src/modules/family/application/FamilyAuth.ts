@@ -3,7 +3,21 @@ import { EmailAddress, FullName, PhoneNumber, PlainPassword } from "../../../../
 import { OTP_POLICY, type OtpBlock, otpBlockMessage, otpBlockMeta, otpIssueBlock, otpVerifyBlock } from "../../../../../../libs/kernel/src/domain/email-otp";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import { generateOtpCode, hashOtp } from "../../../../../../libs/kernel/src/infrastructure/otp";
-import { type CodePurpose, type FamilyError, familyError, LOCK_MINUTES, MAX_FAILED_LOGINS, maskEmail, SESSION_HOURS } from "../domain/family";
+import {
+  ADULT_AGE,
+  type AccountKind,
+  ageOn,
+  type CodePurpose,
+  type FamilyError,
+  familyError,
+  isAccountKind,
+  isAdult,
+  LOCK_MINUTES,
+  luandaToday,
+  MAX_FAILED_LOGINS,
+  maskEmail,
+  SESSION_HOURS,
+} from "../domain/family";
 import type { FamilyAccountRow, FamilyCodeRow, FamilyMailer, FamilyRepository, FamilyTokens, School } from "./ports";
 
 const hashCode = (accountId: string, purpose: CodePurpose, code: string) => hashOtp(`family:${accountId}:${purpose}`, code);
@@ -92,7 +106,22 @@ export class FamilyAuth {
 
   // ---------------------------------------------------------------- criar conta
 
-  async register(repo: FamilyRepository, school: School, input: { fullName: string; email: string; phone?: string | null; password: string }) {
+  async register(repo: FamilyRepository, school: School, input: { kind: string; birthDate?: string | null; fullName: string; email: string; phone?: string | null; password: string }) {
+    if (!isAccountKind(input.kind)) return fail(familyError("INVALID_INPUT", "Escolha se é encarregado de educação ou aluno maior de idade."));
+    const kind: AccountKind = input.kind;
+    let birthDate: string | null = null;
+    if (kind === "STUDENT") {
+      // a maioridade decide-se AQUI (hora de Luanda), nunca no navegador
+      const raw = input.birthDate?.trim() ?? "";
+      const today = luandaToday(this.clock.now());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || Number.isNaN(Date.parse(`${raw}T00:00:00Z`)) || new Date(`${raw}T00:00:00Z`).toISOString().slice(0, 10) !== raw || raw > today || ageOn(raw, today) > 120) {
+        return fail(familyError("INVALID_INPUT", "Indique uma data de nascimento válida."));
+      }
+      if (!isAdult(raw, today)) {
+        return fail(familyError("UNDER_AGE", `Ainda não tem ${ADULT_AGE} anos: a conta tem de ser criada pelo encarregado de educação, que trata da inscrição.`));
+      }
+      birthDate = raw;
+    }
     const name = FullName.create(input.fullName);
     if (!name.ok) return fail(familyError("INVALID_INPUT", name.error.message));
     const email = EmailAddress.create(input.email);
@@ -121,13 +150,13 @@ export class FamilyAuth {
     let account: FamilyAccountRow;
     if (existing) {
       // ainda por ativar: os dados novos substituem os anteriores (só quem tem o email ativa)
-      await repo.update(existing.id, { fullName: name.value.value, phone, passwordHash, now });
-      account = { ...existing, fullName: name.value.value, phone, passwordHash };
+      await repo.update(existing.id, { fullName: name.value.value, phone, passwordHash, kind, birthDate, now });
+      account = { ...existing, fullName: name.value.value, phone, passwordHash, kind, birthDate };
     } else {
       const id = this.ids.next();
-      await repo.create({ id, email: email.value.value, fullName: name.value.value, phone, passwordHash, now });
+      await repo.create({ id, email: email.value.value, fullName: name.value.value, phone, passwordHash, kind, birthDate, now });
       account = (await repo.byId(id))!;
-      await repo.record("FAMILY_ACCOUNT_CREATED", id, id, {}, now);
+      await repo.record("FAMILY_ACCOUNT_CREATED", id, id, { kind }, now);
     }
     const sent = await this.sendCode(repo, school, account, "ACTIVATION", true);
     if (!sent.ok) return sent;

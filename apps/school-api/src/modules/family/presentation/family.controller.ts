@@ -26,12 +26,21 @@ export const FAMILY_HTTP: Partial<Record<FamilyErrorCode, HttpStatus>> = {
   EMAIL_NOT_SENT: HttpStatus.BAD_GATEWAY,
   INVALID_CHALLENGE: HttpStatus.UNAUTHORIZED,
   STUDENT_NOT_FOUND: HttpStatus.NOT_FOUND,
+  UNDER_AGE: HttpStatus.UNPROCESSABLE_ENTITY,
 };
 
 const MINUTE = 60_000;
 const email = z.string().max(254);
 const registerBody = z
-  .object({ fullName: z.string().max(120), email, phone: z.string().max(30).nullish(), password: z.string().max(128) })
+  .object({
+    // validado no domínio (mensagem em português): GUARDIAN | STUDENT
+    kind: z.string().max(20).default("").meta({ description: "GUARDIAN = encarregado de educação · STUDENT = aluno maior de idade" }),
+    birthDate: z.string().max(10).nullish().meta({ description: "AAAA-MM-DD — obrigatória para STUDENT (o servidor confirma os 18 anos)" }),
+    fullName: z.string().max(120),
+    email,
+    phone: z.string().max(30).nullish(),
+    password: z.string().max(128),
+  })
   .meta({ title: "FamilyRegister", description: "Criar conta da área da família (encarregado ou aluno maior). Segue um código por email." });
 const activateBody = z.object({ email, code: z.string().max(12) }).meta({ title: "FamilyActivate" });
 const emailBody = z.object({ email }).meta({ title: "FamilyEmail" });

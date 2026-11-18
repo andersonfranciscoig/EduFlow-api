@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from ".prisma/tenant-client";
 import type { OtpStats } from "../../../../../../libs/kernel/src/domain/email-otp";
 import type { FamilyAccountRow, FamilyCodeRow, FamilyRepository, LinkedStudent } from "../application/ports";
-import type { CodePurpose, FamilyStatus, StudentStatus } from "../domain/family";
+import type { AccountKind, CodePurpose, FamilyStatus, StudentStatus } from "../domain/family";
+
+const toDate = (iso: string | null) => (iso ? new Date(`${iso}T00:00:00Z`) : null);
 
 type AccountSel = Prisma.FamilyAccountGetPayload<object>;
 const toAccount = (a: AccountSel): FamilyAccountRow => ({
@@ -11,6 +13,8 @@ const toAccount = (a: AccountSel): FamilyAccountRow => ({
   fullName: a.fullName,
   phone: a.phone,
   passwordHash: a.passwordHash,
+  kind: a.kind as AccountKind,
+  birthDate: a.birthDate ? a.birthDate.toISOString().slice(0, 10) : null,
   status: a.status as FamilyStatus,
   failedLogins: a.failedLogins,
   lockedUntil: a.lockedUntil,
@@ -32,15 +36,26 @@ export class PrismaFamilyRepository implements FamilyRepository {
     return a ? toAccount(a) : null;
   }
 
-  async create(input: { id: string; email: string; fullName: string; phone: string | null; passwordHash: string; now: Date }) {
+  async create(input: Parameters<FamilyRepository["create"]>[0]) {
     await this.db.familyAccount.create({
-      data: { id: input.id, email: input.email, fullName: input.fullName, phone: input.phone, passwordHash: input.passwordHash, status: "PENDING", createdAt: input.now, updatedAt: input.now },
+      data: {
+        id: input.id,
+        email: input.email,
+        fullName: input.fullName,
+        phone: input.phone,
+        passwordHash: input.passwordHash,
+        kind: input.kind,
+        birthDate: toDate(input.birthDate),
+        status: "PENDING",
+        createdAt: input.now,
+        updatedAt: input.now,
+      },
     });
   }
 
   async update(id: string, set: Parameters<FamilyRepository["update"]>[1]) {
-    const { now, ...rest } = set;
-    await this.db.familyAccount.update({ where: { id }, data: { ...rest, updatedAt: now } });
+    const { now, birthDate, ...rest } = set;
+    await this.db.familyAccount.update({ where: { id }, data: { ...rest, ...(birthDate !== undefined ? { birthDate: toDate(birthDate) } : {}), updatedAt: now } });
   }
 
   async saveCode(c: FamilyCodeRow) {
