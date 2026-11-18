@@ -3,7 +3,7 @@ import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import type { ApplicationStatus, Entry, Shift, StepKey } from "../domain/applications";
 import { formatApplicationNumber } from "../domain/applications";
 import type { ProcessType } from "../domain/settings";
-import type { ApplicationFileRow, ApplicationRow, ApplicationsRepository, OpenYear, SubmitInput, SubmitOutcome } from "../application/applications-ports";
+import type { ApplicationFileRow, ApplicationRow, ApplicationsRepository, DecisionRow, OpenYear, StaffFilters, SubmitInput, SubmitOutcome } from "../application/applications-ports";
 
 type AppSel = Prisma.ApplicationGetPayload<object>;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -30,6 +30,21 @@ const toRow = (a: AppSel): ApplicationRow => ({
   submittedAt: a.submittedAt,
   createdAt: a.createdAt,
   updatedAt: a.updatedAt,
+});
+
+/** O que a família pode alterar e reenviar (igual a EDITABLE do serviço). */
+const FAMILY_EDITABLE: ApplicationStatus[] = ["DRAFT", "SUBMITTED", "CORRECTION_REQUIRED"];
+
+const toDecision = (r: Prisma.ApplicationHistoryGetPayload<object>): DecisionRow => ({
+  id: r.id,
+  fromStatus: r.fromStatus as ApplicationStatus | null,
+  toStatus: r.toStatus as ApplicationStatus,
+  actorKind: r.actorKind as "FAMILY" | "STAFF",
+  actorName: r.actorName,
+  reason: r.reason,
+  notes: r.notes,
+  steps: r.steps as StepKey[],
+  createdAt: r.createdAt,
 });
 
 /** Estados em que a inscrição de um aluno ainda "ocupa" o ano (não se faz outra igual). */
@@ -99,7 +114,7 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
     if (set.guardianData) data.guardianData = set.guardianData as Prisma.InputJsonValue;
     if (set.sectionsData) data.sectionsData = set.sectionsData as unknown as Prisma.InputJsonValue;
     if (set.currentStep) data.currentStep = set.currentStep;
-    const r = await this.db.application.updateMany({ where: { id, version: expectedVersion, status: "DRAFT" }, data });
+    const r = await this.db.application.updateMany({ where: { id, version: expectedVersion, status: { in: FAMILY_EDITABLE } }, data });
     return r.count === 1 ? expectedVersion + 1 : null;
   }
 
@@ -163,7 +178,7 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
     try {
       return await this.db.$transaction(async (tx) => {
         const app = await tx.application.findUnique({ where: { id: input.applicationId } });
-        if (!app || app.version !== input.expectedVersion || app.status !== "DRAFT") throw new Stale();
+        if (!app || app.version !== input.expectedVersion || !FAMILY_EDITABLE.includes(app.status as ApplicationStatus)) throw new Stale();
         const now = input.now;
         const birth = new Date(`${input.student.birthDate}T00:00:00Z`);
         const studentFields = { fullName: input.student.fullName, birthDate: birth, gender: input.student.gender, data: input.student.data as Prisma.InputJsonValue, updatedAt: now };
@@ -178,14 +193,19 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
             if (existing) await tx.guardian.update({ where: { id: existing.id }, data: gFields });
             else await tx.guardian.create({ data: { id: guardianId, accountId: input.accountId, ...gFields, createdAt: now } });
           } else {
-            guardianId = randomUUID();
-            await tx.guardian.create({ data: { id: guardianId, ...gFields, createdAt: now } });
+            // aluno maior: o encarregado que indicou (o mesmo, ao reenviar)
+            const prev = input.existingStudentId ? await tx.studentGuardian.findFirst({ where: { studentId: input.existingStudentId, guardian: { accountId: null } }, select: { guardianId: true } }) : null;
+            guardianId = prev?.guardianId ?? randomUUID();
+            if (prev) await tx.guardian.update({ where: { id: guardianId }, data: gFields });
+            else await tx.guardian.create({ data: { id: guardianId, ...gFields, createdAt: now } });
           }
         }
 
-        // ---- o aluno: o titular da conta (aluno maior) ou um educando já conhecido do encarregado
-        let studentId: string | null = null;
-        if (input.accountKind === "STUDENT") {
+        // ---- o aluno: o desta inscrição (ao reenviar), o titular da conta (aluno maior) ou um educando já conhecido do encarregado
+        let studentId: string | null = input.existingStudentId;
+        if (studentId) {
+          // já existe
+        } else if (input.accountKind === "STUDENT") {
           studentId = (await tx.student.findUnique({ where: { accountId: input.accountId }, select: { id: true } }))?.id ?? null;
         } else if (guardianId) {
           const known = await tx.student.findFirst({
@@ -221,15 +241,19 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
           });
         }
 
-        const [{ seq }] = await tx.$queryRaw<{ seq: bigint }[]>`SELECT nextval('application_number_seq') AS seq`;
-        const number = formatApplicationNumber(input.year, Number(seq));
+        // o n.º e a data da 1.ª submissão mantêm-se ao reenviar
+        let number = app.number;
+        if (!number) {
+          const [{ seq }] = await tx.$queryRaw<{ seq: bigint }[]>`SELECT nextval('application_number_seq') AS seq`;
+          number = formatApplicationNumber(input.year, Number(seq));
+        }
         const done = await tx.application.updateMany({
-          where: { id: app.id, version: input.expectedVersion, status: "DRAFT" },
+          where: { id: app.id, version: input.expectedVersion, status: { in: FAMILY_EDITABLE } },
           data: {
             status: "SUBMITTED",
             number,
             studentId,
-            submittedAt: now,
+            submittedAt: app.submittedAt ?? now,
             termsAcceptedAt: input.termsAcceptedAt,
             legitimacyDeclared: input.legitimacyDeclared,
             currentStep: "revisao",
@@ -239,7 +263,17 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
         });
         if (done.count !== 1) throw new Stale();
         await tx.applicationHistory.create({
-          data: { id: randomUUID(), applicationId: app.id, fromStatus: "DRAFT", toStatus: "SUBMITTED", actorKind: "FAMILY", actorId: input.accountId, actorName: input.actorName, createdAt: now },
+          data: {
+            id: randomUUID(),
+            applicationId: app.id,
+            fromStatus: app.status,
+            toStatus: "SUBMITTED",
+            actorKind: "FAMILY",
+            actorId: input.accountId,
+            actorName: input.actorName,
+            reason: app.status === "CORRECTION_REQUIRED" ? "Correções enviadas pela família" : app.status === "SUBMITTED" ? "Dados alterados pela família" : null,
+            createdAt: now,
+          },
         });
         return { ok: true as const, number, studentId };
       });
@@ -248,6 +282,125 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
       if (e instanceof Duplicate) return { ok: false, reason: "DUPLICATE", number: e.number };
       throw e;
     }
+  }
+
+  async yearOffer(id: string): Promise<OpenYear | null> {
+    const y = await this.db.academicYear.findUnique({
+      where: { id },
+      include: { admissionPeriods: true, classes: { orderBy: [{ grade: "asc" }, { createdAt: "asc" }], include: { course: { select: { name: true } }, groups: { select: { shift: true } } } } },
+    });
+    if (!y) return null;
+    const order: Shift[] = ["MANHA", "TARDE", "NOITE"];
+    const p = y.admissionPeriods;
+    return {
+      id: y.id,
+      name: y.name,
+      from: p?.applicationsFrom ? iso(p.applicationsFrom) : "",
+      to: p?.applicationsTo ? iso(p.applicationsTo) : "",
+      classes: y.classes.map((c) => ({ id: c.id, grade: c.grade, courseName: c.course?.name ?? null, description: c.description, shifts: order.filter((s) => c.groups.some((g) => g.shift === s)) })),
+    };
+  }
+
+  async history(applicationId: string): Promise<DecisionRow[]> {
+    const rows = await this.db.applicationHistory.findMany({ where: { applicationId }, orderBy: { createdAt: "asc" } });
+    return rows.map(toDecision);
+  }
+
+  async lastDecision(applicationId: string) {
+    const r = await this.db.applicationHistory.findFirst({ where: { applicationId, actorKind: "STAFF" }, orderBy: { createdAt: "desc" } });
+    return r ? toDecision(r) : null;
+  }
+
+  async staffList(f: StaffFilters) {
+    const q = f.q?.trim();
+    const where: Prisma.ApplicationWhereInput = {
+      status: { not: "DRAFT" },
+      ...(f.yearId ? { academicYearId: f.yearId } : {}),
+      ...(f.classId ? { classId: f.classId } : {}),
+      ...(q
+        ? {
+            OR: [
+              { number: { contains: q, mode: "insensitive" } },
+              { studentData: { path: ["fullName"], string_contains: q } },
+              { account: { fullName: { contains: q, mode: "insensitive" } } },
+              { student: { fullName: { contains: q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+    const [total, rows, grouped] = await Promise.all([
+      this.db.application.count({ where: { ...where, ...(f.status ? { status: f.status } : {}) } }),
+      this.db.application.findMany({
+        where: { ...where, ...(f.status ? { status: f.status } : {}) },
+        orderBy: [{ submittedAt: "desc" }],
+        skip: (f.page - 1) * f.pageSize,
+        take: f.pageSize,
+        include: {
+          account: { select: { fullName: true, kind: true } },
+          academicYear: { select: { name: true } },
+          schoolClass: { select: { grade: true, course: { select: { name: true } } } },
+        },
+      }),
+      this.db.application.groupBy({ by: ["status"], where, _count: { _all: true } }),
+    ]);
+    return {
+      total,
+      counts: Object.fromEntries(grouped.map((g) => [g.status, g._count._all])) as Partial<Record<ApplicationStatus, number>>,
+      rows: rows.map((r) => ({
+        id: r.id,
+        number: r.number,
+        processType: r.processType as ProcessType,
+        status: r.status as ApplicationStatus,
+        currentStep: r.currentStep as StepKey,
+        studentName: typeof json(r.studentData).fullName === "string" ? (json(r.studentData).fullName as string) : null,
+        yearName: r.academicYear?.name ?? null,
+        grade: r.schoolClass?.grade ?? null,
+        courseName: r.schoolClass?.course?.name ?? null,
+        submittedAt: r.submittedAt,
+        updatedAt: r.updatedAt,
+        applicantName: r.account.fullName,
+        applicantKind: r.account.kind as "GUARDIAN" | "STUDENT",
+      })),
+    };
+  }
+
+  async yearsWithApplications() {
+    const years = await this.db.academicYear.findMany({
+      where: { applications: { some: { status: { not: "DRAFT" } } } },
+      orderBy: { startsOn: "desc" },
+      select: { id: true, name: true, classes: { orderBy: [{ grade: "asc" }, { createdAt: "asc" }], select: { id: true, grade: true, course: { select: { name: true } } } } },
+    });
+    return years.map((y) => ({ id: y.id, name: y.name, classes: y.classes.map((c) => ({ id: c.id, grade: c.grade, courseName: c.course?.name ?? null })) }));
+  }
+
+  async applicant(accountId: string) {
+    const a = await this.db.familyAccount.findUnique({ where: { id: accountId }, select: { id: true, fullName: true, email: true, phone: true, kind: true, birthDate: true } });
+    return a ? { ...a, kind: a.kind as "GUARDIAN" | "STUDENT", birthDate: a.birthDate ? iso(a.birthDate) : null } : null;
+  }
+
+  async decide(input: Parameters<ApplicationsRepository["decide"]>[0]) {
+    return this.db.$transaction(async (tx) => {
+      const app = await tx.application.findUnique({ where: { id: input.applicationId }, select: { status: true } });
+      if (!app || !input.from.includes(app.status as ApplicationStatus)) return false;
+      const done = await tx.application.updateMany({ where: { id: input.applicationId, status: app.status }, data: { status: input.to, version: { increment: 1 }, updatedAt: input.now } });
+      if (done.count !== 1) return false;
+      await tx.applicationHistory.create({
+        data: {
+          id: randomUUID(),
+          applicationId: input.applicationId,
+          fromStatus: app.status,
+          toStatus: input.to,
+          actorKind: "STAFF",
+          actorId: input.actorId,
+          actorName: input.actorName,
+          reason: input.reason,
+          notes: input.notes,
+          steps: input.steps,
+          createdAt: input.now,
+        },
+      });
+      return true;
+    });
   }
 
   async record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date) {

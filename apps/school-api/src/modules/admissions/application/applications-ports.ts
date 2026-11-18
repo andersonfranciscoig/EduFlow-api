@@ -67,10 +67,43 @@ export interface ApplicationSummaryRow {
   updatedAt: Date;
 }
 
+/** Uma linha do histórico de estados. */
+export interface DecisionRow {
+  id: string;
+  fromStatus: ApplicationStatus | null;
+  toStatus: ApplicationStatus;
+  actorKind: "FAMILY" | "STAFF";
+  actorName: string | null;
+  reason: string | null;
+  notes: string | null;
+  /** passos a corrigir (pedido de correções) */
+  steps: StepKey[];
+  createdAt: Date;
+}
+
+/** Uma inscrição na lista da secretaria. */
+export interface StaffListRow extends ApplicationSummaryRow {
+  applicantName: string;
+  applicantKind: "GUARDIAN" | "STUDENT";
+}
+
+export interface StaffFilters {
+  yearId?: string;
+  classId?: string;
+  status?: ApplicationStatus;
+  q?: string;
+  page: number;
+  pageSize: number;
+}
+
 /** O que a submissão grava, numa só transação. */
 export interface SubmitInput {
   applicationId: string;
   expectedVersion: number;
+  /** de onde vem: rascunho (1.ª vez), submetida (alterada antes da análise) ou correções pedidas */
+  fromStatus: ApplicationStatus;
+  /** o aluno já criado numa submissão anterior */
+  existingStudentId: string | null;
   accountId: string;
   accountKind: "GUARDIAN" | "STUDENT";
   year: string;
@@ -101,11 +134,25 @@ export interface ApplicationsRepository {
   yearName(id: string): Promise<string | null>;
   classLabel(id: string): Promise<{ grade: number; courseName: string | null } | null>;
   submit(input: SubmitInput): Promise<SubmitOutcome>;
+  /** Um ano com as classes, mesmo com as inscrições fechadas (a inscrição já submetida mantém-no). */
+  yearOffer(id: string): Promise<OpenYear | null>;
+  history(applicationId: string): Promise<DecisionRow[]>;
+  /** A última decisão da secretaria (para mostrar à família o motivo / o que corrigir). */
+  lastDecision(applicationId: string): Promise<DecisionRow | null>;
+  // ---- secretaria
+  staffList(filters: StaffFilters): Promise<{ total: number; rows: StaffListRow[]; counts: Partial<Record<ApplicationStatus, number>> }>;
+  /** Anos com inscrições submetidas (para os filtros), com as classes. */
+  yearsWithApplications(): Promise<{ id: string; name: string; classes: { id: string; grade: number; courseName: string | null }[] }[]>;
+  applicant(accountId: string): Promise<{ id: string; fullName: string; email: string; phone: string | null; kind: "GUARDIAN" | "STUDENT"; birthDate: string | null } | null>;
+  /** Muda o estado se ainda estiver num dos estados esperados (e grava o histórico). false = mudou entretanto. */
+  decide(input: { applicationId: string; from: ApplicationStatus[]; to: ApplicationStatus; actorId: string; actorName: string; reason: string | null; notes: string | null; steps: StepKey[]; now: Date }): Promise<boolean>;
   record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date): Promise<void>;
 }
 
 export interface ApplicationsMailer {
   submitted(input: { to: { email: string; name: string }; school: { name: string; slug: string }; number: string; studentName: string; yearName: string; classLabel: string }): Promise<void>;
+  /** Correções pedidas, aprovada ou rejeitada. */
+  decision(input: { to: { email: string; name: string }; school: { name: string; slug: string }; number: string; studentName: string; status: "CORRECTION_REQUIRED" | "APPROVED" | "REJECTED"; reason: string | null; steps: string[] }): Promise<void>;
 }
 
 /** Armazenamento cifrado dos ficheiros do colégio (o mesmo do RH). */

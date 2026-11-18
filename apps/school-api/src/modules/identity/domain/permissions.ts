@@ -27,6 +27,8 @@ export const PERMISSIONS = {
   "admissions.settings.manage": { group: "admissions", label: "Configurar os períodos", hint: "Quando abrem e fecham as inscrições, as matrículas e as renovações." },
   "admissions.documents.manage": { group: "admissions", label: "Configurar os documentos", hint: "Documentos pedidos ao aluno e ao encarregado, formatos e regras." },
   "admissions.forms.manage": { group: "admissions", label: "Configurar os formulários", hint: "Dados do aluno e do encarregado, secções e campos do colégio, condições; publicar versões." },
+  "admissions.applications.view": { group: "admissions", label: "Consultar as inscrições", hint: "Ver as inscrições submetidas, os dados do aluno e do encarregado e os documentos." },
+  "admissions.applications.review": { group: "admissions", label: "Analisar as inscrições", hint: "Começar a análise, pedir correções à família, aprovar e rejeitar." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
