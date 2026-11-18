@@ -890,6 +890,10 @@ model FamilyAccount {
   fullName     String          @map("full_name")
   phone        String?
   passwordHash String          @map("password_hash")
+  /// GUARDIAN (encarregado) | STUDENT (aluno maior de idade)
+  kind         String          @default("GUARDIAN")
+  /// obrigatória para STUDENT (o school-api confirma os 18 anos)
+  birthDate    DateTime?       @map("birth_date") @db.Date
   /// PENDING | ACTIVE | SUSPENDED
   status       String          @default("PENDING")
   failedLogins Int             @default(0) @map("failed_logins")

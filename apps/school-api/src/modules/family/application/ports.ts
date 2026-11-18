@@ -1,5 +1,5 @@
 import type { OtpStats } from "../../../../../../libs/kernel/src/domain/email-otp";
-import type { CodePurpose, FamilyStatus, StudentStatus } from "../domain/family";
+import type { AccountKind, CodePurpose, FamilyStatus, StudentStatus } from "../domain/family";
 
 export interface FamilyAccountRow {
   id: string;
@@ -7,6 +7,9 @@ export interface FamilyAccountRow {
   fullName: string;
   phone: string | null;
   passwordHash: string;
+  kind: AccountKind;
+  /** "AAAA-MM-DD" (só STUDENT) */
+  birthDate: string | null;
   status: FamilyStatus;
   failedLogins: number;
   lockedUntil: Date | null;
@@ -43,8 +46,8 @@ export interface LinkedStudent {
 export interface FamilyRepository {
   byEmail(email: string): Promise<FamilyAccountRow | null>;
   byId(id: string): Promise<FamilyAccountRow | null>;
-  create(input: { id: string; email: string; fullName: string; phone: string | null; passwordHash: string; now: Date }): Promise<void>;
-  update(id: string, set: Partial<Pick<FamilyAccountRow, "fullName" | "phone" | "passwordHash" | "status" | "failedLogins" | "lockedUntil" | "lastLoginAt">> & { activatedAt?: Date; now: Date }): Promise<void>;
+  create(input: { id: string; email: string; fullName: string; phone: string | null; passwordHash: string; kind: AccountKind; birthDate: string | null; now: Date }): Promise<void>;
+  update(id: string, set: Partial<Pick<FamilyAccountRow, "fullName" | "phone" | "passwordHash" | "kind" | "birthDate" | "status"| "failedLogins" | "lockedUntil" | "lastLoginAt">> & { activatedAt?: Date; now: Date }): Promise<void>;
   saveCode(code: FamilyCodeRow): Promise<void>;
   latestCode(accountId: string, purpose: CodePurpose): Promise<FamilyCodeRow | null>;
   codeStats(accountId: string, purpose: CodePurpose, since: Date): Promise<OtpStats>;

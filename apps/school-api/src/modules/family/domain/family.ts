@@ -23,11 +23,20 @@ export type FamilyErrorCode =
   | "EMAIL_CODE_LIMIT"
   | "EMAIL_NOT_SENT"
   | "INVALID_CHALLENGE"
-  | "STUDENT_NOT_FOUND";
+  | "STUDENT_NOT_FOUND"
+  | "UNDER_AGE";
 export type FamilyError = DomainError<FamilyErrorCode>;
 export const familyError = (code: FamilyErrorCode, message: string, meta?: Record<string, unknown>): FamilyError => new DomainError(code, message, meta);
 
 export type FamilyStatus = "PENDING" | "ACTIVE" | "SUSPENDED";
+
+/** Como a conta foi criada: encarregado de educação ou aluno maior de idade. */
+export const ACCOUNT_KINDS = {
+  GUARDIAN: { label: "Encarregado de educação" },
+  STUDENT: { label: "Aluno maior de idade" },
+} as const;
+export type AccountKind = keyof typeof ACCOUNT_KINDS;
+export const isAccountKind = (k: unknown): k is AccountKind => typeof k === "string" && k in ACCOUNT_KINDS;
 export type CodePurpose = "ACTIVATION" | "LOGIN" | "RECOVERY";
 
 /** Entradas erradas seguidas que bloqueiam a conta durante LOCK_MINUTES. */
