@@ -26,6 +26,7 @@ export const PERMISSIONS = {
   "admissions.access": { group: "admissions", label: "Aceder às inscrições e matrículas", hint: "Sem esta, nenhuma das outras das inscrições funciona." },
   "admissions.settings.manage": { group: "admissions", label: "Configurar os períodos", hint: "Quando abrem e fecham as inscrições, as matrículas e as renovações." },
   "admissions.documents.manage": { group: "admissions", label: "Configurar os documentos", hint: "Documentos pedidos ao aluno e ao encarregado, formatos e regras." },
+  "admissions.forms.manage": { group: "admissions", label: "Configurar os formulários", hint: "Dados do aluno e do encarregado, secções e campos do colégio, condições; publicar versões." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -49,7 +50,7 @@ export const accessOf = (p: Permission) => GROUP_ACCESS[PERMISSIONS[p].group];
  * Sessões de SUPORTE EduFlow: podem ajudar a configurar os formulários e os períodos
  * (sem dados pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
  */
-export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage"];
+export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage"];
 
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 
