@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -223,6 +223,13 @@ export class AdmissionSettingsController {
       return unwrap({ ok: false, error: admissionError("FORBIDDEN", "Não tem permissão para publicar os formulários.") }, ADMISSIONS_HTTP);
     }
     return unwrap(await this.forms.publish(this.formsRepo(t), actorOf(u)), ADMISSIONS_HTTP);
+  }
+
+  @Get("printable")
+  @RequirePermission("admissions.access")
+  @ApiOperation({ summary: "Ficha de inscrição em branco de um processo (?process=NOVA|RENOVACAO|TRANSFERENCIA|REINGRESSO)", description: "Da versão publicada mais recente; 404 se ainda não há nenhuma." })
+  async printable(@CurrentTenant() t: TenantContext, @Query("process") process: string) {
+    return unwrap(await this.forms.printable(this.formsRepo(t), process ?? ""), ADMISSIONS_HTTP);
   }
 
   @Get("versions/:number")

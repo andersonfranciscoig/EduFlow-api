@@ -17,6 +17,7 @@ import {
   type FixedScope,
   fixedMode,
   type FormSnapshot,
+  forProcess,
   MAX_FIELDS_PER_SECTION,
   MAX_SECTIONS,
   SUGGESTED_SECTIONS,
@@ -316,6 +317,26 @@ export class AdmissionForms {
     const v = await repo.version(number);
     if (!v) return fail(admissionError("VERSION_NOT_FOUND", "Versão não encontrada."));
     return ok({ number: v.number, publishedAt: v.publishedAt.toISOString(), publishedBy: v.publishedBy, snapshot: v.snapshot });
+  }
+
+  /**
+   * Ficha de inscrição EM BRANCO de um processo (para preencher à mão no balcão): a versão
+   * publicada mais recente, só com o que se aplica a esse processo (sem os campos escondidos).
+   */
+  async printable(repo: AdmissionFormsRepository, process: string) {
+    if (!(process in PROCESS_TYPES)) return fail(admissionError("INVALID_INPUT", "Processo inválido."));
+    const latest = await repo.latestVersion();
+    if (!latest) return fail(admissionError("VERSION_NOT_FOUND", "Ainda não há formulários publicados. Publique-os em Configuração das inscrições → Publicar."));
+    const p = process as keyof typeof PROCESS_TYPES;
+    const form = forProcess(latest.snapshot, p);
+    return ok({
+      version: { number: latest.number, publishedAt: latest.publishedAt.toISOString() },
+      process: { value: p, label: PROCESS_TYPES[p].label },
+      student: form.student.filter((f) => f.mode !== "HIDDEN"),
+      guardian: form.guardian.filter((f) => f.mode !== "HIDDEN"),
+      sections: form.sections,
+      documents: form.documents,
+    });
   }
 }
 

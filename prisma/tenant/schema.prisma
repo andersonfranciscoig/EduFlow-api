@@ -879,5 +879,118 @@ model EmployeeDocument {
   @@map("employee_documents")
 }
 
+// =============================================================================
+//  FAMÍLIAS — contas de família (separadas da equipa), alunos e encarregados
+// =============================================================================
+
+/// Conta de família (encarregado e/ou aluno maior): email + senha + código por email.
+model FamilyAccount {
+  id           String          @id @db.Uuid
+  email        String          @unique
+  fullName     String          @map("full_name")
+  phone        String?
+  passwordHash String          @map("password_hash")
+  /// PENDING | ACTIVE | SUSPENDED
+  status       String          @default("PENDING")
+  failedLogins Int             @default(0) @map("failed_logins")
+  lockedUntil  DateTime?       @map("locked_until")
+  lastLoginAt  DateTime?       @map("last_login_at")
+  activatedAt  DateTime?       @map("activated_at")
+  createdAt    DateTime        @map("created_at")
+  updatedAt    DateTime        @map("updated_at")
+  codes        FamilyCode[]
+  sessions     FamilySession[]
+  guardian     Guardian?
+  student      Student?
+
+  @@map("family_accounts")
+}
+
+model FamilyCode {
+  id         String        @id @db.Uuid
+  accountId  String        @map("account_id") @db.Uuid
+  account    FamilyAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  /// ACTIVATION | LOGIN | RECOVERY
+  purpose    String
+  codeHash   String        @map("code_hash")
+  attempts   Int           @default(0)
+  expiresAt  DateTime      @map("expires_at")
+  consumedAt DateTime?     @map("consumed_at")
+  createdAt  DateTime      @map("created_at")
+
+  @@index([accountId, purpose, createdAt], map: "family_codes_account_idx")
+  @@map("family_codes")
+}
+
+model FamilySession {
+  id         String        @id @db.Uuid
+  accountId  String        @map("account_id") @db.Uuid
+  account    FamilyAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ip         String?
+  userAgent  String?       @map("user_agent")
+  createdAt  DateTime      @map("created_at")
+  lastSeenAt DateTime      @map("last_seen_at")
+  expiresAt  DateTime      @map("expires_at")
+  revokedAt  DateTime?     @map("revoked_at")
+
+  @@index([accountId], map: "family_sessions_account_idx")
+  @@map("family_sessions")
+}
+
+/// Encarregado de educação (pode não ter conta).
+model Guardian {
+  id        String            @id @db.Uuid
+  accountId String?           @unique @map("account_id") @db.Uuid
+  account   FamilyAccount?    @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  fullName  String            @map("full_name")
+  email     String?
+  phone     String?
+  data      Json              @default("{}")
+  createdAt DateTime          @map("created_at")
+  updatedAt DateTime          @map("updated_at")
+  students  StudentGuardian[]
+
+  @@map("guardians")
+}
+
+/// Aluno (entidade académica). O maior de idade pode ser titular da sua conta.
+model Student {
+  id        String            @id @db.Uuid
+  number    Int?              @unique
+  accountId String?           @unique @map("account_id") @db.Uuid
+  account   FamilyAccount?    @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  fullName  String            @map("full_name")
+  birthDate DateTime          @map("birth_date") @db.Date
+  gender    String?
+  data      Json              @default("{}")
+  /// CANDIDATE | ENROLLED | SUSPENDED | TRANSFERRED | LEFT | GRADUATED
+  status    String            @default("CANDIDATE")
+  createdAt DateTime          @map("created_at")
+  updatedAt DateTime          @map("updated_at")
+  guardians StudentGuardian[]
+
+  @@map("students")
+}
+
+/// Relação aluno ↔ encarregado (parentesco, principal, emergência, financeiro, se gere o aluno).
+model StudentGuardian {
+  studentId         String   @map("student_id") @db.Uuid
+  student           Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  guardianId        String   @map("guardian_id") @db.Uuid
+  guardian          Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  relationship      String
+  relationshipOther String?  @map("relationship_other")
+  isPrimary         Boolean  @default(false) @map("is_primary")
+  isEmergency       Boolean  @default(false) @map("is_emergency")
+  isFinancial       Boolean  @default(false) @map("is_financial")
+  canManage         Boolean  @default(false) @map("can_manage")
+  createdAt         DateTime @map("created_at")
+  updatedAt         DateTime @map("updated_at")
+
+  @@id([studentId, guardianId])
+  @@index([guardianId], map: "student_guardians_guardian_idx")
+  @@map("student_guardians")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
