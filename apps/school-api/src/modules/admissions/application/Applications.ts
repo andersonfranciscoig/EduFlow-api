@@ -27,18 +27,84 @@ import {
 import { type FormSnapshot, forProcess } from "../domain/forms";
 import { type AdmissionError, admissionError, PROCESS_TYPES } from "../domain/settings";
 import type { AdmissionFormsRepository } from "./forms-ports";
-import type { ApplicationFileStore, ApplicationRow, ApplicationsMailer, ApplicationsRepository, OpenYear } from "./applications-ports";
+import type { ApplicationFileRow, ApplicationFileStore, ApplicationRow, ApplicationsMailer, ApplicationsRepository, DecisionRow, OpenYear } from "./applications-ports";
 
 const PHOTO_FORMATS = ["jpg", "png", "webp"] as const;
 const PHOTO_MAX_MB = 5;
 const MAX_FILES = 60;
-/** O que a família pode alterar (a fase D acrescenta as correções pedidas). */
-const EDITABLE = ["DRAFT"];
+/**
+ * O que a família pode alterar: o rascunho, a inscrição submetida enquanto a secretaria não
+ * começa a análise, e a que voltou com correções pedidas. Depois de alterar, reenvia.
+ */
+export const EDITABLE: ApplicationRow["status"][] = ["DRAFT", "SUBMITTED", "CORRECTION_REQUIRED"];
+const LOCKED = "A secretaria já está a tratar desta inscrição: os dados já não podem ser alterados.";
 
 type School = { name: string; slug: string };
 type Upload = { originalname: string; buffer: Buffer } | undefined;
 
-const classLabelOf = (c: { grade: number; courseName: string | null }) => `${gradeLabel(c.grade)}${c.courseName ? ` — ${c.courseName}` : ""}`;
+export const classLabelOf = (c: { grade: number; courseName: string | null }) => `${gradeLabel(c.grade)}${c.courseName ? ` — ${c.courseName}` : ""}`;
+
+/** O formulário do processo, da versão com que a inscrição começou ("não pedir" = o campo não existe). */
+export async function loadForm(forms: AdmissionFormsRepository, app: Pick<ApplicationRow, "formVersion" | "processType">): Promise<FormSnapshot | null> {
+  const v = await forms.version(app.formVersion);
+  if (!v) return null;
+  const form = forProcess(v.snapshot, app.processType);
+  return { ...form, student: form.student.filter((f) => f.mode !== "HIDDEN"), guardian: form.guardian.filter((f) => f.mode !== "HIDDEN") };
+}
+
+const offer = (years: OpenYear[]) =>
+  years.map((y) => ({ ...y, classes: y.classes.map((c) => ({ ...c, label: classLabelOf(c), shiftOptions: (c.shifts.length ? c.shifts : (Object.keys(SHIFTS) as (keyof typeof SHIFTS)[])).map((s) => ({ value: s, label: SHIFTS[s] })) })) }));
+
+/** A inscrição como se mostra (à família e à secretaria). */
+export function applicationView(input: {
+  app: ApplicationRow;
+  form: FormSnapshot;
+  files: ApplicationFileRow[];
+  years: OpenYear[];
+  yearName: string | null;
+  cls: { grade: number; courseName: string | null } | null;
+  accountKind: "GUARDIAN" | "STUDENT";
+  studentAdult: boolean;
+  student: Entry;
+  problems: Partial<Record<StepKey, Errors>>;
+  lastDecision: DecisionRow | null;
+}) {
+  const { app, form, files } = input;
+  return {
+    id: app.id,
+    number: app.number,
+    status: app.status,
+    statusLabel: APPLICATION_STATUS[app.status],
+    editable: EDITABLE.includes(app.status),
+    canDiscard: app.status === "DRAFT",
+    processType: app.processType,
+    processLabel: PROCESS_TYPES[app.processType].label,
+    formVersion: app.formVersion,
+    version: app.version,
+    currentStep: app.currentStep,
+    steps: stepsFor(form).map((k) => ({ key: k, label: STEPS[k], problems: Object.keys(input.problems[k] ?? {}).length })),
+    accountKind: input.accountKind,
+    studentAdult: input.studentAdult,
+    candidatura: { academicYearId: app.academicYearId, classId: app.classId, shift: app.shift },
+    yearName: input.yearName,
+    classLabel: input.cls ? classLabelOf(input.cls) : null,
+    shiftLabel: app.shift ? SHIFTS[app.shift] : null,
+    student: input.student,
+    guardian: app.guardianData,
+    sections: app.sectionsData,
+    files: files.map((f) => ({ id: f.id, slot: f.slot, itemId: f.itemId, label: f.label, fileName: f.fileName, mimeType: f.mimeType, size: f.size, createdAt: f.createdAt.toISOString() })),
+    form: { student: form.student, guardian: form.guardian, sections: form.sections, documents: form.documents },
+    options: offer(input.years),
+    problems: input.problems,
+    lastDecision: input.lastDecision
+      ? { status: input.lastDecision.toStatus, statusLabel: APPLICATION_STATUS[input.lastDecision.toStatus], reason: input.lastDecision.reason, notes: input.lastDecision.notes, steps: input.lastDecision.steps.map((k) => ({ key: k, label: STEPS[k] })), at: input.lastDecision.createdAt.toISOString() }
+      : null,
+    termsAcceptedAt: app.termsAcceptedAt?.toISOString() ?? null,
+    submittedAt: app.submittedAt?.toISOString() ?? null,
+    createdAt: app.createdAt.toISOString(),
+    updatedAt: app.updatedAt.toISOString(),
+  };
+}
 
 /**
  * Inscrições online (área da família). A conta só vê e altera as SUAS inscrições.
@@ -63,13 +129,19 @@ export class Applications {
     return { countryCode: this.countryCode, today: this.today(), files, accountKind: account.kind };
   }
 
-  /** O formulário do processo (da versão com que começou). */
-  private async form(forms: AdmissionFormsRepository, app: Pick<ApplicationRow, "formVersion" | "processType">): Promise<FormSnapshot | null> {
-    const v = await forms.version(app.formVersion);
-    if (!v) return null;
-    const form = forProcess(v.snapshot, app.processType);
-    // "não pedir" = o campo não existe para a família
-    return { ...form, student: form.student.filter((f) => f.mode !== "HIDDEN"), guardian: form.guardian.filter((f) => f.mode !== "HIDDEN") };
+  private form(forms: AdmissionFormsRepository, app: Pick<ApplicationRow, "formVersion" | "processType">) {
+    return loadForm(forms, app);
+  }
+
+  /**
+   * Os anos que se podem escolher: os de inscrições abertas e, numa inscrição já submetida,
+   * também o ano que já tinha (corrigir dados não obriga a mudar de ano se o período fechou).
+   */
+  private async yearsFor(repo: ApplicationsRepository, app: Pick<ApplicationRow, "status" | "academicYearId">) {
+    const open = await repo.openYears(this.today());
+    if (app.status === "DRAFT" || !app.academicYearId || open.some((y) => y.id === app.academicYearId)) return open;
+    const own = await repo.yearOffer(app.academicYearId);
+    return own ? [own, ...open] : open;
   }
 
   private async own(repo: ApplicationsRepository, account: FamilyAccountRow, id: string): Promise<Result<ApplicationRow, AdmissionError>> {
@@ -131,43 +203,18 @@ export class Applications {
     const app = found.value;
     const form = await this.form(forms, app);
     if (!form) return fail(admissionError("VERSION_NOT_FOUND", "O formulário desta inscrição já não existe."));
-    const [files, years, yearName, cls] = await Promise.all([
+    const editable = EDITABLE.includes(app.status);
+    const [files, years, yearName, cls, lastDecision] = await Promise.all([
       repo.files(app.id),
-      EDITABLE.includes(app.status) ? repo.openYears(this.today()) : Promise.resolve([] as OpenYear[]),
+      editable ? this.yearsFor(repo, app) : Promise.resolve([] as OpenYear[]),
       app.academicYearId ? repo.yearName(app.academicYearId) : Promise.resolve(null),
       app.classId ? repo.classLabel(app.classId) : Promise.resolve(null),
+      repo.lastDecision(app.id),
     ]);
-    const problems = EDITABLE.includes(app.status) ? this.problems(account, app, form, files, years) : {};
-    return ok({
-      id: app.id,
-      number: app.number,
-      status: app.status,
-      statusLabel: APPLICATION_STATUS[app.status],
-      editable: EDITABLE.includes(app.status),
-      processType: app.processType,
-      processLabel: PROCESS_TYPES[app.processType].label,
-      formVersion: app.formVersion,
-      version: app.version,
-      currentStep: app.currentStep,
-      steps: stepsFor(form).map((k) => ({ key: k, label: STEPS[k], problems: Object.keys(problems[k] ?? {}).length })),
-      accountKind: account.kind,
-      studentAdult: this.studentAdult(account, app.studentData),
-      candidatura: { academicYearId: app.academicYearId, classId: app.classId, shift: app.shift },
-      yearName,
-      classLabel: cls ? classLabelOf(cls) : null,
-      shiftLabel: app.shift ? SHIFTS[app.shift] : null,
-      student: this.lockStudent(account, app.studentData),
-      guardian: app.guardianData,
-      sections: app.sectionsData,
-      files: files.map((f) => ({ id: f.id, slot: f.slot, itemId: f.itemId, label: f.label, fileName: f.fileName, mimeType: f.mimeType, size: f.size, createdAt: f.createdAt.toISOString() })),
-      form: { student: form.student, guardian: form.guardian, sections: form.sections, documents: form.documents },
-      options: years.map((y) => ({ ...y, classes: y.classes.map((c) => ({ ...c, label: classLabelOf(c), shiftOptions: (c.shifts.length ? c.shifts : (Object.keys(SHIFTS) as (keyof typeof SHIFTS)[])).map((s) => ({ value: s, label: SHIFTS[s] })) })) })),
-      problems,
-      termsAcceptedAt: app.termsAcceptedAt?.toISOString() ?? null,
-      submittedAt: app.submittedAt?.toISOString() ?? null,
-      createdAt: app.createdAt.toISOString(),
-      updatedAt: app.updatedAt.toISOString(),
-    });
+    const problems = editable ? this.problems(account, app, form, files, years) : {};
+    return ok(
+      applicationView({ app, form, files, years, yearName, cls, accountKind: account.kind, studentAdult: this.studentAdult(account, app.studentData), student: this.lockStudent(account, app.studentData), problems, lastDecision }),
+    );
   }
 
   // ---------------------------------------------------------------- validar
@@ -239,7 +286,7 @@ export class Applications {
     const found = await this.own(repo, account, id);
     if (!found.ok) return found;
     const app = found.value;
-    if (!EDITABLE.includes(app.status)) return fail(admissionError("NOT_EDITABLE", "Esta inscrição já foi submetida e não pode ser alterada."));
+    if (!EDITABLE.includes(app.status)) return fail(admissionError("NOT_EDITABLE", LOCKED));
     if (!isStepKey(input.step)) return fail(admissionError("INVALID_INPUT", "Passo inválido."));
     const form = await this.form(forms, app);
     if (!form) return fail(admissionError("VERSION_NOT_FOUND", "O formulário desta inscrição já não existe."));
@@ -260,7 +307,7 @@ export class Applications {
         const classId = typeof data.classId === "string" && data.classId ? data.classId : null;
         const shift = isShift(data.shift) ? data.shift : null;
         Object.assign(set, { academicYearId: yearId, classId, shift });
-        errors = this.checkCandidatura({ academicYearId: yearId, classId, shift }, await repo.openYears(this.today()));
+        errors = this.checkCandidatura({ academicYearId: yearId, classId, shift }, await this.yearsFor(repo, app));
         // um id que não é de nenhum ano/classe aberto não se guarda (a FK recusaria)
         if (errors.academicYearId) set.academicYearId = set.classId = null;
         else if (errors.classId) set.classId = null;
@@ -321,7 +368,7 @@ export class Applications {
     const found = await this.own(repo, account, id);
     if (!found.ok) return found;
     const app = found.value;
-    if (!EDITABLE.includes(app.status)) return fail(admissionError("NOT_EDITABLE", "Esta inscrição já foi submetida e não pode ser alterada."));
+    if (!EDITABLE.includes(app.status)) return fail(admissionError("NOT_EDITABLE", LOCKED));
     if (!file?.buffer?.length) return fail(admissionError("INVALID_FILE", "Escolha um ficheiro."));
     if (!store.ready) return fail(admissionError("STORAGE_UNAVAILABLE", "O envio de ficheiros ainda não está disponível neste colégio. Contacte a secretaria."));
     const form = await this.form(forms, app);
@@ -387,7 +434,7 @@ export class Applications {
   async removeFile(repo: ApplicationsRepository, store: ApplicationFileStore, account: FamilyAccountRow, id: string, fileId: string) {
     const found = await this.own(repo, account, id);
     if (!found.ok) return found;
-    if (!EDITABLE.includes(found.value.status)) return fail(admissionError("NOT_EDITABLE", "Esta inscrição já foi submetida e não pode ser alterada."));
+    if (!EDITABLE.includes(found.value.status)) return fail(admissionError("NOT_EDITABLE", LOCKED));
     const f = (await repo.files(id)).find((x) => x.id === fileId);
     if (!f) return fail(admissionError("FILE_NOT_FOUND", "Ficheiro não encontrado."));
     await repo.removeFile(f.id);
@@ -401,14 +448,14 @@ export class Applications {
     const found = await this.own(repo, account, id);
     if (!found.ok) return found;
     const app = found.value;
-    if (app.status !== "DRAFT") return fail(admissionError("NOT_EDITABLE", "Esta inscrição já foi submetida."));
+    if (!EDITABLE.includes(app.status)) return fail(admissionError("NOT_EDITABLE", LOCKED));
     if (app.version !== input.version) return fail(admissionError("STALE", "Esta inscrição foi alterada noutra janela. Recarregue a página para continuar."));
     if (!input.acceptTerms) return fail(admissionError("INVALID_INPUT", "Para submeter, confirme os dados e aceite os termos e a política de privacidade."));
     if (account.kind === "GUARDIAN" && !input.legitimacy) return fail(admissionError("INVALID_INPUT", "Declare que é o encarregado de educação (ou tem legitimidade) para fazer esta inscrição."));
     const form = await this.form(forms, app);
     if (!form) return fail(admissionError("VERSION_NOT_FOUND", "O formulário desta inscrição já não existe."));
 
-    const [files, years] = await Promise.all([repo.files(app.id), repo.openYears(this.today())]);
+    const [files, years] = await Promise.all([repo.files(app.id), this.yearsFor(repo, app)]);
     const problems = this.problems(account, app, form, files, years);
     const steps = stepsFor(form).filter((k) => problems[k]);
     if (steps.length) {
@@ -425,6 +472,8 @@ export class Applications {
     const outcome = await repo.submit({
       applicationId: app.id,
       expectedVersion: app.version,
+      fromStatus: app.status,
+      existingStudentId: app.studentId,
       accountId: account.id,
       accountKind: account.kind,
       year: this.today().slice(0, 4),
@@ -448,11 +497,15 @@ export class Applications {
     if (!outcome.ok) return fail(admissionError("DUPLICATE_APPLICATION", `Este aluno já tem uma inscrição em curso para este ano letivo (n.º ${outcome.number}).`, { number: outcome.number }));
 
     const cls = await repo.classLabel(app.classId!);
-    await repo.record("APPLICATION_SUBMITTED", app.id, null, { accountId: account.id, number: outcome.number, studentId: outcome.studentId }, now);
-    try {
-      await this.mailer.submitted({ to: { email: account.email, name: account.fullName }, school, number: outcome.number, studentName: String(fullName), yearName, classLabel: cls ? classLabelOf(cls) : "" });
-    } catch {
-      /* o aviso não impede a submissão (fica no histórico e na área da família) */
+    const first = app.status === "DRAFT";
+    await repo.record(first ? "APPLICATION_SUBMITTED" : "APPLICATION_RESUBMITTED", app.id, null, { accountId: account.id, number: outcome.number, studentId: outcome.studentId, from: app.status }, now);
+    // o email de "recebida" só na primeira vez (as alterações seguintes ficam no histórico)
+    if (first) {
+      try {
+        await this.mailer.submitted({ to: { email: account.email, name: account.fullName }, school, number: outcome.number, studentName: String(fullName), yearName, classLabel: cls ? classLabelOf(cls) : "" });
+      } catch {
+        /* o aviso não impede a submissão (fica no histórico e na área da família) */
+      }
     }
     return ok({ number: outcome.number, status: "SUBMITTED" as const, statusLabel: APPLICATION_STATUS.SUBMITTED });
   }

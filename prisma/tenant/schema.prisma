@@ -1035,6 +1035,7 @@ model Application {
 
   @@index([accountId, createdAt], map: "applications_account_idx")
   @@index([academicYearId, status], map: "applications_year_status_idx")
+  @@index([status, submittedAt], map: "applications_status_submitted_idx")
   @@map("applications")
 }
 
@@ -1071,6 +1072,8 @@ model ApplicationHistory {
   actorName     String?     @map("actor_name")
   reason        String?
   notes         String?
+  /// passos a corrigir (pedido de correções)
+  steps         String[]    @default([])
   createdAt     DateTime    @map("created_at")
 
   @@index([applicationId, createdAt], map: "application_history_app_idx")
