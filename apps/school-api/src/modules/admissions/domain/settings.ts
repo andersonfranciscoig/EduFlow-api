@@ -22,7 +22,17 @@ export type AdmissionErrorCode =
   | "FIELD_NOT_FOUND"
   | "FIELD_IN_USE"
   | "NOTHING_TO_PUBLISH"
-  | "VERSION_NOT_FOUND";
+  | "VERSION_NOT_FOUND"
+  // inscrições (área da família)
+  | "APPLICATION_NOT_FOUND"
+  | "APPLICATIONS_CLOSED"
+  | "NOT_EDITABLE"
+  | "STALE"
+  | "INCOMPLETE"
+  | "DUPLICATE_APPLICATION"
+  | "FILE_NOT_FOUND"
+  | "INVALID_FILE"
+  | "STORAGE_UNAVAILABLE";
 export type AdmissionError = DomainError<AdmissionErrorCode>;
 export const admissionError = (code: AdmissionErrorCode, message: string, meta?: Record<string, unknown>): AdmissionError => new DomainError(code, message, meta);
 

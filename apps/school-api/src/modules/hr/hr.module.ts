@@ -84,5 +84,7 @@ const HR_MAILER = Symbol("HrMailer");
     // acesso ao portal (conta de professor ligada ao funcionário) — reutiliza o convite dos utilizadores
     { provide: PortalAccess, inject: [ManageUsers], useFactory: (users: ManageUsers) => new PortalAccess(users, systemClock) },
   ],
+  // o armazenamento cifrado de cada colégio serve também os documentos das inscrições
+  exports: [HrFileStores],
 })
 export class HrModule {}
