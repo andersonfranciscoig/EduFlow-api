@@ -214,6 +214,7 @@ model AcademicYear {
   classFees      ClassFee[]
   feePlan        FeePlan?
   admissionPeriods AdmissionPeriods?
+  applications   Application[]
 
   @@index([startsOn])
   @@map("academic_years")
@@ -345,6 +346,7 @@ model SchoolClass {
   reservations SeatReservation[]
   subjects     ClassSubject[]
   fees         ClassFee[]
+  applications Application[]
 
   @@index([courseId])
   @@map("school_classes")
@@ -906,6 +908,7 @@ model FamilyAccount {
   sessions     FamilySession[]
   guardian     Guardian?
   student      Student?
+  applications Application[]
 
   @@map("family_accounts")
 }
@@ -972,6 +975,7 @@ model Student {
   createdAt DateTime          @map("created_at")
   updatedAt DateTime          @map("updated_at")
   guardians StudentGuardian[]
+  applications Application[]
 
   @@map("students")
 }
@@ -994,6 +998,83 @@ model StudentGuardian {
   @@id([studentId, guardianId])
   @@index([guardianId], map: "student_guardians_guardian_idx")
   @@map("student_guardians")
+}
+
+/// Processo de inscrição (rascunho → submetido → análise…), feito por uma conta de família.
+model Application {
+  id                 String               @id @db.Uuid
+  /// n.º do processo (na submissão)
+  number             String?              @unique
+  accountId          String               @map("account_id") @db.Uuid
+  account            FamilyAccount        @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  studentId          String?              @map("student_id") @db.Uuid
+  student            Student?             @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  /// NOVA | RENOVACAO | TRANSFERENCIA | REINGRESSO
+  processType        String               @map("process_type")
+  formVersion        Int                  @map("form_version")
+  academicYearId     String?              @map("academic_year_id") @db.Uuid
+  academicYear       AcademicYear?        @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  classId            String?              @map("class_id") @db.Uuid
+  schoolClass        SchoolClass?         @relation(fields: [classId], references: [id], onDelete: Restrict)
+  /// MANHA | TARDE | NOITE (preferência)
+  shift              String?
+  studentData        Json                 @default("{}") @map("student_data")
+  guardianData       Json                 @default("{}") @map("guardian_data")
+  sectionsData       Json                 @default("{}") @map("sections_data")
+  /// DRAFT | SUBMITTED | UNDER_REVIEW | CORRECTION_REQUIRED | APPROVED | REJECTED | CANCELLED
+  status             String               @default("DRAFT")
+  currentStep        String               @default("candidatura") @map("current_step")
+  version            Int                  @default(1)
+  termsAcceptedAt    DateTime?            @map("terms_accepted_at")
+  legitimacyDeclared Boolean              @default(false) @map("legitimacy_declared")
+  submittedAt        DateTime?            @map("submitted_at")
+  createdAt          DateTime             @map("created_at")
+  updatedAt          DateTime             @map("updated_at")
+  files              ApplicationFile[]
+  history            ApplicationHistory[]
+
+  @@index([accountId, createdAt], map: "applications_account_idx")
+  @@index([academicYearId, status], map: "applications_year_status_idx")
+  @@map("applications")
+}
+
+/// Ficheiro de uma inscrição (conteúdo cifrado no armazenamento do colégio; aqui só a chave).
+model ApplicationFile {
+  id            String      @id @db.Uuid
+  applicationId String      @map("application_id") @db.Uuid
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// PHOTO | DOCUMENT | FIELD
+  slot          String
+  itemId        String?     @map("item_id")
+  label         String
+  fileName      String      @map("file_name")
+  mimeType      String      @map("mime_type")
+  size          Int
+  sha256        String
+  storageKey    String      @map("storage_key")
+  createdAt     DateTime    @map("created_at")
+
+  @@index([applicationId, slot, createdAt], map: "application_files_app_idx")
+  @@map("application_files")
+}
+
+/// Histórico de estados de uma inscrição.
+model ApplicationHistory {
+  id            String      @id @db.Uuid
+  applicationId String      @map("application_id") @db.Uuid
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fromStatus    String?     @map("from_status")
+  toStatus      String      @map("to_status")
+  /// FAMILY | STAFF
+  actorKind     String      @map("actor_kind")
+  actorId       String?     @map("actor_id") @db.Uuid
+  actorName     String?     @map("actor_name")
+  reason        String?
+  notes         String?
+  createdAt     DateTime    @map("created_at")
+
+  @@index([applicationId, createdAt], map: "application_history_app_idx")
+  @@map("application_history")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
