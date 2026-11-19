@@ -99,7 +99,7 @@ export class Enrollments {
     if (cfg.enrollmentMode !== "AUTO") return { held: hold.ok, enrolled: null };
     const r = await repo.enroll({ applicationId, groupId: null, exceptionReason: null, by: { kind: "AUTO", id: actor.id, name: actor.name }, cfg, now });
     if (!r.ok) return { held: hold.ok, enrolled: null };
-    await this.notify(repo, apps, school, r.enrollment);
+    this.later(() => this.notify(repo, apps, school, r.enrollment));
     return { held: true, enrolled: enrollmentView(r.enrollment) };
   }
 
@@ -119,6 +119,11 @@ export class Enrollments {
       groups: seats.groups.map((g) => ({ id: g.id, name: g.name, shift: g.shift, shiftLabel: SHIFTS[g.shift], capacity: g.capacity, confirmed: g.confirmed, free: Math.max(0, (g.capacity ?? 0) - g.confirmed) })),
       fees: fees.map((f) => ({ ...f, billingLabel: f.billing === "MENSAL" ? "Mensal" : "Única", appliesToLabel: { TODOS: "Todos", NOVOS: "Alunos novos", CONTINUANTES: "Continuantes" }[f.appliesTo] })),
     };
+  }
+
+  /** Depois da resposta: o que falhar aqui fica no log e não desfaz a matrícula. */
+  private later(work: () => Promise<unknown>) {
+    void work().catch((e: unknown) => console.error(`[matrículas] tarefa depois da matrícula falhou: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   private async notify(repo: EnrollmentsRepository, apps: ApplicationsRepository, school: School, e: EnrollmentRow) {
@@ -163,8 +168,11 @@ export class Enrollments {
     if (reason && (reason.length < 5 || reason.length > 500)) return fail(admissionError("INVALID_INPUT", "Explique a exceção (5 a 500 caracteres)."));
     const r = await repo.enroll({ applicationId, groupId: by.kind === "FAMILY" ? null : (input.groupId ?? null), exceptionReason: by.kind === "FAMILY" ? null : reason, by, cfg, now: this.clock.now() });
     if (!r.ok) return fail(admissionError(ERRORS[r.reason].code, ERRORS[r.reason].message));
-    await repo.record("STUDENT_ENROLLED", r.enrollment.id, by.kind === "STAFF" ? by.id : null, { number: r.enrollment.number, applicationId, exception: reason }, this.clock.now());
-    await this.notify(repo, apps, school, r.enrollment);
+    // o registo e o email não atrasam a resposta (com a BD e o Brevo remotos, contam segundos)
+    this.later(async () => {
+      await repo.record("STUDENT_ENROLLED", r.enrollment.id, by.kind === "STAFF" ? by.id : null, { number: r.enrollment.number, applicationId, exception: reason }, this.clock.now());
+      await this.notify(repo, apps, school, r.enrollment);
+    });
     return ok(enrollmentView(r.enrollment));
   }
 
