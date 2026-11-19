@@ -55,7 +55,14 @@ export class TenantConnections implements OnModuleDestroy {
       { user: tenant.dbUser, password: decryptSecret(this.privateKey, tenant.passwordCiphertext), database: tenant.dbName },
       5,
     );
-    const client = new TenantClient({ datasources: { db: { url } }, log: ["warn", "error"] });
+    const client = new TenantClient({
+      datasources: { db: { url } },
+      log: ["warn", "error"],
+      // BD remota (Neon, ~250 ms por ida e volta): as transações com vários passos (matricular,
+      // submeter uma inscrição…) passam dos 5 s por omissão do Prisma e eram anuladas a meio
+      // ("Transaction not found"). maxWait: espera por uma ligação livre; timeout: duração máxima.
+      transactionOptions: { maxWait: 10_000, timeout: 30_000 },
+    });
     this.pool.set(tenant.schoolId, { fingerprint, client });
 
     while (this.pool.size > this.max) {
