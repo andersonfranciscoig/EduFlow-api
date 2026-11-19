@@ -62,6 +62,12 @@ export interface StudentsRepository {
   groupStudents(groupId: string): Promise<GroupStudentRow[]>;
   /** A fotografia de um aluno matriculado nesta turma. */
   groupPhoto(groupId: string, studentId: string): Promise<{ storageKey: string; mimeType: string; fileName: string } | null>;
+  /** Um professor da turma (dá aulas nela ou coordena-a); null se não for desta turma. */
+  groupTeacher(groupId: string, employeeId: string): Promise<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; photoId: string | null; subjects: string[]; coordinates: boolean } | null>;
+  /** A fotografia do funcionário (a mais recente). */
+  employeePhoto(employeeId: string): Promise<{ storageKey: string; mimeType: string; fileName: string } | null>;
+  /** A turma (classe, ano, turno, sala, lotação, coordenador). */
+  groupInfo(groupId: string): Promise<{ id: string; name: string; shift: Shift; room: string | null; capacity: number | null; grade: number; courseName: string | null; yearId: string; yearName: string; coordinatorName: string | null } | null>;
 }
 
 export interface FamilyStudentRow {
@@ -329,6 +335,47 @@ export class Students {
    * Os alunos de uma turma do professor (o acesso à turma confirma-se antes, no módulo pedagógico).
    * O contacto do encarregado só para quem coordena a turma (diretor de turma).
    */
+  /**
+   * Família · um professor da turma do aluno: nome, função, fotografia, email e telefone (para o
+   * contactar), as disciplinas que dá à turma e se é o diretor de turma. Só professores dessa turma.
+   */
+  async familyTeacher(repo: StudentsRepository, accountId: string, studentId: string, employeeId: string) {
+    const g = await this.familyGroup(repo, accountId, studentId);
+    if (!g.ok) return g;
+    const teacher = await repo.groupTeacher(g.value.groupId, employeeId);
+    if (!teacher) return fail(admissionError("TEACHER_NOT_FOUND", "Professor não encontrado nesta turma."));
+    const { photoId, ...rest } = teacher;
+    return ok({ ...rest, hasPhoto: !!photoId });
+  }
+
+  async familyTeacherPhoto(repo: StudentsRepository, store: StudentFileStore, accountId: string, studentId: string, employeeId: string) {
+    const t = await this.familyTeacher(repo, accountId, studentId, employeeId);
+    if (!t.ok) return t;
+    const f = await repo.employeePhoto(employeeId);
+    if (!f) return fail(admissionError("FILE_NOT_FOUND", "Fotografia não encontrada."));
+    return ok({ content: await store.read(f.storageKey), mimeType: f.mimeType, fileName: f.fileName });
+  }
+
+  /** Secretaria/direção · os alunos de uma turma, com a turma e o contacto do encarregado. */
+  async staffGroup(repo: StudentsRepository, groupId: string) {
+    const [g, list] = await Promise.all([repo.groupInfo(groupId), this.groupStudents(repo, groupId, true)]);
+    if (!g) return fail(admissionError("NO_GROUPS", "Turma não encontrada."));
+    return ok({
+      group: {
+        id: g.id,
+        name: g.name,
+        classLabel: classLabel(g.grade, g.courseName),
+        yearId: g.yearId,
+        yearName: g.yearName,
+        shiftLabel: SHIFTS[g.shift],
+        room: g.room,
+        capacity: g.capacity,
+        coordinatorName: g.coordinatorName,
+      },
+      ...list,
+    });
+  }
+
   async groupStudents(repo: StudentsRepository, groupId: string, coordinates: boolean) {
     const today = this.today();
     const rows = await repo.groupStudents(groupId);

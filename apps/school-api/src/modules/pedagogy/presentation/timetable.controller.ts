@@ -17,8 +17,8 @@ import { PEDAGOGY_HTTP } from "./pedagogy.controller";
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const shiftPipe = new ZodValidationPipe(z.enum(["MANHA", "TARDE", "NOITE"], { error: "Turno inválido." }));
 const subjectBody = z
-  .object({ name: z.string().min(2).max(60), code: z.string().min(2).max(6), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullish() })
-  .meta({ title: "Subject", description: "Disciplina do catálogo: nome, sigla (2–6, ex.: MAT) e cor no horário." });
+  .object({ name: z.string().min(2).max(60), code: z.string().min(2).max(6), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullish(), description: z.string().max(400).nullish() })
+  .meta({ title: "Subject", description: "Disciplina do catálogo: nome, sigla (2–6, ex.: MAT), cor no horário e descrição (o que se estuda)." });
 const curriculumBody = z
   .object({ items: z.array(z.object({ subjectId: z.uuid(), weeklyPeriods: z.number().int().min(1).max(20) })).max(30) })
   .meta({ title: "Curriculum", description: "Plano curricular da classe: disciplinas e tempos por semana (substitui o atual)." });

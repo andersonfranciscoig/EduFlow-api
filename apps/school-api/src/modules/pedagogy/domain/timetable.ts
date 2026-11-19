@@ -18,11 +18,15 @@ export interface SubjectInput {
   name: string;
   code: string;
   color: string;
+  /** o que se estuda (opcional; até 400 caracteres) */
+  description: string | null;
 }
 
 const clean = (s: string | null | undefined) => s?.replace(/\s+/g, " ").trim() || "";
 
-export function checkSubject(input: { name: string; code: string; color?: string | null }): Result<SubjectInput, PedagogyError> {
+export function checkSubject(input: { name: string; code: string; color?: string | null; description?: string | null }): Result<SubjectInput, PedagogyError> {
+  const description = input.description?.trim().replace(/[ \t]+/g, " ") || null;
+  if (description && description.length > 400) return fail(pedagogyError("INVALID_INPUT", "A descrição tem no máximo 400 caracteres."));
   const name = clean(input.name);
   if (name.length < 2) return fail(pedagogyError("INVALID_INPUT", "Indique o nome da disciplina."));
   if (name.length > 60) return fail(pedagogyError("INVALID_INPUT", "O nome da disciplina tem no máximo 60 caracteres."));
@@ -30,7 +34,7 @@ export function checkSubject(input: { name: string; code: string; color?: string
   if (!/^[A-Z0-9]{2,6}$/.test(code)) return fail(pedagogyError("INVALID_INPUT", "A sigla tem 2 a 6 letras ou números (ex.: MAT)."));
   const color = (input.color ?? SUBJECT_COLORS[0]).toLowerCase();
   if (!/^#[0-9a-f]{6}$/.test(color)) return fail(pedagogyError("INVALID_INPUT", "Cor inválida."));
-  return ok({ name, code, color });
+  return ok({ name, code, color, description });
 }
 
 /** Plano curricular: cada disciplina uma vez, 1–20 tempos por semana. */
