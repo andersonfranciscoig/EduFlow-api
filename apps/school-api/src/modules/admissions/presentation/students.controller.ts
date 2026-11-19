@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, NotFoundException, Param, ParseUUIDPipe, Patch, Query, Res, StreamableFile, UseGuards } from "@nestjs/common";
+import { Body, Controller, ForbiddenException, Get, HttpStatus, NotFoundException, Param, ParseUUIDPipe, Patch, Query, Res, StreamableFile, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { z } from "zod";
@@ -171,6 +171,12 @@ export class FamilyStudentsController {
     return { ...tt, today: this.students.schoolDay() };
   }
 
+  @Get(":id/teachers")
+  @ApiOperation({ summary: "Os professores da turma do aluno: disciplinas, email e telefone (e se é o diretor de turma)" })
+  async teachers(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string) {
+    return unwrap(await this.students.familyTeachers(repo(t), f.account.id, studentId), STUDENTS_HTTP);
+  }
+
   @Get(":id/teachers/:employeeId")
   @ApiOperation({ summary: "Um professor da turma do aluno: nome, função, email, telefone, disciplinas na turma e se é o diretor de turma" })
   async teacher(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string, @Param("employeeId", id) employeeId: string) {
@@ -228,6 +234,39 @@ export class TeacherStudentsController {
   async list(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
     const a = await this.access(t, u, groupId);
     return this.students.groupStudents(repo(t), groupId, a.coordinates);
+  }
+
+  @Get(":id/students/:studentId")
+  @TeacherMay()
+  @ApiOperation({ summary: "Diretor de turma: o resumo de um aluno da turma (encarregados com os contactos; os do aluno se for maior)" })
+  async summary(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string, @Param("studentId", id) studentId: string) {
+    const a = await this.access(t, u, groupId);
+    if (!a.coordinates) throw new ForbiddenException({ code: "FORBIDDEN", message: "Só o diretor de turma vê o resumo e os contactos do aluno." });
+    return unwrap(await this.students.coordinatorStudent(repo(t), groupId, studentId), STUDENTS_HTTP);
+  }
+
+  @Get(":id/teachers")
+  @TeacherMay()
+  @ApiOperation({ summary: "Diretor de turma: os professores da turma (disciplinas, email, telefone)" })
+  async teachers(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
+    const a = await this.access(t, u, groupId);
+    if (!a.coordinates) throw new ForbiddenException({ code: "FORBIDDEN", message: "Só o diretor de turma vê os contactos dos professores da turma." });
+    return this.students.coordinatorTeachers(repo(t), groupId);
+  }
+
+  @Get(":id/teachers/:employeeId/photo")
+  @TeacherMay()
+  @ApiOperation({ summary: "Diretor de turma: a fotografia de um professor da turma" })
+  async teacherPhoto(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("id", id) groupId: string,
+    @Param("employeeId", id) employeeId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const a = await this.access(t, u, groupId);
+    if (!a.coordinates) throw new ForbiddenException({ code: "FORBIDDEN", message: "Só o diretor de turma vê os professores da turma." });
+    return sendFile(res, unwrap(await this.students.coordinatorTeacherPhoto(repo(t), this.stores.for(t.entry), groupId, employeeId), STUDENTS_HTTP));
   }
 
   @Get(":id/students/:studentId/photo")

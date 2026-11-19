@@ -64,6 +64,10 @@ export interface StudentsRepository {
   groupPhoto(groupId: string, studentId: string): Promise<{ storageKey: string; mimeType: string; fileName: string } | null>;
   /** Um professor da turma (dá aulas nela ou coordena-a); null se não for desta turma. */
   groupTeacher(groupId: string, employeeId: string): Promise<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; photoId: string | null; subjects: string[]; coordinates: boolean } | null>;
+  /** Os professores da turma (dão aulas nela ou coordenam-na), com o contacto. */
+  groupTeachers(groupId: string): Promise<{ id: string; fullName: string; jobTitle: string | null; email: string | null; phone: string | null; photoId: string | null; subjects: string[]; coordinates: boolean }[]>;
+  /** O aluno está matriculado (ativo) nesta turma? */
+  inGroup(groupId: string, studentId: string): Promise<boolean>;
   /** A fotografia do funcionário (a mais recente). */
   employeePhoto(employeeId: string): Promise<{ storageKey: string; mimeType: string; fileName: string } | null>;
   /** A turma (classe, ano, turno, sala, lotação, coordenador). */
@@ -351,6 +355,62 @@ export class Students {
   async familyTeacherPhoto(repo: StudentsRepository, store: StudentFileStore, accountId: string, studentId: string, employeeId: string) {
     const t = await this.familyTeacher(repo, accountId, studentId, employeeId);
     if (!t.ok) return t;
+    const f = await repo.employeePhoto(employeeId);
+    if (!f) return fail(admissionError("FILE_NOT_FOUND", "Fotografia não encontrada."));
+    return ok({ content: await store.read(f.storageKey), mimeType: f.mimeType, fileName: f.fileName });
+  }
+
+  /**
+   * Diretor de turma · o resumo de um aluno da sua turma: identificação, matrícula atual, os
+   * encarregados com os contactos e, se o aluno for maior de idade, os contactos dele.
+   * (O acesso à turma e o ser coordenador confirmam-se antes, no controlador.)
+   */
+  async coordinatorStudent(repo: StudentsRepository, groupId: string, studentId: string) {
+    if (!(await repo.inGroup(groupId, studentId))) return fail(admissionError("STUDENT_NOT_FOUND", "Aluno não encontrado nesta turma."));
+    const s = await repo.detail(studentId);
+    if (!s) return fail(admissionError("STUDENT_NOT_FOUND", "Aluno não encontrado."));
+    const today = this.today();
+    const adult = isAdult(s.birthDate, today);
+    const current = s.enrollments.find((e) => e.status === "ACTIVE") ?? null;
+    return ok({
+      id: s.id,
+      fullName: s.fullName,
+      number: formatStudentNumber(s.number),
+      birthDate: s.birthDate,
+      age: ageOn(s.birthDate, today),
+      adult,
+      gender: s.gender,
+      statusLabel: STUDENT_STATUS_LABELS[s.status],
+      photoId: s.photoId,
+      current: current ? { number: current.number, yearName: current.yearName, classLabel: classLabel(current.grade, current.courseName), groupName: current.groupName, shiftLabel: current.shift ? SHIFTS[current.shift] : null } : null,
+      // os contactos do próprio aluno só se for maior de idade (o menor contacta-se pelo encarregado)
+      contacts: adult ? { phone: value(s.data.phone), email: value(s.data.email), address: value(s.data.address) } : null,
+      guardians: s.guardians.map((g) => ({
+        fullName: g.fullName,
+        relationship: g.relationship === "Outro" ? (g.relationshipOther ?? "Outro") : g.relationship,
+        phone: g.phone,
+        email: g.email,
+        isPrimary: g.isPrimary,
+        isEmergency: g.isEmergency,
+      })),
+    });
+  }
+
+  /** Família · todos os professores da turma do aluno (o próprio maior ou o educando menor), com o contacto. */
+  async familyTeachers(repo: StudentsRepository, accountId: string, studentId: string) {
+    const g = await this.familyGroup(repo, accountId, studentId);
+    if (!g.ok) return g;
+    return ok(await this.coordinatorTeachers(repo, g.value.groupId));
+  }
+
+  /** Diretor de turma · os professores da sua turma com o contacto (o acesso confirma-se no controlador). */
+  async coordinatorTeachers(repo: StudentsRepository, groupId: string) {
+    const list = await repo.groupTeachers(groupId);
+    return { teachers: list.map(({ photoId, ...t }) => ({ ...t, hasPhoto: !!photoId })) };
+  }
+
+  async coordinatorTeacherPhoto(repo: StudentsRepository, store: StudentFileStore, groupId: string, employeeId: string) {
+    if (!(await repo.groupTeacher(groupId, employeeId))) return fail(admissionError("TEACHER_NOT_FOUND", "Professor não encontrado nesta turma."));
     const f = await repo.employeePhoto(employeeId);
     if (!f) return fail(admissionError("FILE_NOT_FOUND", "Fotografia não encontrada."));
     return ok({ content: await store.read(f.storageKey), mimeType: f.mimeType, fileName: f.fileName });
