@@ -11,6 +11,7 @@ const subjectDto = (s: SubjectRow) => ({
   name: s.name,
   code: s.code,
   color: s.color,
+  description: s.description,
   archived: !!s.archivedAt,
   classCount: s.classCount,
   lessonCount: s.lessonCount,
@@ -82,7 +83,7 @@ export class Timetable {
     return { canManage: this.pedagogy.canManage(actor), colors: SUBJECT_COLORS, subjects: (await repo.listSubjects()).map(subjectDto) };
   }
 
-  async createSubject(repo: TimetableRepository, actor: PedagogyActor, input: { name: string; code: string; color?: string | null }) {
+  async createSubject(repo: TimetableRepository, actor: PedagogyActor, input: { name: string; code: string; color?: string | null; description?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     // sem cor escolhida: a primeira da paleta que ainda ninguém usa (depois, a menos usada)
@@ -97,7 +98,7 @@ export class Timetable {
     return r.ok ? ok(subjectDto(r.value)) : fail(subjectError(r, s.value));
   }
 
-  async updateSubject(repo: TimetableRepository, actor: PedagogyActor, id: string, input: { name: string; code: string; color?: string | null }) {
+  async updateSubject(repo: TimetableRepository, actor: PedagogyActor, id: string, input: { name: string; code: string; color?: string | null; description?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const s = checkSubject(input);

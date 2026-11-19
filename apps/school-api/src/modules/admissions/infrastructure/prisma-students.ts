@@ -296,6 +296,37 @@ export class PrismaStudentsRepository implements StudentsRepository {
     }));
   }
 
+  async groupTeacher(groupId: string, employeeId: string) {
+    const [r] = await this.db.$queryRaw<{ id: string; full_name: string; job_title: string | null; email: string | null; phone: string | null; photo_id: string | null; coordinates: boolean; subjects: string[] }[]>`
+      SELECT e.id, e.full_name, e.job_title, e.email, e.phone,
+             (SELECT d.id FROM employee_documents d WHERE d.employee_id = e.id AND d.slot = 'PHOTO' ORDER BY d.created_at DESC LIMIT 1) AS photo_id,
+             (g.coordinator_id IS NOT DISTINCT FROM e.id) AS coordinates,
+             COALESCE((SELECT array_agg(s.name ORDER BY s.name) FROM group_teachers gt JOIN subjects s ON s.id = gt.subject_id
+                        WHERE gt.group_id = g.id AND gt.employee_id = e.id), '{}') AS subjects
+        FROM employees e JOIN class_groups g ON g.id = ${groupId}::uuid
+       WHERE e.id = ${employeeId}::uuid`;
+    if (!r || (!r.coordinates && r.subjects.length === 0)) return null;
+    return { id: r.id, fullName: r.full_name, jobTitle: r.job_title, email: r.email, phone: r.phone, photoId: r.photo_id, subjects: r.subjects, coordinates: !!r.coordinates };
+  }
+
+  async employeePhoto(employeeId: string) {
+    const [f] = await this.db.$queryRaw<{ storage_key: string; mime_type: string; file_name: string }[]>`
+      SELECT d.storage_key, d.mime_type, d.file_name FROM employee_documents d
+       WHERE d.employee_id = ${employeeId}::uuid AND d.slot = 'PHOTO' ORDER BY d.created_at DESC LIMIT 1`;
+    return f ? { storageKey: f.storage_key, mimeType: f.mime_type, fileName: f.file_name } : null;
+  }
+
+  async groupInfo(groupId: string) {
+    const [r] = await this.db.$queryRaw<{ id: string; name: string; shift: string; room: string | null; capacity: number | null; grade: number; course_name: string | null; year_id: string; year_name: string; coordinator_name: string | null }[]>`
+      SELECT g.id, g.name, g.shift, g.room, g.capacity, c.grade, co.name AS course_name, y.id AS year_id, y.name AS year_name, em.full_name AS coordinator_name
+        FROM class_groups g JOIN school_classes c ON c.id = g.class_id JOIN academic_years y ON y.id = g.academic_year_id
+        LEFT JOIN courses co ON co.id = c.course_id LEFT JOIN employees em ON em.id = g.coordinator_id
+       WHERE g.id = ${groupId}::uuid`;
+    return r
+      ? { id: r.id, name: r.name, shift: r.shift as Shift, room: r.room, capacity: r.capacity, grade: r.grade, courseName: r.course_name, yearId: r.year_id, yearName: r.year_name, coordinatorName: r.coordinator_name }
+      : null;
+  }
+
   async groupPhoto(groupId: string, studentId: string) {
     const [f] = await this.db.$queryRaw<{ storage_key: string; mime_type: string; file_name: string }[]>`
       SELECT fi.storage_key, fi.mime_type, fi.file_name FROM application_files fi JOIN applications a ON a.id = fi.application_id

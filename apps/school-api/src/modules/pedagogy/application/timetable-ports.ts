@@ -6,6 +6,7 @@ export interface SubjectRow {
   name: string;
   code: string;
   color: string;
+  description: string | null;
   archivedAt: Date | null;
   /** classes (de todos os anos) com esta disciplina no plano */
   classCount: number;

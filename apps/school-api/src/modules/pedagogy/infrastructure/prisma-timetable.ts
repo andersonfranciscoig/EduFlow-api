@@ -10,11 +10,12 @@ const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestErr
 const PERIODS_LOCK = { MANHA: 7_200_501, TARDE: 7_200_502, NOITE: 7_200_503 } as const;
 
 const WITH_COUNTS = { _count: { select: { classes: true, lessons: true } } } as const;
-const toSubject = (s: { id: string; name: string; code: string; color: string; archivedAt: Date | null; _count?: { classes: number; lessons: number } }): SubjectRow => ({
+const toSubject = (s: { id: string; name: string; code: string; color: string; description: string | null; archivedAt: Date | null; _count?: { classes: number; lessons: number } }): SubjectRow => ({
   id: s.id,
   name: s.name,
   code: s.code,
   color: s.color,
+  description: s.description,
   archivedAt: s.archivedAt,
   classCount: s._count?.classes ?? 0,
   lessonCount: s._count?.lessons ?? 0,
@@ -62,7 +63,7 @@ export class PrismaTimetableRepository implements TimetableRepository {
       return await this.db.$transaction(async (tx) => {
         const clash = await this.clash(tx, input);
         if (clash) return { ok: false, reason: clash } as const;
-        const s = await tx.subject.create({ data: { id: input.id, name: input.name, code: input.code, color: input.color, createdAt: input.now, updatedAt: input.now } });
+        const s = await tx.subject.create({ data: { id: input.id, name: input.name, code: input.code, color: input.color, description: input.description, createdAt: input.now, updatedAt: input.now } });
         return { ok: true, value: toSubject(s) } as const;
       });
     } catch (e) {
@@ -77,7 +78,7 @@ export class PrismaTimetableRepository implements TimetableRepository {
         if (!(await tx.subject.findUnique({ where: { id }, select: { id: true } }))) return { ok: false, reason: "not_found" } as const;
         const clash = await this.clash(tx, input, id);
         if (clash) return { ok: false, reason: clash } as const;
-        const s = await tx.subject.update({ where: { id }, data: { name: input.name, code: input.code, color: input.color, updatedAt: input.now }, include: WITH_COUNTS });
+        const s = await tx.subject.update({ where: { id }, data: { name: input.name, code: input.code, color: input.color, description: input.description, updatedAt: input.now }, include: WITH_COUNTS });
         return { ok: true, value: toSubject(s) } as const;
       });
     } catch (e) {

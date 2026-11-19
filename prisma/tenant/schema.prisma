@@ -407,6 +407,8 @@ model Subject {
   code       String
   /// cor no horário (#rrggbb)
   color      String
+  /// o que se estuda (mostrado às famílias no horário)
+  description String?
   archivedAt DateTime? @map("archived_at")
   createdAt  DateTime  @map("created_at")
   updatedAt  DateTime  @map("updated_at")

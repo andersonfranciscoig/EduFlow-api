@@ -24,6 +24,7 @@ const STUDENTS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> = {
   INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
   NO_GROUPS: HttpStatus.NOT_FOUND,
   STUDENT_NOT_FOUND: HttpStatus.NOT_FOUND,
+  TEACHER_NOT_FOUND: HttpStatus.NOT_FOUND,
   FILE_NOT_FOUND: HttpStatus.NOT_FOUND,
 };
 
@@ -62,6 +63,13 @@ export class StaffStudentsController {
     return this.students.list(repo(t), { q: q.q, yearId: q.year, classId: q.class, status: q.status, page: q.page });
   }
 
+  @Get("groups/:groupId")
+  @RequirePermission("admissions.students.view")
+  @ApiOperation({ summary: "Os alunos de uma turma (matrículas ativas), com a turma e o encarregado de cada aluno" })
+  async group(@CurrentTenant() t: TenantContext, @Param("groupId", id) groupId: string) {
+    return unwrap(await this.students.staffGroup(repo(t), groupId), STUDENTS_HTTP);
+  }
+
   @Get(":id")
   @RequirePermission("admissions.students.view")
   @ApiOperation({ summary: "A ficha do aluno: dados pessoais, encarregados, matrículas, inscrições, documentos e histórico" })
@@ -98,11 +106,17 @@ async function familyTimetable(timetable: Timetable, t: TenantContext, groupId: 
     year: { name: v.year.name },
     cls: { label: v.cls.label, course: v.cls.course, courseCode: v.cls.courseCode },
     group: { name: v.group.name, shiftLabel: v.group.shiftLabel, room: v.group.room },
-    coordinator: v.coordinator ? { fullName: v.coordinator.fullName } : null,
+    coordinator: v.coordinator ? { id: v.coordinator.id, fullName: v.coordinator.fullName } : null,
     weekdays: v.weekdays,
     periods: v.periods.map((p) => ({ id: p.id, kind: p.kind, startsAt: p.startsAt, endsAt: p.endsAt })),
     lessons: v.lessons.filter((l) => l.subject).map((l) => ({ weekday: l.weekday, periodId: l.periodId, subject: l.subject!, teacherLabel: l.teacher ? l.teacherLabel : null, room: l.room })),
-    curriculum: v.curriculum.map((c) => ({ subject: c.subject, weeklyPeriods: c.weeklyPeriods, teacherLabel: c.teacher ? c.teacherLabel : null })),
+    // cada disciplina com a descrição e o professor (abre o contacto do professor)
+    curriculum: v.curriculum.map((c) => ({
+      subject: { id: c.subject.id, name: c.subject.name, code: c.subject.code, color: c.subject.color, description: c.subject.description },
+      weeklyPeriods: c.weeklyPeriods,
+      teacherLabel: c.teacher ? c.teacherLabel : null,
+      teacher: c.teacher ? { id: c.teacher.id, fullName: c.teacher.fullName } : null,
+    })),
   };
 }
 type FamilyTimetable = NonNullable<Awaited<ReturnType<typeof familyTimetable>>>;
@@ -155,6 +169,24 @@ export class FamilyStudentsController {
     const tt = await familyTimetable(this.timetable, t, groupId);
     if (!tt) throw new NotFoundException({ code: "NO_GROUPS", message: "Turma não encontrada." });
     return { ...tt, today: this.students.schoolDay() };
+  }
+
+  @Get(":id/teachers/:employeeId")
+  @ApiOperation({ summary: "Um professor da turma do aluno: nome, função, email, telefone, disciplinas na turma e se é o diretor de turma" })
+  async teacher(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string, @Param("employeeId", id) employeeId: string) {
+    return unwrap(await this.students.familyTeacher(repo(t), f.account.id, studentId, employeeId), STUDENTS_HTTP);
+  }
+
+  @Get(":id/teachers/:employeeId/photo")
+  @ApiOperation({ summary: "A fotografia de um professor da turma do aluno" })
+  async teacherPhoto(
+    @CurrentTenant() t: TenantContext,
+    @CurrentFamily() f: FamilyPrincipal,
+    @Param("id", id) studentId: string,
+    @Param("employeeId", id) employeeId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return sendFile(res, unwrap(await this.students.familyTeacherPhoto(repo(t), this.stores.for(t.entry), f.account.id, studentId, employeeId), STUDENTS_HTTP));
   }
 
   @Get(":id")

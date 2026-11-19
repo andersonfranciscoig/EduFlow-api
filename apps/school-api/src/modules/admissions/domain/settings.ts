@@ -39,7 +39,8 @@ export type AdmissionErrorCode =
   | "NO_GROUPS"
   | "ENROLLMENT_NOT_FOUND"
   // alunos
-  | "STUDENT_NOT_FOUND";
+  | "STUDENT_NOT_FOUND"
+  | "TEACHER_NOT_FOUND";
 export type AdmissionError = DomainError<AdmissionErrorCode>;
 export const admissionError = (code: AdmissionErrorCode, message: string, meta?: Record<string, unknown>): AdmissionError => new DomainError(code, message, meta);
 
