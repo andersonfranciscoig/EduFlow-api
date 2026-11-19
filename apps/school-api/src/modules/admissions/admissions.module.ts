@@ -15,7 +15,8 @@ import { EmailApplicationsMailer } from "./infrastructure/applications-mailer";
 import { AdmissionSettingsController } from "./presentation/admission-settings.controller";
 import { Enrollments } from "./application/Enrollments";
 import { Students } from "./application/Students";
-import { FamilyStudentsController, StaffStudentsController } from "./presentation/students.controller";
+import { PedagogyModule } from "../pedagogy/pedagogy.module";
+import { FamilyStudentsController, StaffStudentsController, TeacherStudentsController } from "./presentation/students.controller";
 import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissionsController, StaffApplicationsController } from "./presentation/applications.controller";
 
 /**
@@ -26,8 +27,9 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
  */
 @Module({
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
-  imports: [IdentityModule, FamilyModule, HrModule],
-  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController],
+  // PedagogyModule: o horário da turma (família) e o acesso do professor às suas turmas
+  imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule],
+  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController, TeacherStudentsController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },
     { provide: AdmissionForms, useFactory: () => new AdmissionForms(uuidGenerator, systemClock) },
