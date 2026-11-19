@@ -309,6 +309,26 @@ export class PrismaStudentsRepository implements StudentsRepository {
     return { id: r.id, fullName: r.full_name, jobTitle: r.job_title, email: r.email, phone: r.phone, photoId: r.photo_id, subjects: r.subjects, coordinates: !!r.coordinates };
   }
 
+  async groupTeachers(groupId: string) {
+    const rows = await this.db.$queryRaw<{ id: string; full_name: string; job_title: string | null; email: string | null; phone: string | null; photo_id: string | null; coordinates: boolean; subjects: string[] }[]>`
+      SELECT e.id, e.full_name, e.job_title, e.email, e.phone,
+             (SELECT d.id FROM employee_documents d WHERE d.employee_id = e.id AND d.slot = 'PHOTO' ORDER BY d.created_at DESC LIMIT 1) AS photo_id,
+             (g.coordinator_id IS NOT DISTINCT FROM e.id) AS coordinates,
+             COALESCE((SELECT array_agg(s.name ORDER BY s.name) FROM group_teachers gt JOIN subjects s ON s.id = gt.subject_id
+                        WHERE gt.group_id = g.id AND gt.employee_id = e.id), '{}') AS subjects
+        FROM class_groups g JOIN employees e
+          ON e.id = g.coordinator_id OR e.id IN (SELECT gt.employee_id FROM group_teachers gt WHERE gt.group_id = g.id)
+       WHERE g.id = ${groupId}::uuid
+       ORDER BY (g.coordinator_id IS NOT DISTINCT FROM e.id) DESC, e.full_name`;
+    return rows.map((r) => ({ id: r.id, fullName: r.full_name, jobTitle: r.job_title, email: r.email, phone: r.phone, photoId: r.photo_id, subjects: r.subjects, coordinates: !!r.coordinates }));
+  }
+
+  async inGroup(groupId: string, studentId: string) {
+    const [r] = await this.db.$queryRaw<{ ok: boolean }[]>`
+      SELECT EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = ${studentId}::uuid AND e.group_id = ${groupId}::uuid AND e.status = 'ACTIVE') AS ok`;
+    return !!r?.ok;
+  }
+
   async employeePhoto(employeeId: string) {
     const [f] = await this.db.$queryRaw<{ storage_key: string; mime_type: string; file_name: string }[]>`
       SELECT d.storage_key, d.mime_type, d.file_name FROM employee_documents d
