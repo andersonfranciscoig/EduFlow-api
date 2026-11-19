@@ -30,6 +30,8 @@ export const PERMISSIONS = {
   "admissions.applications.view": { group: "admissions", label: "Consultar as inscrições", hint: "Ver as inscrições submetidas, os dados do aluno e do encarregado e os documentos." },
   "admissions.applications.review": { group: "admissions", label: "Analisar as inscrições", hint: "Começar a análise, pedir correções à família, aprovar e rejeitar." },
   "admissions.enrollments.manage": { group: "admissions", label: "Confirmar matrículas", hint: "Matricular as inscrições aprovadas: turma, n.º de matrícula e comprovativo." },
+  "admissions.students.view": { group: "admissions", label: "Consultar os alunos", hint: "A lista e a ficha dos alunos: dados pessoais, encarregados, matrículas, inscrições e documentos." },
+  "admissions.students.edit": { group: "admissions", label: "Alterar os dados dos alunos", hint: "Corrigir os dados pessoais do aluno (fica no histórico o que mudou)." },
   "admissions.enrollments.override": { group: "admissions", label: "Matricular sem vaga (exceção)", hint: "Matricular mesmo sem vaga ou com a turma cheia, com um motivo registado." },
 } as const;
 

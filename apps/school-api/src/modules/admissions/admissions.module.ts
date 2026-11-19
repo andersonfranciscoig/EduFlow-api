@@ -14,6 +14,8 @@ import { Applications } from "./application/Applications";
 import { EmailApplicationsMailer } from "./infrastructure/applications-mailer";
 import { AdmissionSettingsController } from "./presentation/admission-settings.controller";
 import { Enrollments } from "./application/Enrollments";
+import { Students } from "./application/Students";
+import { FamilyStudentsController, StaffStudentsController } from "./presentation/students.controller";
 import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissionsController, StaffApplicationsController } from "./presentation/applications.controller";
 
 /**
@@ -25,7 +27,7 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
 @Module({
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
   imports: [IdentityModule, FamilyModule, HrModule],
-  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController],
+  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },
     { provide: AdmissionForms, useFactory: () => new AdmissionForms(uuidGenerator, systemClock) },
@@ -49,6 +51,7 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
         return new ApplicationReview(systemClock, new EmailApplicationsMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })));
       },
     },
+    { provide: Students, inject: [ConfigService], useFactory: (config: ConfigService<Env, true>) => new Students(systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })) },
     {
       provide: Enrollments,
       inject: [ConfigService],
