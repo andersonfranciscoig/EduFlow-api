@@ -32,7 +32,12 @@ export type AdmissionErrorCode =
   | "DUPLICATE_APPLICATION"
   | "FILE_NOT_FOUND"
   | "INVALID_FILE"
-  | "STORAGE_UNAVAILABLE";
+  | "STORAGE_UNAVAILABLE"
+  // matrículas
+  | "ALREADY_ENROLLED"
+  | "NO_VACANCY"
+  | "NO_GROUPS"
+  | "ENROLLMENT_NOT_FOUND";
 export type AdmissionError = DomainError<AdmissionErrorCode>;
 export const admissionError = (code: AdmissionErrorCode, message: string, meta?: Record<string, unknown>): AdmissionError => new DomainError(code, message, meta);
 
