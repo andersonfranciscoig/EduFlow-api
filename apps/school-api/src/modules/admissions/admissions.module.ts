@@ -13,7 +13,8 @@ import { ApplicationReview } from "./application/ApplicationReview";
 import { Applications } from "./application/Applications";
 import { EmailApplicationsMailer } from "./infrastructure/applications-mailer";
 import { AdmissionSettingsController } from "./presentation/admission-settings.controller";
-import { FamilyApplicationsController, PublicAdmissionsController, StaffApplicationsController } from "./presentation/applications.controller";
+import { Enrollments } from "./application/Enrollments";
+import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissionsController, StaffApplicationsController } from "./presentation/applications.controller";
 
 /**
  * Contexto "Secretaria · Inscrições e matrículas" (na BD de cada colégio).
@@ -24,7 +25,7 @@ import { FamilyApplicationsController, PublicAdmissionsController, StaffApplicat
 @Module({
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
   imports: [IdentityModule, FamilyModule, HrModule],
-  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController],
+  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },
     { provide: AdmissionForms, useFactory: () => new AdmissionForms(uuidGenerator, systemClock) },
@@ -46,6 +47,16 @@ import { FamilyApplicationsController, PublicAdmissionsController, StaffApplicat
         const settings = { from: config.get("EMAIL_FROM", { infer: true }), fromName: config.get("EMAIL_FROM_NAME", { infer: true }), replyTo: config.get("EMAIL_REPLY_TO", { infer: true }) };
         const mailer = config.get("EMAIL_PROVIDER", { infer: true }) === "brevo" && keyFile ? new BrevoMailer(readKeyFile(keyFile), settings) : new ConsoleMailer();
         return new ApplicationReview(systemClock, new EmailApplicationsMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })));
+      },
+    },
+    {
+      provide: Enrollments,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>) => {
+        const keyFile = config.get("EMAIL_API_KEY_FILE", { infer: true });
+        const settings = { from: config.get("EMAIL_FROM", { infer: true }), fromName: config.get("EMAIL_FROM_NAME", { infer: true }), replyTo: config.get("EMAIL_REPLY_TO", { infer: true }) };
+        const mailer = config.get("EMAIL_PROVIDER", { infer: true }) === "brevo" && keyFile ? new BrevoMailer(readKeyFile(keyFile), settings) : new ConsoleMailer();
+        return new Enrollments(systemClock, new EmailApplicationsMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })));
       },
     },
   ],

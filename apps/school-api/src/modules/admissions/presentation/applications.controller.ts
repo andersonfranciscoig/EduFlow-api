@@ -15,9 +15,12 @@ import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identit
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { ApplicationReview } from "../application/ApplicationReview";
 import { Applications } from "../application/Applications";
-import type { AdmissionErrorCode } from "../domain/settings";
+import { type AdmissionErrorCode, admissionError } from "../domain/settings";
 import { PrismaAdmissionFormsRepository } from "../infrastructure/prisma-admission-forms";
 import { PrismaApplicationsRepository } from "../infrastructure/prisma-applications";
+import { PrismaEnrollmentsRepository } from "../infrastructure/prisma-enrollments";
+import { Enrollments } from "../application/Enrollments";
+import { fail } from "../../../../../../libs/kernel/src/domain/Result";
 
 export const APPLICATIONS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> = {
   INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -31,7 +34,21 @@ export const APPLICATIONS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> 
   INCOMPLETE: HttpStatus.UNPROCESSABLE_ENTITY,
   INVALID_FILE: HttpStatus.UNPROCESSABLE_ENTITY,
   STORAGE_UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE,
+  ALREADY_ENROLLED: HttpStatus.CONFLICT,
+  NO_VACANCY: HttpStatus.CONFLICT,
+  NO_GROUPS: HttpStatus.CONFLICT,
+  YEAR_CLOSED: HttpStatus.CONFLICT,
+  ENROLLMENT_NOT_FOUND: HttpStatus.NOT_FOUND,
+  FORBIDDEN: HttpStatus.FORBIDDEN,
 };
+
+const enrollBody = z
+  .object({ groupId: z.uuid().nullish(), exceptionReason: z.string().max(500).nullish() })
+  .meta({ title: "Enroll", description: "groupId: a turma (vazio = a de mais lugares livres) · exceptionReason: matricular sem vaga (exige admissions.enrollments.override)." });
+const configBody = z
+  .object({ enrollmentMode: z.string().max(10), numberPrefix: z.string().max(8), numberWithYear: z.boolean(), numberDigits: z.number().int(), holdDays: z.number().int() })
+  .meta({ title: "EnrollmentConfig" });
+const enrollmentsRepo = (t: TenantContext) => new PrismaEnrollmentsRepository(t.db);
 
 const id = new ParseUUIDPipe({ version: "4" });
 const startBody = z.object({ processType: z.string().max(20) }).meta({ title: "ApplicationStart" });
@@ -61,6 +78,7 @@ const decisionBody = z
 export class StaffApplicationsController {
   constructor(
     private readonly review: ApplicationReview,
+    private readonly enrollments: Enrollments,
     private readonly stores: HrFileStores,
   ) {}
 
@@ -77,8 +95,37 @@ export class StaffApplicationsController {
   @RequirePermission("admissions.applications.view")
   @ApiOperation({ summary: "Uma inscrição: dados, documentos, quem a fez, histórico e as ações possíveis" })
   async get(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) appId: string) {
-    const canReview = (await permissionsOf(t.db, u)).includes("admissions.applications.review");
-    return unwrap(await this.review.get(this.repo(t), new PrismaAdmissionFormsRepository(t.db), appId, canReview), APPLICATIONS_HTTP);
+    const p = await permissionsOf(t.db, u);
+    const view = unwrap(await this.review.get(this.repo(t), new PrismaAdmissionFormsRepository(t.db), appId, p.includes("admissions.applications.review")), APPLICATIONS_HTTP);
+    // a matrícula (feita) ou o que é preciso para a confirmar (inscrição aprovada)
+    const er = enrollmentsRepo(t);
+    const enrollment = view.status === "APPROVED" ? await this.enrollments.byApplication(er, appId) : null;
+    const options = view.status === "APPROVED" && !enrollment ? await this.enrollments.options(er, appId) : null;
+    return {
+      ...view,
+      enrollment,
+      enrollmentOptions: options,
+      canEnroll: !!options && p.includes("admissions.enrollments.manage"),
+      canOverride: p.includes("admissions.enrollments.override"),
+    };
+  }
+
+  @Post(":id/enroll")
+  @RequirePermission("admissions.enrollments.manage")
+  @ApiOperation({ summary: "Confirmar a matrícula de uma inscrição aprovada (turma, n.º de matrícula, n.º de aluno; exceção sem vaga com motivo)" })
+  @ApiBody({ schema: openApi(enrollBody) })
+  async enroll(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) appId: string, @Body(new ZodValidationPipe(enrollBody)) body: z.infer<typeof enrollBody>) {
+    const canOverride = (await permissionsOf(t.db, u)).includes("admissions.enrollments.override");
+    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "STAFF", id: u.id, name: u.fullName }, body, canOverride), APPLICATIONS_HTTP);
+  }
+
+  @Get(":id/enrollment")
+  @RequirePermission("admissions.applications.view")
+  @ApiOperation({ summary: "A matrícula desta inscrição (para o comprovativo)" })
+  async enrollment(@CurrentTenant() t: TenantContext, @Param("id", id) appId: string) {
+    const e = await this.enrollments.byApplication(enrollmentsRepo(t), appId);
+    if (!e) return unwrap(fail(admissionError("ENROLLMENT_NOT_FOUND", "Esta inscrição ainda não tem matrícula.")), APPLICATIONS_HTTP);
+    return e;
   }
 
   @Get(":id/files/:fileId")
@@ -104,7 +151,35 @@ export class StaffApplicationsController {
     @Param("action", new ZodValidationPipe(z.enum(["review", "corrections", "approve", "reject"], { error: "Ação inválida." }))) action: "review" | "corrections" | "approve" | "reject",
     @Body(new ZodValidationPipe(decisionBody)) body: z.infer<typeof decisionBody>,
   ) {
-    return unwrap(await this.review.decide(this.repo(t), { id: u.id, name: u.fullName }, school(t), appId, action, body), APPLICATIONS_HTTP);
+    const r = unwrap(await this.review.decide(this.repo(t), { id: u.id, name: u.fullName }, school(t), appId, action, body), APPLICATIONS_HTTP);
+    // aprovada: guarda a vaga (e, no modo automático, matricula logo)
+    if (action === "approve") return { ...r, ...(await this.enrollments.afterApproval(enrollmentsRepo(t), this.repo(t), school(t), appId, { id: u.id, name: u.fullName })) };
+    return r;
+  }
+}
+
+/** Configuração das matrículas: quem confirma, formato do n.º, dias da vaga guardada. */
+@ApiTags("Portal · Secretaria · Configuração das inscrições")
+@ApiHeader({ name: "X-Tenant", required: false })
+@ApiBearerAuth()
+@Controller("v1/admissions/enrollment-config")
+@UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
+export class EnrollmentConfigController {
+  constructor(private readonly enrollments: Enrollments) {}
+
+  @Get()
+  @RequirePermission("admissions.access")
+  @ApiOperation({ summary: "Configuração das matrículas (e um exemplo do n.º)" })
+  async get(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
+    return this.enrollments.config(enrollmentsRepo(t), (await permissionsOf(t.db, u)).includes("admissions.settings.manage"));
+  }
+
+  @Put()
+  @RequirePermission("admissions.settings.manage")
+  @ApiOperation({ summary: "Gravar a configuração das matrículas" })
+  @ApiBody({ schema: openApi(configBody) })
+  async save(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(configBody)) body: z.infer<typeof configBody>) {
+    return unwrap(await this.enrollments.saveConfig(enrollmentsRepo(t), u.support ? null : u.id, body as Parameters<Enrollments["saveConfig"]>[2]), APPLICATIONS_HTTP);
   }
 }
 
@@ -133,6 +208,7 @@ export class PublicAdmissionsController {
 export class FamilyApplicationsController {
   constructor(
     private readonly applications: Applications,
+    private readonly enrollments: Enrollments,
     private readonly stores: HrFileStores,
   ) {}
 
@@ -155,7 +231,26 @@ export class FamilyApplicationsController {
   @Get(":id")
   @ApiOperation({ summary: "Uma inscrição: dados, formulário da versão, ficheiros, opções e o que falta por passo" })
   async get(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
-    return unwrap(await this.applications.get(this.repo(t), this.forms(t), f.account, appId), APPLICATIONS_HTTP);
+    const view = unwrap(await this.applications.get(this.repo(t), this.forms(t), f.account, appId), APPLICATIONS_HTTP);
+    if (view.status !== "APPROVED") return { ...view, enrollment: null, enrollMode: null, canEnroll: false };
+    const er = enrollmentsRepo(t);
+    const [enrollment, cfg] = await Promise.all([this.enrollments.byApplication(er, appId), er.config()]);
+    return { ...view, enrollment, enrollMode: cfg.enrollmentMode, canEnroll: !enrollment && cfg.enrollmentMode === "FAMILY" };
+  }
+
+  @Post(":id/enroll")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: "Confirmar a matrícula (só no modo 'pela família'; turma automática)" })
+  async enroll(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
+    const app = await this.repo(t).byId(appId);
+    if (!app || app.accountId !== f.account.id) return unwrap(fail(admissionError("APPLICATION_NOT_FOUND", "Inscrição não encontrada.")), APPLICATIONS_HTTP);
+    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "FAMILY", id: f.account.id, name: f.account.fullName }, {}, false), APPLICATIONS_HTTP);
+  }
+
+  @Get(":id/enrollment")
+  @ApiOperation({ summary: "A matrícula desta inscrição (para o comprovativo)" })
+  async enrollment(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
+    return unwrap(await this.enrollments.familyReceipt(enrollmentsRepo(t), this.repo(t), f.account, appId), APPLICATIONS_HTTP);
   }
 
   @Put(":id")

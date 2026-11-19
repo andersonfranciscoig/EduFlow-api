@@ -153,6 +153,8 @@ export interface ApplicationsMailer {
   submitted(input: { to: { email: string; name: string }; school: { name: string; slug: string }; number: string; studentName: string; yearName: string; classLabel: string }): Promise<void>;
   /** Correções pedidas, aprovada ou rejeitada. */
   decision(input: { to: { email: string; name: string }; school: { name: string; slug: string }; number: string; studentName: string; status: "CORRECTION_REQUIRED" | "APPROVED" | "REJECTED"; reason: string | null; steps: string[] }): Promise<void>;
+  /** Matrícula confirmada. */
+  enrolled(input: { to: { email: string; name: string }; school: { name: string; slug: string }; studentName: string; number: string; studentNumber: string; classLabel: string; groupName: string | null; yearName: string; date: string }): Promise<void>;
 }
 
 /** Armazenamento cifrado dos ficheiros do colégio (o mesmo do RH). */

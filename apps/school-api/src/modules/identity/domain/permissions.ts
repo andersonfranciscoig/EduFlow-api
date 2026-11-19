@@ -29,6 +29,8 @@ export const PERMISSIONS = {
   "admissions.forms.manage": { group: "admissions", label: "Configurar os formulários", hint: "Dados do aluno e do encarregado, secções e campos do colégio, condições; publicar versões." },
   "admissions.applications.view": { group: "admissions", label: "Consultar as inscrições", hint: "Ver as inscrições submetidas, os dados do aluno e do encarregado e os documentos." },
   "admissions.applications.review": { group: "admissions", label: "Analisar as inscrições", hint: "Começar a análise, pedir correções à família, aprovar e rejeitar." },
+  "admissions.enrollments.manage": { group: "admissions", label: "Confirmar matrículas", hint: "Matricular as inscrições aprovadas: turma, n.º de matrícula e comprovativo." },
+  "admissions.enrollments.override": { group: "admissions", label: "Matricular sem vaga (exceção)", hint: "Matricular mesmo sem vaga ou com a turma cheia, com um motivo registado." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

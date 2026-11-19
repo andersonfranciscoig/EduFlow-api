@@ -8,6 +8,33 @@ export class EmailApplicationsMailer implements ApplicationsMailer {
     private readonly portalUrlTemplate: string,
   ) {}
 
+  async enrolled(input: Parameters<ApplicationsMailer["enrolled"]>[0]) {
+    const firstName = input.to.name.split(" ")[0];
+    const url = `${this.portalUrlTemplate.replace("{slug}", input.school.slug)}/familia`;
+    const rows: [string, string][] = [
+      ["N.º de matrícula", input.number],
+      ["N.º de aluno", input.studentNumber],
+      ["Ano letivo", input.yearName],
+      ["Classe", input.classLabel],
+      ...(input.groupName ? ([["Turma", input.groupName]] as [string, string][]) : []),
+      ["Data", input.date],
+    ];
+    const text = [`Olá, ${firstName}.`, "", `A matrícula de ${input.studentName} está confirmada.`, "", ...rows.map(([k, v]) => `${k}: ${v}`), "", `O comprovativo está na área da família: ${url}`, "", `EduFlow · ${input.school.name}`].join("\n");
+    const html = `<!doctype html><html lang="pt"><body style="margin:0;background:#DAF1DE;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#051F20">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:24px;overflow:hidden">
+<tr><td style="background:#0B2B26;padding:22px 28px;color:#DAF1DE;font-size:15px;font-weight:600">EduFlow <span style="color:#8EB69B;font-weight:400">· ${escapeHtml(input.school.name)} · Matrículas</span></td></tr>
+<tr><td style="padding:32px 28px 8px">
+<p style="margin:0 0 6px;font-size:13px;color:#235347">Olá, ${escapeHtml(firstName)}.</p>
+<p style="margin:0 0 14px;font-size:20px;font-weight:600">Matrícula confirmada</p>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#235347">A matrícula de <strong>${escapeHtml(input.studentName)}</strong> está confirmada.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#DAF1DE;border-radius:16px;padding:6px 16px">${rows.map(([k, v]) => `<tr><td style="padding:6px 0;font-size:13px;color:#235347">${escapeHtml(k)}</td><td style="padding:6px 0;font-size:14px;font-weight:600;text-align:right">${escapeHtml(v)}</td></tr>`).join("")}</table>
+</td></tr>
+<tr><td style="padding:24px 28px 32px"><a href="${escapeHtml(url)}" style="display:inline-block;background:#163832;color:#DAF1DE;text-decoration:none;font-size:14px;font-weight:600;padding:13px 22px;border-radius:999px">Ver o comprovativo</a></td></tr>
+</table></td></tr></table></body></html>`;
+    await this.mailer.send({ to: input.to, subject: `Matrícula confirmada (${input.number}) · ${input.school.name}`, html, text, tags: ["eduflow-portal", "enrollment-confirmed"] });
+  }
+
   async submitted(input: Parameters<ApplicationsMailer["submitted"]>[0]) {
     const firstName = input.to.name.split(" ")[0];
     const url = `${this.portalUrlTemplate.replace("{slug}", input.school.slug)}/familia`;

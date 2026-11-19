@@ -215,6 +215,8 @@ model AcademicYear {
   feePlan        FeePlan?
   admissionPeriods AdmissionPeriods?
   applications   Application[]
+  enrollments    Enrollment[]
+  enrollmentCounter EnrollmentCounter?
 
   @@index([startsOn])
   @@map("academic_years")
@@ -347,6 +349,7 @@ model SchoolClass {
   subjects     ClassSubject[]
   fees         ClassFee[]
   applications Application[]
+  enrollments  Enrollment[]
 
   @@index([courseId])
   @@map("school_classes")
@@ -390,6 +393,7 @@ model ClassGroup {
   reservations SeatReservation[]
   lessons      Lesson[]
   teachers     GroupTeacher[]
+  enrollments  Enrollment[]
 
   @@index([academicYearId])
   @@map("class_groups")
@@ -586,6 +590,9 @@ model SeatReservation {
   /// quem ocupa (ex.: n.º da inscrição)
   reference      String
   expiresAt      DateTime?    @map("expires_at")
+  /// inscrições com esta vaga guardada / matrículas que a ocupam
+  applications   Application[] @relation("ApplicationSeat")
+  enrollments    Enrollment[]
   createdAt      DateTime     @map("created_at")
   updatedAt      DateTime     @map("updated_at")
 
@@ -976,6 +983,7 @@ model Student {
   updatedAt DateTime          @map("updated_at")
   guardians StudentGuardian[]
   applications Application[]
+  enrollments Enrollment[]
 
   @@map("students")
 }
@@ -1030,6 +1038,9 @@ model Application {
   submittedAt        DateTime?            @map("submitted_at")
   createdAt          DateTime             @map("created_at")
   updatedAt          DateTime             @map("updated_at")
+  seatReservationId  String?              @map("seat_reservation_id") @db.Uuid
+  seatReservation    SeatReservation?     @relation("ApplicationSeat", fields: [seatReservationId], references: [id], onDelete: SetNull)
+  enrollment         Enrollment?
   files              ApplicationFile[]
   history            ApplicationHistory[]
 
@@ -1078,6 +1089,62 @@ model ApplicationHistory {
 
   @@index([applicationId, createdAt], map: "application_history_app_idx")
   @@map("application_history")
+}
+
+/// Configuração das matrículas do colégio (uma linha).
+model AdmissionConfig {
+  id             Int      @id @default(1) @db.SmallInt
+  /// STAFF (secretaria) | FAMILY (a família confirma) | AUTO (ao aprovar)
+  enrollmentMode String   @default("STAFF") @map("enrollment_mode")
+  numberPrefix   String   @default("MAT") @map("number_prefix")
+  numberWithYear Boolean  @default(true) @map("number_with_year")
+  numberDigits   Int      @default(5) @map("number_digits")
+  holdDays       Int      @default(15) @map("hold_days")
+  updatedById    String?  @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime @map("updated_at")
+
+  @@map("admission_config")
+}
+
+/// Último n.º de matrícula de cada ano letivo.
+model EnrollmentCounter {
+  academicYearId String       @id @map("academic_year_id") @db.Uuid
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  last           Int          @default(0)
+
+  @@map("enrollment_counters")
+}
+
+/// Matrícula de um aluno num ano letivo (uma ativa por aluno e ano).
+model Enrollment {
+  id                String           @id @db.Uuid
+  number            String           @unique
+  studentId         String           @map("student_id") @db.Uuid
+  student           Student          @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  applicationId     String?          @unique @map("application_id") @db.Uuid
+  application       Application?     @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  academicYearId    String           @map("academic_year_id") @db.Uuid
+  academicYear      AcademicYear     @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  classId           String           @map("class_id") @db.Uuid
+  schoolClass       SchoolClass      @relation(fields: [classId], references: [id], onDelete: Restrict)
+  groupId           String?          @map("group_id") @db.Uuid
+  group             ClassGroup?      @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  shift             String?
+  seatReservationId String?          @map("seat_reservation_id") @db.Uuid
+  seatReservation   SeatReservation? @relation(fields: [seatReservationId], references: [id], onDelete: SetNull)
+  /// ACTIVE | CANCELLED
+  status            String           @default("ACTIVE")
+  /// STAFF | FAMILY | AUTO
+  byKind            String           @map("by_kind")
+  byId              String?          @map("by_id") @db.Uuid
+  byName            String?          @map("by_name")
+  exceptionReason   String?          @map("exception_reason")
+  enrolledAt        DateTime         @map("enrolled_at")
+  createdAt         DateTime         @map("created_at")
+  updatedAt         DateTime         @map("updated_at")
+
+  @@index([academicYearId, classId], map: "enrollments_year_class_idx")
+  @@map("enrollments")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
