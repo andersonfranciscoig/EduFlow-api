@@ -5,6 +5,7 @@ import type { ClassFeeRow, ClassSeats, EnrollmentRow, EnrollmentsRepository, Enr
 import { DEFAULT_CONFIG, type EnrollmentConfig, type EnrollmentMode, formatEnrollmentNumber } from "../domain/enrollment";
 
 type Tx = Prisma.TransactionClient;
+type Db = PrismaClient | Tx;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 class Abort extends Error {
@@ -13,39 +14,129 @@ class Abort extends Error {
   }
 }
 
-const ENROLLMENT_INCLUDE = {
-  student: { select: { fullName: true, number: true, guardians: { where: { isPrimary: true }, select: { guardian: { select: { fullName: true } } } } } },
-  application: { select: { number: true, accountId: true } },
-  academicYear: { select: { name: true, startsOn: true } },
-  schoolClass: { select: { grade: true, course: { select: { name: true } } } },
-  group: { select: { name: true } },
-} satisfies Prisma.EnrollmentInclude;
+/**
+ * A matrícula como se mostra — numa só consulta (com a BD no Neon, cada ida e volta conta ~250 ms;
+ * os "include" do Prisma fariam uma consulta por relação).
+ */
+async function loadEnrollment(db: Db, where: Prisma.Sql): Promise<EnrollmentRow | null> {
+  const rows = await db.$queryRaw<
+    {
+      id: string;
+      number: string;
+      student_id: string;
+      student_number: number | null;
+      student_name: string;
+      application_id: string | null;
+      application_number: string | null;
+      account_id: string | null;
+      academic_year_id: string;
+      year_name: string;
+      starts_on: Date;
+      class_id: string;
+      grade: number;
+      course_name: string | null;
+      group_id: string | null;
+      group_name: string | null;
+      shift: string | null;
+      status: string;
+      by_kind: string;
+      by_name: string | null;
+      exception_reason: string | null;
+      enrolled_at: Date;
+      guardian_name: string | null;
+    }[]
+  >`
+    SELECT e.id, e.number, e.student_id, s.number AS student_number, s.full_name AS student_name,
+           e.application_id, a.number AS application_number, a.account_id,
+           e.academic_year_id, y.name AS year_name, y.starts_on,
+           e.class_id, c.grade, co.name AS course_name, e.group_id, g.name AS group_name, e.shift,
+           e.status, e.by_kind, e.by_name, e.exception_reason, e.enrolled_at,
+           (SELECT gu.full_name FROM student_guardians sg JOIN guardians gu ON gu.id = sg.guardian_id
+             WHERE sg.student_id = e.student_id AND sg.is_primary LIMIT 1) AS guardian_name
+      FROM enrollments e
+      JOIN students s ON s.id = e.student_id
+      JOIN academic_years y ON y.id = e.academic_year_id
+      JOIN school_classes c ON c.id = e.class_id
+      LEFT JOIN courses co ON co.id = c.course_id
+      LEFT JOIN class_groups g ON g.id = e.group_id
+      LEFT JOIN applications a ON a.id = e.application_id
+     WHERE ${where}
+     LIMIT 1`;
+  const e = rows[0];
+  if (!e) return null;
+  return {
+    id: e.id,
+    number: e.number,
+    studentId: e.student_id,
+    studentNumber: e.student_number,
+    studentName: e.student_name,
+    applicationId: e.application_id,
+    applicationNumber: e.application_number,
+    academicYearId: e.academic_year_id,
+    yearName: e.year_name,
+    yearStart: iso(e.starts_on),
+    classId: e.class_id,
+    grade: e.grade,
+    courseName: e.course_name,
+    groupId: e.group_id,
+    groupName: e.group_name,
+    shift: e.shift as EnrollmentRow["shift"],
+    status: e.status as EnrollmentRow["status"],
+    byKind: e.by_kind as EnrollmentRow["byKind"],
+    byName: e.by_name,
+    exceptionReason: e.exception_reason,
+    enrolledAt: e.enrolled_at,
+    guardianName: e.guardian_name,
+    accountId: e.account_id,
+  };
+}
 
-const toRow = (e: Prisma.EnrollmentGetPayload<{ include: typeof ENROLLMENT_INCLUDE }>): EnrollmentRow => ({
-  id: e.id,
-  number: e.number,
-  studentId: e.studentId,
-  studentNumber: e.student.number,
-  studentName: e.student.fullName,
-  applicationId: e.applicationId,
-  applicationNumber: e.application?.number ?? null,
-  academicYearId: e.academicYearId,
-  yearName: e.academicYear.name,
-  yearStart: iso(e.academicYear.startsOn),
-  classId: e.classId,
-  grade: e.schoolClass.grade,
-  courseName: e.schoolClass.course?.name ?? null,
-  groupId: e.groupId,
-  groupName: e.group?.name ?? null,
-  shift: e.shift as EnrollmentRow["shift"],
-  status: e.status as EnrollmentRow["status"],
-  byKind: e.byKind as EnrollmentRow["byKind"],
-  byName: e.byName,
-  exceptionReason: e.exceptionReason,
-  enrolledAt: e.enrolledAt,
-  guardianName: e.student.guardians[0]?.guardian.fullName ?? null,
-  accountId: e.application?.accountId ?? null,
-});
+/**
+ * As vagas de uma classe, em duas consultas. Com `lock`, a linha da classe fica bloqueada até ao
+ * fim da transação (FOR UPDATE): é isto que impede duas matrículas de ficarem com a última vaga.
+ * As reservas fora do prazo não contam.
+ */
+async function classSeats(db: Db, classId: string, now: Date, lock: boolean, mineId: string | null = null) {
+  const groups = lock
+    ? await db.$queryRaw<{ vacancies: number | null; academic_year_id: string; year_status: string; id: string | null; name: string | null; shift: string | null; capacity: number | null }[]>`
+        SELECT c.vacancies, c.academic_year_id, y.status AS year_status, g.id, g.name, g.shift, g.capacity
+          FROM school_classes c JOIN academic_years y ON y.id = c.academic_year_id
+          LEFT JOIN class_groups g ON g.class_id = c.id
+         WHERE c.id = ${classId}::uuid
+         FOR UPDATE OF c`
+    : await db.$queryRaw<{ vacancies: number | null; academic_year_id: string; year_status: string; id: string | null; name: string | null; shift: string | null; capacity: number | null }[]>`
+        SELECT c.vacancies, c.academic_year_id, y.status AS year_status, g.id, g.name, g.shift, g.capacity
+          FROM school_classes c JOIN academic_years y ON y.id = c.academic_year_id
+          LEFT JOIN class_groups g ON g.class_id = c.id
+         WHERE c.id = ${classId}::uuid`;
+  if (!groups.length) return null;
+  const counts = await db.$queryRaw<{ group_id: string | null; status: string; n: number; mine: boolean }[]>`
+    SELECT group_id, status, count(*)::int AS n, bool_or(id = ${mineId}::uuid) AS mine
+      FROM seat_reservations
+     WHERE class_id = ${classId}::uuid AND (status = 'CONFIRMED' OR (status = 'HELD' AND expires_at > ${now}))
+     GROUP BY group_id, status`;
+  const held = counts.filter((r) => r.status === "HELD").reduce((n, r) => n + r.n, 0);
+  const confirmed = counts.filter((r) => r.status === "CONFIRMED").reduce((n, r) => n + r.n, 0);
+  const list: GroupSeats[] = groups
+    .filter((g) => g.id)
+    .map((g) => ({ id: g.id!, name: g.name!, shift: g.shift as GroupSeats["shift"], capacity: g.capacity, confirmed: counts.filter((r) => r.status === "CONFIRMED" && r.group_id === g.id).reduce((n, r) => n + r.n, 0) }))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt", { numeric: true }));
+  const vacancies = effectiveVacancies(
+    list.reduce((n, g) => n + (g.capacity ?? 0), 0),
+    groups[0].vacancies,
+  );
+  return {
+    academicYearId: groups[0].academic_year_id,
+    closed: groups[0].year_status === "CLOSED",
+    groups: list,
+    vacancies,
+    held,
+    confirmed,
+    available: Math.max(0, vacancies - held - confirmed),
+    /** a reserva `mineId` ainda está guardada (HELD e no prazo) */
+    mineHeld: counts.some((r) => r.status === "HELD" && r.mine),
+  };
+}
 
 /** Matrículas e vagas das inscrições, na BD do PRÓPRIO colégio. */
 export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
@@ -70,37 +161,18 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
     return p?.enrollmentsTo ? iso(p.enrollmentsTo) : null;
   }
 
-  /** Bloqueia a classe e devolve as vagas (dentro da transação). As reservas fora do prazo deixam de contar. */
-  private async lockClass(tx: Tx, classId: string, now: Date) {
-    const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM school_classes WHERE id = ${classId}::uuid FOR UPDATE`;
-    if (!locked.length) return null;
-    await tx.seatReservation.updateMany({ where: { classId, status: "HELD", expiresAt: { lte: now } }, data: { status: "RELEASED", updatedAt: now } });
-    const c = await tx.schoolClass.findUnique({ where: { id: classId }, include: { groups: true, academicYear: { select: { status: true } } } });
-    if (!c) return null;
-    const res = await tx.seatReservation.groupBy({ by: ["groupId", "status"], where: { classId, status: { in: ["HELD", "CONFIRMED"] } }, _count: { _all: true } });
-    const held = res.filter((r) => r.status === "HELD").reduce((n, r) => n + r._count._all, 0);
-    const confirmed = res.filter((r) => r.status === "CONFIRMED").reduce((n, r) => n + r._count._all, 0);
-    const groups: GroupSeats[] = c.groups
-      .map((g) => ({ id: g.id, name: g.name, shift: g.shift as GroupSeats["shift"], capacity: g.capacity, confirmed: res.filter((r) => r.status === "CONFIRMED" && r.groupId === g.id).reduce((n, r) => n + r._count._all, 0) }))
-      .sort((a, b) => a.name.localeCompare(b.name, "pt", { numeric: true }));
-    const capacity = groups.reduce((n, g) => n + (g.capacity ?? 0), 0);
-    const vacancies = effectiveVacancies(capacity, c.vacancies);
-    return { cls: c, closed: c.academicYear.status === "CLOSED", groups, vacancies, held, confirmed, available: Math.max(0, vacancies - held - confirmed) };
-  }
-
   async holdForApplication(input: { applicationId: string; classId: string; reference: string; expiresAt: Date; now: Date }): Promise<HoldOutcome> {
     return this.db.$transaction(async (tx) => {
-      const s = await this.lockClass(tx, input.classId, input.now);
+      const app = await tx.application.findUnique({ where: { id: input.applicationId }, select: { seatReservationId: true } });
+      const s = await classSeats(tx, input.classId, input.now, true, app?.seatReservationId ?? null);
       if (!s) return { ok: false, reason: "not_found" } as const;
       if (s.closed) return { ok: false, reason: "year_closed" } as const;
-      const app = await tx.application.findUnique({ where: { id: input.applicationId }, select: { seatReservationId: true } });
-      if (app?.seatReservationId) {
-        const r = await tx.seatReservation.findUnique({ where: { id: app.seatReservationId } });
-        if (r && r.status === "HELD") return { ok: true, id: r.id, expiresAt: r.expiresAt ?? input.expiresAt } as const;
-      }
+      if (s.mineHeld && app?.seatReservationId) return { ok: true, id: app.seatReservationId, expiresAt: input.expiresAt } as const;
       if (s.available <= 0) return { ok: false, reason: "no_vacancy" } as const;
+      // uma reserva antiga desta inscrição, fora do prazo, deixa de contar (e liberta a referência)
+      if (app?.seatReservationId) await tx.seatReservation.updateMany({ where: { id: app.seatReservationId, status: "HELD" }, data: { status: "RELEASED", updatedAt: input.now } });
       const id = randomUUID();
-      await tx.seatReservation.create({ data: { id, academicYearId: s.cls.academicYearId, classId: input.classId, status: "HELD", reference: input.reference, expiresAt: input.expiresAt, createdAt: input.now, updatedAt: input.now } });
+      await tx.seatReservation.create({ data: { id, academicYearId: s.academicYearId, classId: input.classId, status: "HELD", reference: input.reference, expiresAt: input.expiresAt, createdAt: input.now, updatedAt: input.now } });
       await tx.application.update({ where: { id: input.applicationId }, data: { seatReservationId: id } });
       return { ok: true, id, expiresAt: input.expiresAt } as const;
     });
@@ -113,58 +185,57 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
   }
 
   async seats(applicationId: string, now: Date): Promise<ClassSeats | null> {
-    const app = await this.db.application.findUnique({ where: { id: applicationId }, select: { classId: true, seatReservationId: true } });
+    const app = await this.db.application.findUnique({ where: { id: applicationId }, select: { classId: true, seatReservationId: true, seatReservation: { select: { status: true, expiresAt: true } } } });
     if (!app?.classId) return null;
-    const c = await this.db.schoolClass.findUnique({ where: { id: app.classId }, include: { groups: true } });
-    if (!c) return null;
-    const active = { OR: [{ status: "CONFIRMED" }, { status: "HELD", expiresAt: { gt: now } }] } satisfies Prisma.SeatReservationWhereInput;
-    const res = await this.db.seatReservation.groupBy({ by: ["groupId", "status"], where: { classId: c.id, ...active }, _count: { _all: true } });
-    const held = res.filter((r) => r.status === "HELD").reduce((n, r) => n + r._count._all, 0);
-    const confirmed = res.filter((r) => r.status === "CONFIRMED").reduce((n, r) => n + r._count._all, 0);
-    const groups = c.groups
-      .map((g) => ({ id: g.id, name: g.name, shift: g.shift as GroupSeats["shift"], capacity: g.capacity, confirmed: res.filter((r) => r.status === "CONFIRMED" && r.groupId === g.id).reduce((n, r) => n + r._count._all, 0) }))
-      .sort((a, b) => a.name.localeCompare(b.name, "pt", { numeric: true }));
-    const vacancies = effectiveVacancies(
-      groups.reduce((n, g) => n + (g.capacity ?? 0), 0),
-      c.vacancies,
-    );
-    const r = app.seatReservationId ? await this.db.seatReservation.findUnique({ where: { id: app.seatReservationId } }) : null;
+    const s = await classSeats(this.db, app.classId, now, false);
+    if (!s) return null;
+    const r = app.seatReservation;
     return {
-      classId: c.id,
-      vacancies,
-      held,
-      confirmed,
-      available: Math.max(0, vacancies - held - confirmed),
-      groups,
-      heldForApplication: r && r.status === "HELD" ? { id: r.id, expiresAt: r.expiresAt, expired: !!r.expiresAt && r.expiresAt <= now } : null,
+      classId: app.classId,
+      vacancies: s.vacancies,
+      held: s.held,
+      confirmed: s.confirmed,
+      available: s.available,
+      groups: s.groups,
+      heldForApplication: r && r.status === "HELD" && app.seatReservationId ? { id: app.seatReservationId, expiresAt: r.expiresAt, expired: !!r.expiresAt && r.expiresAt <= now } : null,
     };
   }
 
   async fees(classId: string): Promise<ClassFeeRow[]> {
-    const rows = await this.db.classFee.findMany({ where: { classId, feeItem: { archivedAt: null } }, include: { feeItem: true }, orderBy: { feeItem: { position: "asc" } } });
-    return rows.map((f) => ({ name: f.feeItem.name, billing: f.feeItem.billing as ClassFeeRow["billing"], appliesTo: f.feeItem.appliesTo as ClassFeeRow["appliesTo"], amount: f.amount }));
+    const rows = await this.db.$queryRaw<{ name: string; billing: string; applies_to: string; amount: number }[]>`
+      SELECT f.name, f.billing, f.applies_to, cf.amount
+        FROM class_fees cf JOIN fee_items f ON f.id = cf.fee_item_id
+       WHERE cf.class_id = ${classId}::uuid AND f.archived_at IS NULL
+       ORDER BY f.position, f.name`;
+    return rows.map((f) => ({ name: f.name, billing: f.billing as ClassFeeRow["billing"], appliesTo: f.applies_to as ClassFeeRow["appliesTo"], amount: f.amount }));
   }
 
+  /**
+   * Matricular numa só transação, com poucas idas à BD (cada uma conta, com a BD no Neon):
+   *   inscrição bloqueada → classe bloqueada e vagas → vaga confirmada numa turma → n.º do ano
+   *   (contador bloqueado) → n.º de aluno → matrícula.
+   * A unicidade (uma matrícula ativa por aluno e ano, uma por inscrição) fica garantida pelos índices.
+   */
   async enroll(input: Parameters<EnrollmentsRepository["enroll"]>[0]): Promise<EnrollOutcome> {
     try {
       const id = await this.db.$transaction(async (tx) => {
-        // a inscrição primeiro (bloqueada): aprovada e ainda sem matrícula
-        await tx.$queryRaw`SELECT id FROM applications WHERE id = ${input.applicationId}::uuid FOR UPDATE`;
-        const app = await tx.application.findUnique({ where: { id: input.applicationId }, include: { enrollment: { select: { id: true } } } });
-        if (!app || app.status !== "APPROVED" || !app.studentId || !app.classId || !app.academicYearId || !app.number) throw new Abort("not_approved");
-        if (app.enrollment) throw new Abort("already_enrolled");
-        const dup = await tx.enrollment.findFirst({ where: { studentId: app.studentId, academicYearId: app.academicYearId, status: "ACTIVE" }, select: { id: true } });
-        if (dup) throw new Abort("already_enrolled");
+        const [app] = await tx.$queryRaw<
+          { id: string; status: string; student_id: string | null; class_id: string | null; academic_year_id: string | null; number: string | null; seat_reservation_id: string | null; enrolled: boolean; starts_on: Date | null }[]
+        >`
+          SELECT a.id, a.status, a.student_id, a.class_id, a.academic_year_id, a.number, a.seat_reservation_id,
+                 EXISTS (SELECT 1 FROM enrollments e WHERE e.application_id = a.id
+                          OR (e.student_id = a.student_id AND e.academic_year_id = a.academic_year_id AND e.status = 'ACTIVE')) AS enrolled,
+                 (SELECT y.starts_on FROM academic_years y WHERE y.id = a.academic_year_id) AS starts_on
+            FROM applications a WHERE a.id = ${input.applicationId}::uuid FOR UPDATE OF a`;
+        if (!app || app.status !== "APPROVED" || !app.student_id || !app.class_id || !app.academic_year_id || !app.number || !app.starts_on) throw new Abort("not_approved");
+        if (app.enrolled) throw new Abort("already_enrolled");
 
-        // a classe bloqueada: as vagas contam-se e ocupam-se aqui (sem corridas pela última vaga)
-        const s = await this.lockClass(tx, app.classId, input.now);
+        const s = await classSeats(tx, app.class_id, input.now, true, app.seat_reservation_id);
         if (!s) throw new Abort("not_approved");
         if (s.closed) throw new Abort("year_closed");
         if (!s.groups.length) throw new Abort("no_groups");
-        const mine = app.seatReservationId ? await tx.seatReservation.findUnique({ where: { id: app.seatReservationId } }) : null;
-        const hasHeld = mine?.status === "HELD";
-        // sem vaga guardada, precisa de uma livre (salvo exceção autorizada)
-        if (!hasHeld && s.available <= 0 && !input.exceptionReason) throw new Abort("no_vacancy");
+        // sem vaga guardada (no prazo), precisa de uma livre (salvo exceção autorizada)
+        if (!s.mineHeld && s.available <= 0 && !input.exceptionReason) throw new Abort("no_vacancy");
 
         // a turma: a pedida (com lugar) ou a de mais lugares livres; na exceção, a pedida mesmo cheia
         let groupId: string;
@@ -179,37 +250,36 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
         const group = s.groups.find((g) => g.id === groupId)!;
 
         let seatId: string;
-        if (hasHeld) {
-          seatId = mine!.id;
+        if (s.mineHeld && app.seat_reservation_id) {
+          seatId = app.seat_reservation_id;
           await tx.seatReservation.update({ where: { id: seatId }, data: { status: "CONFIRMED", groupId, expiresAt: null, updatedAt: input.now } });
         } else {
-          if (mine) await tx.seatReservation.updateMany({ where: { id: mine.id, status: "HELD" }, data: { status: "RELEASED", updatedAt: input.now } });
+          // a reserva antiga (fora do prazo) deixa de contar e liberta a referência
+          if (app.seat_reservation_id) await tx.seatReservation.updateMany({ where: { id: app.seat_reservation_id, status: "HELD" }, data: { status: "RELEASED", updatedAt: input.now } });
           seatId = randomUUID();
-          await tx.seatReservation.create({ data: { id: seatId, academicYearId: app.academicYearId, classId: app.classId, groupId, status: "CONFIRMED", reference: app.number, createdAt: input.now, updatedAt: input.now } });
+          await tx.seatReservation.create({ data: { id: seatId, academicYearId: app.academic_year_id, classId: app.class_id, groupId, status: "CONFIRMED", reference: app.number, createdAt: input.now, updatedAt: input.now } });
         }
 
-        // n.º de matrícula do ano (a linha do contador bloqueia-se) e n.º de aluno (permanente)
-        await tx.$executeRaw`INSERT INTO enrollment_counters (academic_year_id, last) VALUES (${app.academicYearId}::uuid, 0) ON CONFLICT (academic_year_id) DO NOTHING`;
-        const [{ last }] = await tx.$queryRaw<{ last: number }[]>`UPDATE enrollment_counters SET last = last + 1 WHERE academic_year_id = ${app.academicYearId}::uuid RETURNING last`;
-        const year = await tx.academicYear.findUnique({ where: { id: app.academicYearId }, select: { startsOn: true } });
-        const number = formatEnrollmentNumber(input.cfg, iso(year!.startsOn), Number(last));
-        const student = await tx.student.findUnique({ where: { id: app.studentId }, select: { number: true } });
-        let studentNumber = student?.number ?? null;
-        if (!studentNumber) {
-          const [{ seq }] = await tx.$queryRaw<{ seq: bigint }[]>`SELECT nextval('student_number_seq') AS seq`;
-          studentNumber = Number(seq);
-        }
-        await tx.student.update({ where: { id: app.studentId }, data: { number: studentNumber, status: "ENROLLED", updatedAt: input.now } });
+        // n.º de matrícula do ano: o contador cria-se ou sobe numa só instrução (a linha fica bloqueada)
+        const [{ last }] = await tx.$queryRaw<{ last: number }[]>`
+          INSERT INTO enrollment_counters (academic_year_id, last) VALUES (${app.academic_year_id}::uuid, 1)
+          ON CONFLICT (academic_year_id) DO UPDATE SET last = enrollment_counters.last + 1
+          RETURNING last`;
+        const number = formatEnrollmentNumber(input.cfg, iso(app.starts_on), Number(last));
+        // n.º de aluno (permanente: só na primeira matrícula) e o estado
+        await tx.$executeRaw`
+          UPDATE students SET number = COALESCE(number, nextval('student_number_seq')::int), status = 'ENROLLED', updated_at = ${input.now}
+           WHERE id = ${app.student_id}::uuid`;
 
         const eid = randomUUID();
         await tx.enrollment.create({
           data: {
             id: eid,
             number,
-            studentId: app.studentId,
+            studentId: app.student_id,
             applicationId: app.id,
-            academicYearId: app.academicYearId,
-            classId: app.classId,
+            academicYearId: app.academic_year_id,
+            classId: app.class_id,
             groupId,
             shift: group.shift,
             seatReservationId: seatId,
@@ -234,14 +304,12 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
     }
   }
 
-  async byApplication(applicationId: string) {
-    const e = await this.db.enrollment.findUnique({ where: { applicationId }, include: ENROLLMENT_INCLUDE });
-    return e ? toRow(e) : null;
+  byApplication(applicationId: string) {
+    return loadEnrollment(this.db, Prisma.sql`e.application_id = ${applicationId}::uuid`);
   }
 
-  async byId(id: string) {
-    const e = await this.db.enrollment.findUnique({ where: { id }, include: ENROLLMENT_INCLUDE });
-    return e ? toRow(e) : null;
+  byId(id: string) {
+    return loadEnrollment(this.db, Prisma.sql`e.id = ${id}::uuid`);
   }
 
   async record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date) {
