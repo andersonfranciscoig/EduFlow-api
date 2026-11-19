@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, Param, ParseUUIDPipe, Patch, Query, Res, StreamableFile, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpStatus, NotFoundException, Param, ParseUUIDPipe, Patch, Query, Res, StreamableFile, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { z } from "zod";
@@ -9,14 +9,20 @@ import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import type { SchoolAccess } from "../../identity/application/ports";
-import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
+import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
+import { PEDAGOGY_HTTP } from "../../pedagogy/presentation/pedagogy.controller";
+import { Teaching } from "../../pedagogy/application/Teaching";
+import { Timetable } from "../../pedagogy/application/Timetable";
+import { PrismaTeachingRepository } from "../../pedagogy/infrastructure/prisma-teaching";
+import { PrismaTimetableRepository } from "../../pedagogy/infrastructure/prisma-timetable";
 import { Students } from "../application/Students";
 import type { AdmissionErrorCode } from "../domain/settings";
 import { PrismaStudentsRepository } from "../infrastructure/prisma-students";
 
 const STUDENTS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> = {
   INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
+  NO_GROUPS: HttpStatus.NOT_FOUND,
   STUDENT_NOT_FOUND: HttpStatus.NOT_FOUND,
   FILE_NOT_FOUND: HttpStatus.NOT_FOUND,
 };
@@ -80,6 +86,36 @@ export class StaffStudentsController {
   }
 }
 
+/** O pedagógico não sabe quem é a família: este "ator" só lê (não gere horários). */
+const FAMILY_READER = { id: "family", role: "FAMILIA", isOwner: false };
+
+/** O horário da turma para a família: dias, tempos, disciplinas, professores e salas (sem dados de gestão). */
+async function familyTimetable(timetable: Timetable, t: TenantContext, groupId: string) {
+  const r = await timetable.groupTimetable(new PrismaTimetableRepository(t.db), FAMILY_READER, groupId);
+  if (!r.ok) return null;
+  const v = r.value;
+  return {
+    year: { name: v.year.name },
+    cls: { label: v.cls.label, course: v.cls.course, courseCode: v.cls.courseCode },
+    group: { name: v.group.name, shiftLabel: v.group.shiftLabel, room: v.group.room },
+    coordinator: v.coordinator ? { fullName: v.coordinator.fullName } : null,
+    weekdays: v.weekdays,
+    periods: v.periods.map((p) => ({ id: p.id, kind: p.kind, startsAt: p.startsAt, endsAt: p.endsAt })),
+    lessons: v.lessons.filter((l) => l.subject).map((l) => ({ weekday: l.weekday, periodId: l.periodId, subject: l.subject!, teacherLabel: l.teacher ? l.teacherLabel : null, room: l.room })),
+    curriculum: v.curriculum.map((c) => ({ subject: c.subject, weeklyPeriods: c.weeklyPeriods, teacherLabel: c.teacher ? c.teacherLabel : null })),
+  };
+}
+type FamilyTimetable = NonNullable<Awaited<ReturnType<typeof familyTimetable>>>;
+
+/** As aulas de um dia, pela ordem dos tempos. */
+const lessonsOn = (tt: FamilyTimetable, weekday: number) =>
+  tt.periods
+    .filter((p) => p.kind === "AULA")
+    .flatMap((p) => {
+      const l = tt.lessons.find((x) => x.weekday === weekday && x.periodId === p.id);
+      return l ? [{ startsAt: p.startsAt, endsAt: p.endsAt, subject: l.subject, teacherLabel: l.teacherLabel, room: l.room }] : [];
+    });
+
 /** Área da família · os alunos da conta (o próprio aluno maior, ou os educandos menores que gere). */
 @ApiTags("Área da família · Alunos")
 @ApiHeader({ name: "X-Tenant", required: false })
@@ -90,7 +126,36 @@ export class FamilyStudentsController {
   constructor(
     private readonly students: Students,
     private readonly stores: HrFileStores,
+    private readonly timetable: Timetable,
   ) {}
+
+  @Get("journey")
+  @ApiOperation({ summary: "O percurso: os alunos matriculados da conta, a matrícula atual e as aulas do dia (ou de segunda, ao fim de semana)" })
+  async journey(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal) {
+    const r = repo(t);
+    const day = this.students.schoolDay();
+    const list = await this.students.journey(r, f.account.id);
+    const cache = new Map<string, Promise<FamilyTimetable | null>>();
+    const students = await Promise.all(
+      list.map(async ({ groupId, ...s }) => {
+        if (!groupId) return { ...s, hasTimetable: false, day: null };
+        if (!cache.has(groupId)) cache.set(groupId, familyTimetable(this.timetable, t, groupId));
+        const tt = await cache.get(groupId)!;
+        const weekday = tt?.weekdays.find((w) => w.value === day.weekday);
+        return { ...s, hasTimetable: !!tt && tt.lessons.length > 0, day: tt && weekday ? { today: day.today, label: day.today ? "Hoje" : weekday.label, lessons: lessonsOn(tt, day.weekday) } : null };
+      }),
+    );
+    return { students };
+  }
+
+  @Get(":id/timetable")
+  @ApiOperation({ summary: "O horário da turma do aluno (só leitura)" })
+  async studentTimetable(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string) {
+    const { groupId } = unwrap(await this.students.familyGroup(repo(t), f.account.id, studentId), STUDENTS_HTTP);
+    const tt = await familyTimetable(this.timetable, t, groupId);
+    if (!tt) throw new NotFoundException({ code: "NO_GROUPS", message: "Turma não encontrada." });
+    return { ...tt, today: this.students.schoolDay() };
+  }
 
   @Get(":id")
   @ApiOperation({ summary: "O painel do aluno: dados, encarregados, matrículas, inscrições e documentos (só leitura)" })
@@ -102,5 +167,48 @@ export class FamilyStudentsController {
   @ApiOperation({ summary: "Um ficheiro do aluno (decifrado pela API)" })
   async file(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string, @Param("fileId", id) fileId: string, @Res({ passthrough: true }) res: Response) {
     return sendFile(res, unwrap(await this.students.familyFile(repo(t), this.stores.for(t.entry), f.account.id, studentId, fileId), STUDENTS_HTTP));
+  }
+}
+
+/**
+ * Professor · os alunos das minhas turmas (só onde dá aulas ou que coordena; as outras: 404).
+ * O contacto do encarregado só para o coordenador (diretor de turma).
+ */
+@ApiTags("Portal · Professores")
+@ApiHeader({ name: "X-Tenant", required: false })
+@ApiBearerAuth()
+@Controller("v1/pedagogy/my-classes")
+@UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
+export class TeacherStudentsController {
+  constructor(
+    private readonly students: Students,
+    private readonly teaching: Teaching,
+    private readonly stores: HrFileStores,
+  ) {}
+
+  private async access(t: TenantContext, u: SchoolAccess, groupId: string) {
+    return unwrap(await this.teaching.myGroupAccess(new PrismaTeachingRepository(t.db), u.id, groupId), PEDAGOGY_HTTP);
+  }
+
+  @Get(":id/students")
+  @TeacherMay()
+  @ApiOperation({ summary: "Os alunos de uma das minhas turmas (matrículas ativas)" })
+  async list(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string) {
+    const a = await this.access(t, u, groupId);
+    return this.students.groupStudents(repo(t), groupId, a.coordinates);
+  }
+
+  @Get(":id/students/:studentId/photo")
+  @TeacherMay()
+  @ApiOperation({ summary: "A fotografia de um aluno da turma" })
+  async photo(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("id", id) groupId: string,
+    @Param("studentId", id) studentId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.access(t, u, groupId);
+    return sendFile(res, unwrap(await this.students.groupPhoto(repo(t), this.stores.for(t.entry), groupId, studentId), STUDENTS_HTTP));
   }
 }

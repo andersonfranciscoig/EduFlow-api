@@ -21,5 +21,7 @@ import { TimetableController } from "./presentation/timetable.controller";
     { provide: Timetable, inject: [Pedagogy], useFactory: (p: Pedagogy) => new Timetable(uuidGenerator, systemClock, p) },
     { provide: Teaching, inject: [Pedagogy], useFactory: (p: Pedagogy) => new Teaching(systemClock, p) },
   ],
+  // a secretaria usa-os: o horário da turma na área da família e os alunos das turmas do professor
+  exports: [Teaching, Timetable],
 })
 export class PedagogyModule {}

@@ -54,6 +54,38 @@ export interface StudentsRepository {
   /** Contas de família que podem ver o aluno (o próprio ou o encarregado que o gere). */
   accessFor(accountId: string, studentId: string): Promise<{ self: boolean; managingGuardian: boolean; birthDate: string } | null>;
   record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date): Promise<void>;
+  /** Os alunos ligados à conta (o próprio e os educandos), com a matrícula ativa mais recente. */
+  familyStudents(accountId: string): Promise<FamilyStudentRow[]>;
+  /** A turma da matrícula ativa mais recente (null sem turma). */
+  currentGroup(studentId: string): Promise<string | null>;
+  /** Os alunos matriculados (ativos) numa turma. */
+  groupStudents(groupId: string): Promise<GroupStudentRow[]>;
+  /** A fotografia de um aluno matriculado nesta turma. */
+  groupPhoto(groupId: string, studentId: string): Promise<{ storageKey: string; mimeType: string; fileName: string } | null>;
+}
+
+export interface FamilyStudentRow {
+  id: string;
+  fullName: string;
+  birthDate: string;
+  number: number | null;
+  status: StudentStatus;
+  self: boolean;
+  managing: boolean;
+  enrollment: { number: string; applicationId: string | null; groupId: string | null; yearName: string; grade: number; courseName: string | null; groupName: string | null; shift: Shift | null; enrolledAt: Date } | null;
+}
+
+export interface GroupStudentRow {
+  id: string;
+  number: number | null;
+  fullName: string;
+  birthDate: string;
+  gender: string | null;
+  enrollmentNumber: string;
+  photoId: string | null;
+  guardianName: string | null;
+  guardianPhone: string | null;
+  guardianRelationship: string | null;
 }
 
 export interface StudentFileStore {
@@ -244,5 +276,81 @@ export class Students {
   async familyFile(repo: StudentsRepository, store: StudentFileStore, accountId: string, studentId: string, fileId: string) {
     if (!(await this.canSee(repo, accountId, studentId))) return fail(admissionError("FILE_NOT_FOUND", "Ficheiro não encontrado."));
     return this.file(repo, store, studentId, fileId);
+  }
+
+  /** O próximo dia de aulas (hoje, ou segunda-feira ao fim de semana). */
+  schoolDay() {
+    const today = this.today();
+    const dow = new Date(`${today}T12:00:00Z`).getUTCDay();
+    return dow >= 1 && dow <= 5 ? { weekday: dow, today: true } : { weekday: 1, today: false };
+  }
+
+  /**
+   * O percurso dos alunos MATRICULADOS da conta (o próprio aluno maior ou os educandos menores que gere):
+   * a matrícula atual e a turma (o horário junta-se no controlador). Os que só têm inscrição ficam de fora.
+   */
+  async journey(repo: StudentsRepository, accountId: string) {
+    const today = this.today();
+    const rows = (await repo.familyStudents(accountId)).filter((r) => canAccessStudent({ self: r.self, managingGuardian: r.managing }, r.birthDate, today) && r.enrollment);
+    return rows.map((r) => {
+      const e = r.enrollment!;
+      return {
+        id: r.id,
+        fullName: r.fullName,
+        number: formatStudentNumber(r.number),
+        age: ageOn(r.birthDate, today),
+        self: r.self,
+        statusLabel: STUDENT_STATUS_LABELS[r.status],
+        groupId: e.groupId,
+        current: {
+          number: e.number,
+          applicationId: e.applicationId,
+          yearName: e.yearName,
+          classLabel: classLabel(e.grade, e.courseName),
+          groupName: e.groupName,
+          shiftLabel: e.shift ? SHIFTS[e.shift] : null,
+          enrolledAt: e.enrolledAt.toISOString(),
+        },
+      };
+    });
+  }
+
+  /** A turma atual do aluno (família: só se o pode ver). */
+  async familyGroup(repo: StudentsRepository, accountId: string, studentId: string) {
+    if (!(await this.canSee(repo, accountId, studentId))) return fail(admissionError("STUDENT_NOT_FOUND", "Aluno não encontrado."));
+    const groupId = await repo.currentGroup(studentId);
+    if (!groupId) return fail(admissionError("NO_GROUPS", "O aluno ainda não tem turma: o horário aparece depois da matrícula numa turma."));
+    return ok({ groupId });
+  }
+
+  // ---------------------------------------------------------------- professor
+
+  /**
+   * Os alunos de uma turma do professor (o acesso à turma confirma-se antes, no módulo pedagógico).
+   * O contacto do encarregado só para quem coordena a turma (diretor de turma).
+   */
+  async groupStudents(repo: StudentsRepository, groupId: string, coordinates: boolean) {
+    const today = this.today();
+    const rows = await repo.groupStudents(groupId);
+    return {
+      total: rows.length,
+      showContacts: coordinates,
+      students: rows.map((r) => ({
+        id: r.id,
+        number: formatStudentNumber(r.number),
+        fullName: r.fullName,
+        age: ageOn(r.birthDate, today),
+        gender: r.gender,
+        enrollmentNumber: r.enrollmentNumber,
+        photoId: r.photoId,
+        guardian: coordinates && r.guardianName ? { fullName: r.guardianName, phone: r.guardianPhone, relationship: r.guardianRelationship } : null,
+      })),
+    };
+  }
+
+  async groupPhoto(repo: StudentsRepository, store: StudentFileStore, groupId: string, studentId: string) {
+    const f = await repo.groupPhoto(groupId, studentId);
+    if (!f) return fail(admissionError("FILE_NOT_FOUND", "Fotografia não encontrada."));
+    return ok({ content: await store.read(f.storageKey), mimeType: f.mimeType, fileName: f.fileName });
   }
 }

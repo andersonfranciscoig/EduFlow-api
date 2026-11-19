@@ -211,6 +211,100 @@ export class PrismaStudentsRepository implements StudentsRepository {
     return { self: !!r.self, managingGuardian: r.managing, birthDate: iso(r.birth_date) };
   }
 
+  async familyStudents(accountId: string) {
+    const rows = await this.db.$queryRaw<
+      {
+        id: string;
+        full_name: string;
+        birth_date: Date;
+        number: number | null;
+        status: string;
+        self: boolean;
+        managing: boolean;
+        enr_number: string | null;
+        application_id: string | null;
+        group_id: string | null;
+        year_name: string | null;
+        grade: number | null;
+        course_name: string | null;
+        group_name: string | null;
+        shift: string | null;
+        enrolled_at: Date | null;
+      }[]
+    >`
+      SELECT s.id, s.full_name, s.birth_date, s.number, s.status,
+             (s.account_id IS NOT DISTINCT FROM ${accountId}::uuid) AS self,
+             EXISTS (SELECT 1 FROM student_guardians sg JOIN guardians g ON g.id = sg.guardian_id
+                      WHERE sg.student_id = s.id AND g.account_id = ${accountId}::uuid AND sg.can_manage) AS managing,
+             e.number AS enr_number, e.application_id, e.group_id, y.name AS year_name, c.grade, co.name AS course_name, g.name AS group_name, e.shift, e.enrolled_at
+        FROM students s
+        LEFT JOIN LATERAL (SELECT * FROM enrollments e WHERE e.student_id = s.id AND e.status = 'ACTIVE' ORDER BY e.enrolled_at DESC LIMIT 1) e ON TRUE
+        LEFT JOIN academic_years y ON y.id = e.academic_year_id
+        LEFT JOIN school_classes c ON c.id = e.class_id
+        LEFT JOIN courses co ON co.id = c.course_id
+        LEFT JOIN class_groups g ON g.id = e.group_id
+       WHERE s.account_id = ${accountId}::uuid
+          OR EXISTS (SELECT 1 FROM student_guardians sg JOIN guardians g ON g.id = sg.guardian_id WHERE sg.student_id = s.id AND g.account_id = ${accountId}::uuid AND sg.can_manage)
+       ORDER BY s.full_name`;
+    return rows.map((r) => ({
+      id: r.id,
+      fullName: r.full_name,
+      birthDate: iso(r.birth_date),
+      number: r.number,
+      status: r.status as StudentStatus,
+      self: !!r.self,
+      managing: !!r.managing,
+      enrollment:
+        r.enr_number && r.year_name && r.grade !== null && r.enrolled_at
+          ? { number: r.enr_number, applicationId: r.application_id, groupId: r.group_id, yearName: r.year_name, grade: r.grade, courseName: r.course_name, groupName: r.group_name, shift: r.shift as Shift | null, enrolledAt: r.enrolled_at }
+          : null,
+    }));
+  }
+
+  async currentGroup(studentId: string) {
+    const [r] = await this.db.$queryRaw<{ group_id: string }[]>`
+      SELECT e.group_id FROM enrollments e
+       WHERE e.student_id = ${studentId}::uuid AND e.status = 'ACTIVE' AND e.group_id IS NOT NULL
+       ORDER BY e.enrolled_at DESC LIMIT 1`;
+    return r?.group_id ?? null;
+  }
+
+  async groupStudents(groupId: string) {
+    const rows = await this.db.$queryRaw<
+      { id: string; number: number | null; full_name: string; birth_date: Date; gender: string | null; enrollment_number: string; photo_id: string | null; guardian_name: string | null; guardian_phone: string | null; relationship: string | null; relationship_other: string | null }[]
+    >`
+      SELECT s.id, s.number, s.full_name, s.birth_date, s.gender, e.number AS enrollment_number,
+             (SELECT fi.id FROM application_files fi JOIN applications a ON a.id = fi.application_id
+               WHERE a.student_id = s.id AND fi.slot = 'PHOTO' AND a.status <> 'DRAFT' ORDER BY fi.created_at DESC LIMIT 1) AS photo_id,
+             gu.full_name AS guardian_name, gu.phone AS guardian_phone, gu.relationship, gu.relationship_other
+        FROM enrollments e JOIN students s ON s.id = e.student_id
+        LEFT JOIN LATERAL (SELECT gx.full_name, gx.phone, sg.relationship, sg.relationship_other FROM student_guardians sg JOIN guardians gx ON gx.id = sg.guardian_id
+                            WHERE sg.student_id = s.id ORDER BY sg.is_primary DESC LIMIT 1) gu ON TRUE
+       WHERE e.group_id = ${groupId}::uuid AND e.status = 'ACTIVE'
+       ORDER BY s.full_name`;
+    return rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      fullName: r.full_name,
+      birthDate: iso(r.birth_date),
+      gender: r.gender,
+      enrollmentNumber: r.enrollment_number,
+      photoId: r.photo_id,
+      guardianName: r.guardian_name,
+      guardianPhone: r.guardian_phone,
+      guardianRelationship: r.relationship === "Outro" ? (r.relationship_other ?? "Outro") : r.relationship,
+    }));
+  }
+
+  async groupPhoto(groupId: string, studentId: string) {
+    const [f] = await this.db.$queryRaw<{ storage_key: string; mime_type: string; file_name: string }[]>`
+      SELECT fi.storage_key, fi.mime_type, fi.file_name FROM application_files fi JOIN applications a ON a.id = fi.application_id
+       WHERE a.student_id = ${studentId}::uuid AND fi.slot = 'PHOTO' AND a.status <> 'DRAFT'
+         AND EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = ${studentId}::uuid AND e.group_id = ${groupId}::uuid AND e.status = 'ACTIVE')
+       ORDER BY fi.created_at DESC LIMIT 1`;
+    return f ? { storageKey: f.storage_key, mimeType: f.mime_type, fileName: f.file_name } : null;
+  }
+
   async record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date) {
     await this.db.schoolActivity.create({ data: { id: randomUUID(), type, subjectId, actorId, details: details as Prisma.InputJsonValue, occurredAt: now } });
   }
