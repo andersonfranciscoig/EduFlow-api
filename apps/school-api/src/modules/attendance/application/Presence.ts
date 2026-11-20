@@ -22,7 +22,12 @@ const sessionDto = (s: SessionRow) => ({
   corrected: s.updatedAt.getTime() - s.submittedAt.getTime() > 1000,
   counts: s.counts,
   rate: rate(s.counts),
+  lessonNumber: s.lessonNumber,
+  summary: s.summary,
+  summaryUpdatedAt: s.summaryUpdatedAt?.toISOString() ?? null,
 });
+/** O sumário: texto limpo (espaços), até 2000 caracteres; vazio = sem sumário. */
+const cleanSummary = (v: string | null | undefined) => (v ?? "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim() || null;
 const groupDto = (g: GroupRow) => ({ id: g.id, name: g.name, classId: g.classId, grade: g.grade, gradeName: gradeName(g.grade), courseName: g.courseName, shift: g.shift, students: g.students, sessions: g.sessions });
 const markDto = (m: SessionMarkRow) => ({ studentId: m.studentId, fullName: m.fullName, number: m.number, status: m.status, statusLabel: PRESENCE_LABELS[m.status], minutesLate: m.minutesLate, note: m.note });
 const statuses = Object.entries(PRESENCE_LABELS).map(([value, label]) => ({ value, label }));
@@ -136,7 +141,18 @@ export class Presence {
     });
   }
 
-  async submit(repo: PresenceRepository, rules: AttendanceRules, actor: { userId: string }, lessonId: string, day: string, input: MarkInput[]): R<{ sessionId: string; late: boolean; counts: ReturnType<typeof sessionDto>["counts"] }> {
+  async submit(
+    repo: PresenceRepository,
+    rules: AttendanceRules,
+    actor: { userId: string },
+    lessonId: string,
+    day: string,
+    input: MarkInput[],
+    /** o sumário (undefined = não mexer) */
+    summaryInput?: string | null,
+  ): R<{ sessionId: string; late: boolean; counts: ReturnType<typeof sessionDto>["counts"] }> {
+    const summary = summaryInput === undefined ? undefined : cleanSummary(summaryInput);
+    if (summary && summary.length > 2000) return fail(attendanceError("INVALID_INPUT", "O sumário tem no máximo 2000 caracteres."));
     const t = await this.teacher(repo, actor.userId);
     if (!t.ok) return t;
     const own = await this.ownLesson(repo, rules, t.value.id, lessonId, day);
@@ -166,8 +182,31 @@ export class Presence {
       await repo.record("LESSON_ATTENDANCE_SUBMITTED", id, actor.userId, { late, total: checked.value.length }, now);
       if (late) await repo.resolvePending(l.groupId, day, l.startsAt, now);
     } else if (changes.length) await repo.record("LESSON_ATTENDANCE_UPDATED", id, actor.userId, { changes, reason: null }, now);
+    if (summary !== undefined && summary !== (existing?.summary ?? null)) {
+      await repo.setSummary(id, summary, actor.userId, now);
+      await repo.record("LESSON_ATTENDANCE_SUMMARY", id, actor.userId, { before: existing?.summary ?? null, after: summary }, now);
+    }
     const s = await repo.sessionById(id);
     return ok({ sessionId: id, late, counts: s?.counts ?? { present: 0, absent: 0, late: 0, justified: 0, total: 0 } });
+  }
+
+  /**
+   * O sumário de uma aula já registada: o professor dessa aula escreve-o ou corrige-o a qualquer
+   * momento (não depende do prazo das presenças). Cada alteração fica no histórico da aula.
+   */
+  async setMySummary(repo: PresenceRepository, userId: string, sessionId: string, input: string | null): R<{ summary: string | null; lessonNumber: number }> {
+    const summary = cleanSummary(input);
+    if (summary && summary.length > 2000) return fail(attendanceError("INVALID_INPUT", "O sumário tem no máximo 2000 caracteres."));
+    const t = await this.teacher(repo, userId);
+    if (!t.ok) return t;
+    const s = await repo.sessionById(sessionId);
+    if (!s || s.teacherId !== t.value.id) return fail(attendanceError("NOT_FOUND", "Aula não encontrada."));
+    if (summary !== s.summary) {
+      const now = this.clock.now();
+      await repo.setSummary(s.id, summary, userId, now);
+      await repo.record("LESSON_ATTENDANCE_SUMMARY", s.id, userId, { before: s.summary, after: summary }, now);
+    }
+    return ok({ summary, lessonNumber: s.lessonNumber });
   }
 
   async myGroups(repo: PresenceRepository, userId: string) {
@@ -224,7 +263,7 @@ export class Presence {
       history: history.map((h) => ({
         at: h.at.toISOString(),
         action: h.type.replace("LESSON_ATTENDANCE_", ""),
-        actionLabel: { SUBMITTED: "Presenças submetidas", UPDATED: "Alteradas pelo professor", CORRECTED: "Corrigidas" }[h.type.replace("LESSON_ATTENDANCE_", "")] ?? h.type,
+        actionLabel: { SUBMITTED: "Presenças submetidas", UPDATED: "Alteradas pelo professor", CORRECTED: "Corrigidas", SUMMARY: "Sumário escrito pelo professor" }[h.type.replace("LESSON_ATTENDANCE_", "")] ?? h.type,
         by: h.actorName,
         reason: h.details?.reason ?? null,
         changes: (h.details?.changes ?? []).map((c) => ({ ...c, beforeLabel: c.before ? PRESENCE_LABELS[c.before] : null, afterLabel: PRESENCE_LABELS[c.after] })),

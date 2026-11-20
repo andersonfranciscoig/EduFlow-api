@@ -30,11 +30,18 @@ type SessionRaw = CountRaw & {
   submitted_by_name: string | null;
   late: boolean;
   updated_at: Date;
+  summary: string | null;
+  summary_updated_at: Date | null;
+  lesson_number: number;
 };
 const SESSION = Prisma.sql`
   SELECT s.id, s.lesson_id, s.academic_year_id, s.group_id, g.name AS group_name, sub.name AS subject_name, s.teacher_id, e.full_name AS teacher_name,
          to_char(s.day, 'YYYY-MM-DD') AS day, to_char(s.starts_at, 'HH24:MI') AS starts_at, to_char(s.ends_at, 'HH24:MI') AS ends_at,
-         s.submitted_at, u.full_name AS submitted_by_name, s.late, s.updated_at, ${COUNTS("s")}
+         s.submitted_at, u.full_name AS submitted_by_name, s.late, s.updated_at, s.summary, s.summary_updated_at,
+         -- n.º da lição: pela ordem das aulas dessa turma, disciplina e ano
+         (SELECT count(*) FROM lesson_sessions s2 WHERE s2.group_id = s.group_id AND s2.subject_id = s.subject_id AND s2.academic_year_id = s.academic_year_id
+             AND (s2.day, s2.starts_at) <= (s.day, s.starts_at))::int AS lesson_number,
+         ${COUNTS("s")}
     FROM lesson_sessions s JOIN class_groups g ON g.id = s.group_id JOIN subjects sub ON sub.id = s.subject_id
     LEFT JOIN employees e ON e.id = s.teacher_id LEFT JOIN school_users u ON u.id = s.submitted_by_id`;
 const session = (r: SessionRaw): SessionRow => ({
@@ -54,6 +61,9 @@ const session = (r: SessionRaw): SessionRow => ({
   late: r.late,
   updatedAt: r.updated_at,
   counts: counts(r),
+  summary: r.summary,
+  summaryUpdatedAt: r.summary_updated_at,
+  lessonNumber: r.lesson_number,
 });
 
 type GroupRaw = { id: string; name: string; class_id: string; grade: number; course_name: string | null; shift: string; students: number; sessions: number };
@@ -196,6 +206,10 @@ export class PrismaPresenceRepository implements PresenceRepository {
       for (const q of this.writeMarks(tx, id, marks, actorId, now)) await q;
       return id;
     });
+  }
+
+  async setSummary(sessionId: string, summary: string | null, actorId: string | null, now: Date) {
+    await this.db.$executeRaw`UPDATE lesson_sessions SET summary = ${summary}, summary_by_id = ${actorId}::uuid, summary_updated_at = ${now} WHERE id = ${sessionId}::uuid`;
   }
 
   async replaceMarks(sessionId: string, marks: Mark[], actorId: string | null, now: Date) {
