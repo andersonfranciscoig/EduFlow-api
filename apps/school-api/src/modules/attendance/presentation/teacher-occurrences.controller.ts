@@ -13,6 +13,7 @@ import { TeacherOccurrences } from "../application/TeacherOccurrences";
 import type { OccurrenceAction } from "../domain/occurrences";
 import { PrismaAttendanceSettingsRepository } from "../infrastructure/prisma-attendance-settings";
 import { PrismaOccurrencesRepository } from "../infrastructure/prisma-occurrences";
+import { Notifier } from "../../notifications/infrastructure/notifier";
 import { ATTENDANCE_HTTP } from "./attendance-settings.controller";
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
@@ -46,10 +47,14 @@ export class TeacherOccurrencesController {
   constructor(
     private readonly occurrences: TeacherOccurrences,
     private readonly settings: AttendanceSettings,
+    private readonly notifier: Notifier,
   ) {}
 
   private repo(t: TenantContext) {
     return new PrismaOccurrencesRepository(t.db);
+  }
+  private notify(t: TenantContext) {
+    return this.notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName });
   }
   private rules(t: TenantContext) {
     return this.settings.rules(new PrismaAttendanceSettingsRepository(t.db));
@@ -91,7 +96,7 @@ export class TeacherOccurrencesController {
     @Param("action", actionPipe) action: string,
     @Body(new ZodValidationPipe(actionBody)) body: z.infer<typeof actionBody>,
   ) {
-    return unwrap(await this.occurrences.act(this.repo(t), await this.actor(t, u), occurrenceId, ACTIONS[action], body), ATTENDANCE_HTTP);
+    return unwrap(await this.occurrences.act(this.repo(t), await this.actor(t, u), occurrenceId, ACTIONS[action], body, this.notify(t)), ATTENDANCE_HTTP);
   }
 
   @Get(":employeeId/day")
@@ -106,6 +111,6 @@ export class TeacherOccurrencesController {
   @ApiOperation({ summary: "Marcar faltas/atrasos de um professor num dia (segundo o modelo do colégio)" })
   @ApiBody({ schema: openApi(markBody) })
   async mark(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("employeeId", id) employeeId: string, @Body(new ZodValidationPipe(markBody)) body: z.infer<typeof markBody>) {
-    return unwrap(await this.occurrences.mark(this.repo(t), await this.actor(t, u), await this.rules(t), employeeId, body), ATTENDANCE_HTTP);
+    return unwrap(await this.occurrences.mark(this.repo(t), await this.actor(t, u), await this.rules(t), employeeId, body, "MANUAL", this.notify(t)), ATTENDANCE_HTTP);
   }
 }

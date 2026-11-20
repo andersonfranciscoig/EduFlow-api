@@ -18,9 +18,12 @@ import {
   todayIn,
 } from "../domain/occurrences";
 import { type AttendanceError, attendanceError, type AttendanceRules, TEACHER_MODELS } from "../domain/settings";
+import type { StaffNotify } from "../../notifications/infrastructure/notifier";
 import type { NewOccurrence, OccurrenceRow, OccurrencesRepository } from "./occurrence-ports";
 
 type R<T> = Promise<Result<T, AttendanceError>>;
+/** "2026-11-18" → "18/11" */
+const dmy = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 export interface OccurrenceActor {
   id: string;
   canManage: boolean;
@@ -107,6 +110,7 @@ export class TeacherOccurrences {
     employeeId: string,
     input: { day: string; items: { lessonId?: string | null; kind: string; minutesLate?: number | null; note?: string | null }[] },
     source: OccurrenceSource = "MANUAL",
+    notify?: StaffNotify,
   ): R<{ created: number }> {
     if (!actor.canManage) return fail(attendanceError("FORBIDDEN", "Não tem permissão para marcar faltas dos professores."));
     const plan = await this.day(repo, actor, rules, employeeId, input.day);
@@ -138,6 +142,17 @@ export class TeacherOccurrences {
       await repo.record("TEACHER_OCCURRENCE_CREATED", o.id, actor.id, { after: { kind: o.kind, minutesLate: o.minutesLate, status: "REGISTADA", source }, reason: o.note }, now);
       if (o.scope === "DAY") await repo.mirrorDaily(employeeId, o.day, dailyMirror({ ...o, status: "REGISTADA", justification: null }), actor.id, now);
     }
+    // o professor fica a saber
+    const one = out.length === 1 ? out[0] : null;
+    const what = one ? (one.kind === "FALTA" ? "uma falta" : `um atraso de ${one.minutesLate} min`) : `${out.length} ocorrências`;
+    const where = out.map((o) => (o.lesson ? `${o.lesson.startsAt} ${o.lesson.subjectName} (${o.lesson.groupName})` : "o dia")).join(", ");
+    await notify?.notify({
+      kind: "TEACHER_OCCURRENCE",
+      employeeIds: [employeeId],
+      title: `Foi registad${one && one.kind === "FALTA" ? "a" : "o"} ${what} a ${dmy(input.day)}`,
+      body: `${where}. ${source === "AUTOMATIC" ? "Registo automático: as presenças não foram submetidas no prazo." : "Registado pelos Recursos Humanos."} Se houver um motivo, fale com o RH para a justificar.`,
+      link: `/presencas?data=${input.day}`,
+    });
     return ok({ created: out.length });
   }
 
@@ -185,6 +200,7 @@ export class TeacherOccurrences {
     id: string,
     action: OccurrenceAction,
     input: { reason?: string | null; kind?: string | null; minutesLate?: number | null },
+    notify?: StaffNotify,
   ): R<ReturnType<typeof occurrenceDto>> {
     if (!actor.canManage) return fail(attendanceError("FORBIDDEN", "Não tem permissão para alterar faltas dos professores."));
     const o = await repo.find(id);
@@ -208,6 +224,15 @@ export class TeacherOccurrences {
     if (!(await repo.update(id, after, actor.id, now))) return fail(attendanceError("OCCURRENCE_EXISTS", "Já há outra ocorrência ativa para esta aula ou dia: não é possível reabrir esta."));
     await repo.record(`TEACHER_OCCURRENCE_${{ JUSTIFY: "JUSTIFY", CHANGE: "CHANGE", CANCEL: "CANCEL", REOPEN: "REOPEN" }[action]}`, id, actor.id, { before, after, reason: reason.value }, now);
     if (o.scope === "DAY") await repo.mirrorDaily(o.employeeId, o.day, dailyMirror(after), actor.id, now);
+    const label = after.kind === "FALTA" ? "Falta" : `Atraso de ${after.minutesLate} min`;
+    const verb = { JUSTIFY: "justificada", CHANGE: "alterada", CANCEL: "anulada", REOPEN: "reaberta" }[action];
+    await notify?.notify({
+      kind: "TEACHER_OCCURRENCE",
+      employeeIds: [o.employeeId],
+      title: `Ocorrência de ${dmy(o.day)} ${verb}`,
+      body: `${label} · ${o.scope === "LESSON" ? `${o.startsAt} ${o.subjectName ?? ""} (${o.groupName ?? ""})` : "o dia"}. ${action === "JUSTIFY" ? "Justificação" : "Motivo"}: ${reason.value}`,
+      link: `/presencas?data=${o.day}`,
+    });
     const fresh = await repo.find(id);
     return ok(occurrenceDto(fresh ?? o));
   }

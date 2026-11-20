@@ -12,6 +12,7 @@ import { AttendanceSettings } from "../application/AttendanceSettings";
 import { Presence } from "../application/Presence";
 import { PrismaAttendanceSettingsRepository } from "../infrastructure/prisma-attendance-settings";
 import { PrismaPresenceRepository } from "../infrastructure/prisma-presence";
+import { Notifier } from "../../notifications/infrastructure/notifier";
 import { ATTENDANCE_HTTP } from "./attendance-settings.controller";
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
@@ -94,6 +95,7 @@ export class StudentPresenceController {
   constructor(
     private readonly presence: Presence,
     private readonly settings: AttendanceSettings,
+    private readonly notifier: Notifier,
   ) {}
 
   @Get("groups")
@@ -123,6 +125,7 @@ export class StudentPresenceController {
   @ApiOperation({ summary: "Corrigir as presenças de uma aula (com motivo)" })
   @ApiBody({ schema: openApi(correctBody) })
   async correct(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("sessionId", id) sessionId: string, @Body(new ZodValidationPipe(correctBody)) body: z.infer<typeof correctBody>) {
-    return unwrap(await this.presence.correct(new PrismaPresenceRepository(t.db), { id: u.id, canEdit: true }, sessionId, body), ATTENDANCE_HTTP);
+    const notify = this.notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName });
+    return unwrap(await this.presence.correct(new PrismaPresenceRepository(t.db), { id: u.id, canEdit: true }, sessionId, body, notify), ATTENDANCE_HTTP);
   }
 }

@@ -3,6 +3,7 @@ import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/
 import { isDay } from "../domain/occurrences";
 import { checkMarks, lessonState, localNow, type Mark, type MarkInput, PRESENCE_LABELS, type PresenceStatus, rate, STATE_LABELS } from "../domain/presence";
 import { type AttendanceError, attendanceError, type AttendanceRules } from "../domain/settings";
+import type { StaffNotify } from "../../notifications/infrastructure/notifier";
 import type { GroupRow, PresenceRepository, SessionMarkRow, SessionRow } from "./presence-ports";
 
 type R<T> = Promise<Result<T, AttendanceError>>;
@@ -226,7 +227,7 @@ export class Presence {
   }
 
   /** Correção pela gestão (a qualquer momento), sempre com motivo; fica no histórico. */
-  async correct(repo: PresenceRepository, actor: { id: string; canEdit: boolean }, sessionId: string, input: { reason: string; marks: MarkInput[] }): R<{ changed: number }> {
+  async correct(repo: PresenceRepository, actor: { id: string; canEdit: boolean }, sessionId: string, input: { reason: string; marks: MarkInput[] }, notify?: StaffNotify): R<{ changed: number }> {
     if (!actor.canEdit) return fail(attendanceError("FORBIDDEN", "Não tem permissão para corrigir presenças."));
     const s = await repo.sessionById(sessionId);
     if (!s) return fail(attendanceError("NOT_FOUND", "Aula não encontrada."));
@@ -243,6 +244,15 @@ export class Presence {
     const now = this.clock.now();
     await repo.replaceMarks(s.id, checked.value, actor.id, now);
     await repo.record("LESSON_ATTENDANCE_CORRECTED", s.id, actor.id, { changes, reason }, now);
+    // o professor da aula fica a saber o que mudou
+    if (s.teacherId)
+      await notify?.notify({
+        kind: "ATTENDANCE_CORRECTED",
+        employeeIds: [s.teacherId],
+        title: `Presenças corrigidas · ${s.subjectName}, ${s.groupName}`,
+        body: `${s.day.slice(8, 10)}/${s.day.slice(5, 7)} às ${s.startsAt}: ${changes.map((c) => `${c.fullName} (${c.before ? PRESENCE_LABELS[c.before] : "—"} → ${PRESENCE_LABELS[c.after]})`).join(", ")}. Motivo: ${reason}`,
+        link: `/presencas/historico?turma=${s.groupId}&aula=${s.id}`,
+      });
     return ok({ changed: changes.length });
   }
 }

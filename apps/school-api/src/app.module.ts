@@ -10,6 +10,7 @@ import { FamilyModule } from "./modules/family/family.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HrModule } from "./modules/hr/hr.module";
 import { IdentityModule } from "./modules/identity/identity.module";
+import { NotificationsModule } from "./modules/notifications/notifications.module";
 import { PedagogyModule } from "./modules/pedagogy/pedagogy.module";
 import { TenancyModule } from "./tenancy/tenancy.module";
 
@@ -47,6 +48,7 @@ class HealthController {
     AdmissionsModule,
     FamilyModule,
     AttendanceModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
