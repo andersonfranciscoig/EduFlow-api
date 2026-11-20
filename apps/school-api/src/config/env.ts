@@ -75,6 +75,12 @@ export const envSchema = z
     /** AES-256 (32 bytes em base64) que cifra os documentos antes de sair da API. */
     HR_FILES_KEY_FILE: z.string().min(1).optional(),
     HR_STORAGE_DIR: z.string().min(1).default("storage/hr"),
+
+    // ---------------------------------------------------------------- tarefas automáticas
+    /** Prazo das presenças (e, nas fases seguintes, resumos): correm em todos os colégios ativos. */
+    JOBS_ENABLED: z.enum(["true", "false"]).default("true"),
+    /** De quanto em quanto tempo (ms). Cada execução é idempotente e revê os últimos 14 dias. */
+    JOBS_INTERVAL_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(60_000),
   })
   .superRefine((env, ctx) => {
     if (env.HR_FILE_STORAGE === "uploadthing" && (!env.HR_FILES_KEY_FILE || !existsSync(env.HR_FILES_KEY_FILE))) {

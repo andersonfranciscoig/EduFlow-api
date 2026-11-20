@@ -19,6 +19,8 @@ export interface TeacherLessonRow {
   subjectColor: string;
   room: string | null;
   session: { id: string; submittedAt: Date; late: boolean; counts: Counts } | null;
+  /** substituição nesse dia: o nome do titular */
+  substitutionFor: string | null;
 }
 
 export interface LessonRow {
@@ -90,6 +92,10 @@ export interface PresenceRepository {
   closureOn(yearId: string, day: string): Promise<{ kindLabel: string; reason: string } | null>;
   teacherLessons(employeeId: string, yearId: string, day: string): Promise<TeacherLessonRow[]>;
   lesson(lessonId: string): Promise<LessonRow | null>;
+  /** o substituto da aula nesse dia (null = sem substituição) */
+  substituteOn(lessonId: string, day: string): Promise<string | null>;
+  /** presenças submetidas depois do prazo: a aula pendente fica resolvida */
+  resolvePending(groupId: string, day: string, startsAt: string, now: Date): Promise<void>;
   roster(groupId: string): Promise<RosterRow[]>;
   sessionAt(groupId: string, day: string, startsAt: string): Promise<SessionRow | null>;
   sessionById(id: string): Promise<SessionRow | null>;

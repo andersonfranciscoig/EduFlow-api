@@ -22,6 +22,7 @@ const pick = (r: AttendanceRules): AttendanceRules => ({
   absenceLimit: r.absenceLimit,
   consecutiveLimit: r.consecutiveLimit,
   timeZone: r.timeZone,
+  trackingSince: r.trackingSince,
 });
 
 /**
@@ -54,11 +55,12 @@ export class AttendanceSettings {
     };
   }
 
-  async update(repo: AttendanceSettingsRepository, actor: AttendanceActor, input: AttendanceRules & { reason?: string | null }): Promise<Result<{ changed: number }, AttendanceError>> {
+  async update(repo: AttendanceSettingsRepository, actor: AttendanceActor, input: Omit<AttendanceRules, "trackingSince"> & { trackingSince?: string | null; reason?: string | null }): Promise<Result<{ changed: number }, AttendanceError>> {
     if (!actor.canManage) return fail(attendanceError("FORBIDDEN", "Não tem permissão para alterar as regras de assiduidade."));
-    const checked = checkRules(pick(input));
-    if (!checked.ok) return checked;
     const before = await this.rules(repo);
+    // sem data no pedido: mantém-se a que está
+    const checked = checkRules(pick({ ...input, trackingSince: input.trackingSince ?? before.trackingSince }));
+    if (!checked.ok) return checked;
     const changes = diffRules(before, checked.value);
     const n = Object.keys(changes).length;
     if (!n) return ok({ changed: 0 });

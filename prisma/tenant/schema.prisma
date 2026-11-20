@@ -379,6 +379,58 @@ model NotificationPreference {
   @@map("notification_preferences")
 }
 
+/// Um professor substitui outro numa aula, num dia.
+model LessonSubstitution {
+  id                String   @id @db.Uuid
+  lessonId          String   @map("lesson_id") @db.Uuid
+  day               DateTime @db.Date
+  substituteId      String   @map("substitute_id") @db.Uuid
+  originalTeacherId String?  @map("original_teacher_id") @db.Uuid
+  reason            String?
+  createdById       String?  @map("created_by_id") @db.Uuid
+  createdAt         DateTime @map("created_at")
+
+  @@unique([lessonId, day], map: "lesson_substitutions_lesson_day_key")
+  @@map("lesson_substitutions")
+}
+
+/// Aula cujo prazo passou sem presenças (OPEN | SUBMITTED_LATE | FAULT | DISMISSED).
+model LessonPending {
+  id             String    @id @db.Uuid
+  lessonId       String?   @map("lesson_id") @db.Uuid
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  groupId        String    @map("group_id") @db.Uuid
+  subjectId      String    @map("subject_id") @db.Uuid
+  teacherId      String?   @map("teacher_id") @db.Uuid
+  groupName      String    @map("group_name")
+  subjectName    String    @map("subject_name")
+  day            DateTime  @db.Date
+  startsAt       DateTime  @map("starts_at") @db.Time(6)
+  endsAt         DateTime  @map("ends_at") @db.Time(6)
+  status         String    @default("OPEN")
+  occurrenceId   String?   @map("occurrence_id") @db.Uuid
+  reason         String?
+  decidedById    String?   @map("decided_by_id") @db.Uuid
+  decidedAt      DateTime? @map("decided_at")
+  createdAt      DateTime  @map("created_at")
+
+  @@map("lesson_pendings")
+}
+
+/// Execuções das tarefas automáticas (monitorização).
+model JobRun {
+  id         String    @id @db.Uuid
+  job        String
+  trigger    String
+  status     String
+  stats      Json?
+  error      String?
+  startedAt  DateTime  @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  @@map("job_runs")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt
@@ -390,6 +442,8 @@ model AttendanceSettings {
   absenceLimit     Int      @default(10) @map("absence_limit")
   consecutiveLimit Int      @default(3) @map("consecutive_limit")
   timeZone         String   @default("Africa/Luanda") @map("time_zone")
+  /// a partir de que dia o controlo automático do prazo conta
+  trackingSince    DateTime @default(dbgenerated("CURRENT_DATE")) @map("tracking_since") @db.Date
   updatedById      String?  @map("updated_by_id") @db.Uuid
   updatedAt        DateTime @map("updated_at")
 

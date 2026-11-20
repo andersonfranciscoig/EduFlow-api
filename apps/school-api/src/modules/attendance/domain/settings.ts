@@ -34,9 +34,11 @@ export interface AttendanceRules {
   absenceLimit: number;
   consecutiveLimit: number;
   timeZone: string;
+  /** "AAAA-MM-DD": a partir deste dia o controlo automático do prazo conta (null = ainda por fixar: hoje) */
+  trackingSince: string | null;
 }
 
-export const DEFAULT_RULES: AttendanceRules = { teacherModel: "PER_LESSON", missingProcedure: "MANUAL", deadlineMinutes: 60, absenceLimit: 10, consecutiveLimit: 3, timeZone: "Africa/Luanda" };
+export const DEFAULT_RULES: AttendanceRules = { teacherModel: "PER_LESSON", missingProcedure: "MANUAL", deadlineMinutes: 60, absenceLimit: 10, consecutiveLimit: 3, timeZone: "Africa/Luanda", trackingSince: null };
 
 export type AttendanceErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "OCCURRENCE_EXISTS" | "NO_CLASSES" | "DEADLINE_PASSED";
 export type AttendanceError = DomainError<AttendanceErrorCode>;
@@ -58,6 +60,10 @@ export function checkRules(input: AttendanceRules): Result<AttendanceRules, Atte
   if (!Number.isInteger(input.absenceLimit) || input.absenceLimit < 1 || input.absenceLimit > 200) return fail(attendanceError("INVALID_INPUT", "O limite de faltas tem de ser entre 1 e 200."));
   if (!Number.isInteger(input.consecutiveLimit) || input.consecutiveLimit < 2 || input.consecutiveLimit > 30) return fail(attendanceError("INVALID_INPUT", "As faltas seguidas têm de ser entre 2 e 30."));
   if (!validZone(input.timeZone)) return fail(attendanceError("INVALID_INPUT", "Fuso horário desconhecido."));
+  if (input.trackingSince !== null) {
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(input.trackingSince) ? new Date(`${input.trackingSince}T00:00:00Z`) : null;
+    if (!d || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== input.trackingSince) return fail(attendanceError("INVALID_INPUT", "Data de início do controlo inválida."));
+  }
   return ok(input);
 }
 
