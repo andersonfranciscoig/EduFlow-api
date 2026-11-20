@@ -26,8 +26,11 @@ export class PrismaTeachingRepository implements TeachingRepository {
   constructor(private readonly db: PrismaClient) {}
 
   async currentYearId() {
+    // o ano em curso; senão o que ainda não terminou e começa primeiro (o atual ou o próximo a começar —
+    // não o ano seguinte que já se criou para as renovações); senão o mais recente
     const y =
       (await this.db.academicYear.findFirst({ where: { status: "ACTIVE" }, orderBy: { startsOn: "desc" }, select: { id: true } })) ??
+      (await this.db.academicYear.findFirst({ where: { status: { not: "CLOSED" }, endsOn: { gte: new Date() } }, orderBy: { startsOn: "asc" }, select: { id: true } })) ??
       (await this.db.academicYear.findFirst({ orderBy: { startsOn: "desc" }, select: { id: true } }));
     return y?.id ?? null;
   }
@@ -255,6 +258,8 @@ export class PrismaTeachingRepository implements TeachingRepository {
         coordinator: { select: { id: true, fullName: true } },
         teachers: { where: { employeeId }, select: { subjectId: true } },
         lessons: { where: { teacherId: employeeId }, select: { subjectId: true } },
+        // alunos matriculados (ativos) na turma: para os números do professor
+        _count: { select: { enrollments: { where: { status: "ACTIVE" } } } },
         schoolClass: {
           include: {
             course: { select: { name: true, code: true } },
@@ -278,6 +283,7 @@ export class PrismaTeachingRepository implements TeachingRepository {
           coordinator: g.coordinator,
           isCoordinator: g.coordinatorId === employeeId,
           planSubjects: g.schoolClass.subjects.length,
+          students: g._count.enrollments,
           subjects: g.schoolClass.subjects
             .filter((s) => mine.has(s.subjectId))
             .map((s) => ({ subject: s.subject, weeklyPeriods: s.weeklyPeriods, scheduled: g.lessons.filter((l) => l.subjectId === s.subjectId).length })),
