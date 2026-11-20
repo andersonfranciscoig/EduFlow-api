@@ -12,7 +12,14 @@ import { AttendanceSettings } from "../application/AttendanceSettings";
 import type { AttendanceErrorCode } from "../domain/settings";
 import { PrismaAttendanceSettingsRepository } from "../infrastructure/prisma-attendance-settings";
 
-export const ATTENDANCE_HTTP: Partial<Record<AttendanceErrorCode, HttpStatus>> = { INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY, FORBIDDEN: HttpStatus.FORBIDDEN };
+export const ATTENDANCE_HTTP: Partial<Record<AttendanceErrorCode, HttpStatus>> = {
+  INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
+  FORBIDDEN: HttpStatus.FORBIDDEN,
+  NOT_FOUND: HttpStatus.NOT_FOUND,
+  INVALID_STATE: HttpStatus.CONFLICT,
+  OCCURRENCE_EXISTS: HttpStatus.CONFLICT,
+  NO_CLASSES: HttpStatus.UNPROCESSABLE_ENTITY,
+};
 
 const rulesBody = z
   .object({

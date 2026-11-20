@@ -258,6 +258,37 @@ model SchoolClosure {
   @@map("school_closures")
 }
 
+/// Falta ou atraso de um professor (aula ou dia), marcada pelo RH ou automática; justificar/anular fica na atividade.
+model TeacherOccurrence {
+  id            String    @id @db.Uuid
+  employeeId    String    @map("employee_id") @db.Uuid
+  day           DateTime  @db.Date
+  /// LESSON | DAY
+  scope         String
+  lessonId      String?   @map("lesson_id") @db.Uuid
+  groupName     String?   @map("group_name")
+  subjectName   String?   @map("subject_name")
+  startsAt      DateTime? @map("starts_at") @db.Time(6)
+  endsAt        DateTime? @map("ends_at") @db.Time(6)
+  /// FALTA | ATRASO
+  kind          String
+  minutesLate   Int?      @map("minutes_late")
+  /// MANUAL | AUTOMATIC
+  source        String
+  /// REGISTADA | JUSTIFICADA | ANULADA
+  status        String    @default("REGISTADA")
+  note          String?
+  justification String?
+  createdById   String?   @map("created_by_id") @db.Uuid
+  createdAt     DateTime  @map("created_at")
+  updatedById   String?   @map("updated_by_id") @db.Uuid
+  updatedAt     DateTime  @map("updated_at")
+
+  @@index([day], map: "teacher_occurrences_day_idx")
+  @@index([status, day], map: "teacher_occurrences_status_idx")
+  @@map("teacher_occurrences")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt
