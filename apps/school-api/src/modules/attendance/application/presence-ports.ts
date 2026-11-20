@@ -59,6 +59,10 @@ export interface SessionRow {
   late: boolean;
   updatedAt: Date;
   counts: Counts;
+  summary: string | null;
+  summaryUpdatedAt: Date | null;
+  /** n.º da lição (turma + disciplina + ano, pela ordem das aulas) */
+  lessonNumber: number;
 }
 
 export interface SessionMarkRow extends Mark {
@@ -107,6 +111,7 @@ export interface PresenceRepository {
     actorId: string | null,
     now: Date,
   ): Promise<string>;
+  setSummary(sessionId: string, summary: string | null, actorId: string | null, now: Date): Promise<void>;
   /** Substitui as presenças de uma aula já registada (correção). */
   replaceMarks(sessionId: string, marks: Mark[], actorId: string | null, now: Date): Promise<void>;
   teacherGroups(employeeId: string): Promise<(GroupRow & { subjects: string[] })[]>;

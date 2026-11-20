@@ -303,6 +303,10 @@ model LessonSession {
   submittedAt    DateTime  @map("submitted_at")
   submittedById  String?   @map("submitted_by_id") @db.Uuid
   late           Boolean   @default(false)
+  /// sumário da aula (o n.º da lição calcula-se ao ler)
+  summary          String?
+  summaryById      String?   @map("summary_by_id") @db.Uuid
+  summaryUpdatedAt DateTime? @map("summary_updated_at")
   createdAt      DateTime  @map("created_at")
   updatedAt      DateTime  @map("updated_at")
 

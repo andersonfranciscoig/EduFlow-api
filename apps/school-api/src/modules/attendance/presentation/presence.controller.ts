@@ -21,7 +21,10 @@ const dayPipe = new ZodValidationPipe(day);
 const optDayPipe = new ZodValidationPipe(day.optional());
 const optId = new ZodValidationPipe(z.uuid().optional());
 const mark = z.object({ studentId: z.uuid(), status: z.enum(["PRESENTE", "AUSENTE", "ATRASADO", "FALTA_JUSTIFICADA"], { error: "Estado inválido." }), minutesLate: z.number().int().nullish(), note: z.string().max(200).nullish() });
-const submitBody = z.object({ marks: z.array(mark).max(200) }).meta({ title: "LessonAttendance", description: "Todos os alunos da turma, cada um com o seu estado." });
+const submitBody = z
+  .object({ marks: z.array(mark).max(200), summary: z.string().max(4000).nullish() })
+  .meta({ title: "LessonAttendance", description: "Todos os alunos da turma, cada um com o seu estado; e o sumário da aula (opcional; sem o campo, não se mexe)." });
+const summaryBody = z.object({ summary: z.string().max(4000).nullable() }).meta({ title: "LessonSummary", description: "O sumário da aula (até 2000 caracteres; vazio = sem sumário)." });
 const correctBody = z.object({ marks: z.array(mark).max(200), reason: z.string().max(300) }).meta({ title: "LessonAttendanceCorrection", description: "Correção pela gestão: todos os alunos registados e o motivo." });
 
 const rulesOf = (settings: AttendanceSettings, t: TenantContext) => settings.rules(new PrismaAttendanceSettingsRepository(t.db));
@@ -60,7 +63,15 @@ export class MyPresenceController {
   @ApiOperation({ summary: "Submeter (ou corrigir até ao fim do prazo) as presenças de uma aula" })
   @ApiBody({ schema: openApi(submitBody) })
   async submit(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("lessonId", id) lessonId: string, @Query("data", dayPipe) date: string, @Body(new ZodValidationPipe(submitBody)) body: z.infer<typeof submitBody>) {
-    return unwrap(await this.presence.submit(new PrismaPresenceRepository(t.db), await rulesOf(this.settings, t), { userId: u.id }, lessonId, date, body.marks), ATTENDANCE_HTTP);
+    return unwrap(await this.presence.submit(new PrismaPresenceRepository(t.db), await rulesOf(this.settings, t), { userId: u.id }, lessonId, date, body.marks, body.summary), ATTENDANCE_HTTP);
+  }
+
+  @Put("sessions/:sessionId/summary")
+  @TeacherMay()
+  @ApiOperation({ summary: "Escrever ou corrigir o sumário de uma aula que registei (a qualquer momento)" })
+  @ApiBody({ schema: openApi(summaryBody) })
+  async summary(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("sessionId", id) sessionId: string, @Body(new ZodValidationPipe(summaryBody)) body: z.infer<typeof summaryBody>) {
+    return unwrap(await this.presence.setMySummary(new PrismaPresenceRepository(t.db), u.id, sessionId, body.summary), ATTENDANCE_HTTP);
   }
 
   @Get("groups")
