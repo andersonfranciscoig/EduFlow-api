@@ -1149,5 +1149,37 @@ model Enrollment {
   @@map("enrollments")
 }
 
+/// Aviso dentro da área da família (correções pedidas, aprovada, matrícula confirmada…).
+/// (as chaves estrangeiras estão na migração 0026; lê-se e escreve-se em SQL)
+model FamilyNotification {
+  id        String    @id @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  kind      String
+  title     String
+  body      String?
+  link      String?
+  studentId String?   @map("student_id") @db.Uuid
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @map("created_at")
+
+  @@index([accountId, createdAt], map: "family_notifications_account_idx")
+  @@map("family_notifications")
+}
+
+/// O encarregado convida o educando que fez 18 anos a gerir a própria conta.
+model StudentHandover {
+  id          String    @id @db.Uuid
+  studentId   String    @map("student_id") @db.Uuid
+  email       String
+  createdById String?   @map("created_by_id") @db.Uuid
+  /// PENDING | DONE | CANCELLED
+  status      String    @default("PENDING")
+  accountId   String?   @map("account_id") @db.Uuid
+  createdAt   DateTime  @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@map("student_handovers")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

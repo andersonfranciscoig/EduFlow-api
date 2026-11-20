@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { z } from "zod";
@@ -49,6 +49,8 @@ const challengeBody = z.object({ challengeToken: z.string().max(2000) }).meta({ 
 const verifyBody = z.object({ challengeToken: z.string().max(2000), code: z.string().max(12) }).meta({ title: "FamilyLoginVerify" });
 const resetBody = z.object({ email, code: z.string().max(12), password: z.string().max(128) }).meta({ title: "FamilyReset" });
 const profileBody = z.object({ fullName: z.string().max(120), phone: z.string().max(30).nullish() }).meta({ title: "FamilyProfile" });
+const readBody = z.object({ ids: z.array(z.uuid()).max(200).optional() }).meta({ title: "FamilyNotificationsRead", description: "Sem ids: marca todas." });
+const handoverBody = z.object({ email }).meta({ title: "FamilyHandover", description: "O email do aluno (é com ele que vai criar a conta de aluno maior)." });
 
 const school = (t: TenantContext) => ({ id: t.entry.schoolId, name: t.entry.schoolName, slug: t.entry.slug });
 const repo = (t: TenantContext) => new PrismaFamilyRepository(t.db);
@@ -169,5 +171,30 @@ export class FamilyController {
   @ApiOperation({ summary: "Sair (termina esta sessão)" })
   logout(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal) {
     return this.auth.logout(repo(t), f.sessionId, f.account.id);
+  }
+
+  @Get("notifications")
+  @ApiOperation({ summary: "Notificações da conta (as mais recentes) e quantas estão por ler" })
+  notifications(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal) {
+    return this.home.notifications(repo(t), f.account);
+  }
+
+  @Post("notifications/read")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Marcar notificações como lidas (as indicadas, ou todas)" })
+  @ApiBody({ schema: openApi(readBody) })
+  read(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Body(new ZodValidationPipe(readBody)) body: z.infer<typeof readBody>) {
+    return this.home.markRead(repo(t), f.account, body.ids);
+  }
+
+  @Post("students/:id/handover")
+  @Throttle({ default: { limit: 10, ttl: MINUTE } })
+  @ApiOperation({
+    summary: "Passar a conta ao aluno que fez 18 anos",
+    description: "O encarregado que o geria envia um convite para o email do aluno. Quando o aluno cria (ou entra com) a conta de aluno maior com esse email e a mesma data de nascimento, o registo passa a ser dele.",
+  })
+  @ApiBody({ schema: openApi(handoverBody) })
+  async handover(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", new ParseUUIDPipe({ version: "4" })) studentId: string, @Body(new ZodValidationPipe(handoverBody)) body: z.infer<typeof handoverBody>) {
+    return unwrap(await this.home.inviteHandover(repo(t), school(t), f.account, studentId, body.email), FAMILY_HTTP);
   }
 }

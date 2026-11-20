@@ -18,6 +18,7 @@ import {
   maskEmail,
   SESSION_HOURS,
 } from "../domain/family";
+import { claimHandovers } from "./handover";
 import type { FamilyAccountRow, FamilyCodeRow, FamilyMailer, FamilyRepository, FamilyTokens, School } from "./ports";
 
 const hashCode = (accountId: string, purpose: CodePurpose, code: string) => hashOtp(`family:${accountId}:${purpose}`, code);
@@ -101,6 +102,8 @@ export class FamilyAuth {
     await repo.openSession({ id: sessionId, accountId: account.id, ip: client.ip, userAgent: client.userAgent?.slice(0, 300) ?? null, now, expiresAt: new Date(now.getTime() + SESSION_HOURS * 3_600_000) });
     await repo.update(account.id, { failedLogins: 0, lockedUntil: null, lastLoginAt: now, now });
     await repo.record("FAMILY_SIGNED_IN", account.id, account.id, { sessionId }, now);
+    // o aluno maior que entra com o email do convite do encarregado: o registo passa a ser dele
+    await claimHandovers(repo, account, now);
     return { ...(await this.tokens.issueAccess({ accountId: account.id, sessionId, schoolId: school.id })), account: { id: account.id, fullName: account.fullName, email: account.email } };
   }
 

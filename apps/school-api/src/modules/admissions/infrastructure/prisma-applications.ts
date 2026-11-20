@@ -4,8 +4,16 @@ import type { ApplicationStatus, Entry, Shift, StepKey } from "../domain/applica
 import { formatApplicationNumber } from "../domain/applications";
 import type { ProcessType } from "../domain/settings";
 import type { ApplicationFileRow, ApplicationRow, ApplicationsRepository, DecisionRow, OpenYear, StaffFilters, SubmitInput, SubmitOutcome } from "../application/applications-ports";
+import { type NotificationKind, notifyFamily } from "../../family/infrastructure/family-notify";
 
 type AppSel = Prisma.ApplicationGetPayload<object>;
+
+/** O que dizer à família em cada decisão da secretaria. */
+const DECISION_NOTE: Partial<Record<ApplicationStatus, { kind: NotificationKind; title: (what: string, name: string) => string; body: (what: string) => string }>> = {
+  CORRECTION_REQUIRED: { kind: "APPLICATION_CORRECTION", title: (w, n) => `Correções pedidas na ${w} de ${n}`, body: (w) => `Abra a ${w}, corrija o que foi pedido e reenvie.` },
+  APPROVED: { kind: "APPLICATION_APPROVED", title: (w, n) => `${w === "renovação" ? "Renovação" : "Inscrição"} de ${n} aprovada`, body: () => "Falta a matrícula: a vaga está guardada." },
+  REJECTED: { kind: "APPLICATION_REJECTED", title: (w, n) => `${w === "renovação" ? "Renovação" : "Inscrição"} de ${n} não aprovada`, body: () => "Contacte a secretaria do colégio para saber mais." },
+};
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const json = (v: unknown) => (v && typeof v === "object" ? (v as Entry) : {});
 
@@ -419,7 +427,7 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
 
   async decide(input: Parameters<ApplicationsRepository["decide"]>[0]) {
     return this.db.$transaction(async (tx) => {
-      const app = await tx.application.findUnique({ where: { id: input.applicationId }, select: { status: true } });
+      const app = await tx.application.findUnique({ where: { id: input.applicationId }, select: { status: true, accountId: true, studentId: true, studentData: true, number: true, processType: true } });
       if (!app || !input.from.includes(app.status as ApplicationStatus)) return false;
       const done = await tx.application.updateMany({ where: { id: input.applicationId, status: app.status }, data: { status: input.to, version: { increment: 1 }, updatedAt: input.now } });
       if (done.count !== 1) return false;
@@ -438,6 +446,21 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
           createdAt: input.now,
         },
       });
+      // o aviso na área da família (correções pedidas, aprovada, rejeitada)
+      const note = DECISION_NOTE[input.to];
+      if (note) {
+        const name = String(json(app.studentData).fullName ?? "o aluno");
+        const what = app.processType === "RENOVACAO" ? "renovação" : "inscrição";
+        await notifyFamily(tx, {
+          accountId: app.accountId,
+          kind: note.kind,
+          title: note.title(what, name),
+          body: input.reason ?? note.body(what),
+          link: `/familia/inscricoes/${input.applicationId}`,
+          studentId: app.studentId,
+          now: input.now,
+        });
+      }
       return true;
     });
   }
