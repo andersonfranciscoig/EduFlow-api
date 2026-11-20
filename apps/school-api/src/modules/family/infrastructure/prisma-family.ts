@@ -189,6 +189,11 @@ export class PrismaFamilyRepository implements FamilyRepository {
                                           WHERE id = ${input.studentId}::uuid AND account_id IS NULL
                                             AND NOT EXISTS (SELECT 1 FROM students x WHERE x.account_id = ${input.accountId}::uuid)`;
       if (done !== 1) return false;
+      // as inscrições (e renovações) do aluno passam com ele: o encarregado deixa de as ver
+      await tx.$executeRaw`UPDATE applications SET account_id = ${input.accountId}::uuid WHERE student_id = ${input.studentId}::uuid`;
+      // os avisos antigos do encarregado sobre este aluno ficam, mas sem ligação (já não as pode abrir)
+      await tx.$executeRaw`UPDATE family_notifications SET link = NULL
+                             WHERE student_id = ${input.studentId}::uuid AND account_id <> ${input.accountId}::uuid AND kind NOT LIKE 'HANDOVER%'`;
       await tx.$executeRaw`UPDATE student_handovers SET status = 'DONE', account_id = ${input.accountId}::uuid, completed_at = ${input.now} WHERE id = ${input.id}::uuid`;
       return true;
     });
