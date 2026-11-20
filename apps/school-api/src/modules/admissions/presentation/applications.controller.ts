@@ -61,7 +61,14 @@ const fileBody = z.object({ slot: z.enum(["PHOTO", "DOCUMENT", "FIELD"]), itemId
 type Upload = { originalname: string; buffer: Buffer } | undefined;
 const school = (t: TenantContext) => ({ name: t.entry.schoolName, slug: t.entry.slug });
 
-const listQuery = z.object({ year: z.uuid().optional(), class: z.uuid().optional(), status: z.string().max(30).optional(), q: z.string().max(80).optional(), page: z.coerce.number().int().min(1).max(10_000).optional() });
+const listQuery = z.object({
+  year: z.uuid().optional(),
+  class: z.uuid().optional(),
+  status: z.string().max(30).optional(),
+  process: z.string().max(20).optional(),
+  q: z.string().max(80).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).optional(),
+});
 const decisionBody = z
   .object({ reason: z.string().max(1000).nullish(), notes: z.string().max(1000).nullish(), steps: z.array(z.string().max(20)).max(10).optional() })
   .meta({ title: "ApplicationDecision", description: "reason: obrigatório para pedir correções e rejeitar · steps: os passos a corrigir (pedir correções) · notes: observações internas." });
@@ -88,7 +95,7 @@ export class StaffApplicationsController {
   @RequirePermission("admissions.applications.view")
   @ApiOperation({ summary: "Inscrições submetidas, com filtros (ano, classe, estado, pesquisa) e o n.º por estado" })
   list(@CurrentTenant() t: TenantContext, @Query(new ZodValidationPipe(listQuery)) q: z.infer<typeof listQuery>) {
-    return this.review.list(this.repo(t), { yearId: q.year, classId: q.class, status: q.status, q: q.q, page: q.page });
+    return this.review.list(this.repo(t), { yearId: q.year, classId: q.class, status: q.status, processType: q.process, q: q.q, page: q.page });
   }
 
   @Get(":id")
