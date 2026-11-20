@@ -61,6 +61,8 @@ export interface TeacherGroup {
   isCoordinator: boolean;
   /** disciplinas do plano da classe */
   planSubjects: number;
+  /** alunos matriculados (ativos) na turma */
+  students: number;
   /** as disciplinas que ele dá nesta turma, com os tempos do plano e as aulas já marcadas */
   subjects: { subject: { id: string; name: string; code: string; color: string }; weeklyPeriods: number; scheduled: number }[];
 }

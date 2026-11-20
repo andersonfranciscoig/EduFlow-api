@@ -41,6 +41,7 @@ export type AdmissionErrorCode =
   // alunos
   | "STUDENT_NOT_FOUND"
   | "TEACHER_NOT_FOUND"
+  | "GUARDIAN_NOT_FOUND"
   // renovações
   | "RENEWALS_CLOSED";
 export type AdmissionError = DomainError<AdmissionErrorCode>;
