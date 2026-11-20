@@ -203,9 +203,13 @@ model AcademicYear {
   createdById String?   @map("created_by_id") @db.Uuid
   activatedAt DateTime? @map("activated_at")
   closedAt    DateTime? @map("closed_at")
+  /// TRIMESTRE (3 períodos) | SEMESTRE (2)
+  periodKind  String    @default("TRIMESTRE") @map("period_kind")
   createdAt   DateTime  @map("created_at")
   updatedAt   DateTime  @map("updated_at")
 
+  periods        AcademicPeriod[]
+  closures       SchoolClosure[]
   classes        SchoolClass[]
   groups         ClassGroup[]
   reservations   SeatReservation[]
@@ -220,6 +224,55 @@ model AcademicYear {
 
   @@index([startsOn])
   @@map("academic_years")
+}
+
+/// Período de avaliação do ano letivo (1.º, 2.º, 3.º trimestre ou semestre).
+model AcademicPeriod {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  position       Int
+  startsOn       DateTime     @map("starts_on") @db.Date
+  endsOn         DateTime     @map("ends_on") @db.Date
+  createdAt      DateTime     @map("created_at")
+  updatedAt      DateTime     @map("updated_at")
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade, map: "academic_periods_year_fkey")
+
+  @@unique([academicYearId, position], map: "academic_periods_year_position_key")
+  @@map("academic_periods")
+}
+
+/// Dias sem aulas (feriados, pausas…): sem aulas a registar nem pendências.
+model SchoolClosure {
+  id             String       @id @db.Uuid
+  academicYearId String       @map("academic_year_id") @db.Uuid
+  startsOn       DateTime     @map("starts_on") @db.Date
+  endsOn         DateTime     @map("ends_on") @db.Date
+  /// FERIADO | PAUSA | OUTRO
+  kind           String
+  reason         String
+  createdById    String?      @map("created_by_id") @db.Uuid
+  createdAt      DateTime     @map("created_at")
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade, map: "school_closures_year_fkey")
+
+  @@index([academicYearId, startsOn], map: "school_closures_year_dates_idx")
+  @@map("school_closures")
+}
+
+/// Configuração da assiduidade do colégio (uma linha).
+model AttendanceSettings {
+  id               Int      @id @default(1) @db.SmallInt
+  /// PER_LESSON | PER_DAY
+  teacherModel     String   @default("PER_LESSON") @map("teacher_model")
+  /// MANUAL | AUTOMATIC
+  missingProcedure String   @default("MANUAL") @map("missing_procedure")
+  deadlineMinutes  Int      @default(60) @map("deadline_minutes")
+  absenceLimit     Int      @default(10) @map("absence_limit")
+  consecutiveLimit Int      @default(3) @map("consecutive_limit")
+  timeZone         String   @default("Africa/Luanda") @map("time_zone")
+  updatedById      String?  @map("updated_by_id") @db.Uuid
+  updatedAt        DateTime @map("updated_at")
+
+  @@map("attendance_settings")
 }
 
 // =============================================================================

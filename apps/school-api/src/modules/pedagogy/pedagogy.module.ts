@@ -4,6 +4,8 @@ import { IdentityModule } from "../identity/identity.module";
 import { Pedagogy } from "./application/Pedagogy";
 import { Teaching } from "./application/Teaching";
 import { Timetable } from "./application/Timetable";
+import { SchoolCalendar } from "./application/SchoolCalendar";
+import { CalendarController } from "./presentation/calendar.controller";
 import { PedagogyController } from "./presentation/pedagogy.controller";
 import { TeachingController } from "./presentation/teaching.controller";
 import { TimetableController } from "./presentation/timetable.controller";
@@ -15,9 +17,10 @@ import { TimetableController } from "./presentation/timetable.controller";
  */
 @Module({
   imports: [IdentityModule], // SchoolAuthGuard (sessões de utilizadores e de suporte)
-  controllers: [PedagogyController, TimetableController, TeachingController],
+  controllers: [PedagogyController, TimetableController, TeachingController, CalendarController],
   providers: [
     { provide: Pedagogy, useFactory: () => new Pedagogy(uuidGenerator, systemClock) },
+    { provide: SchoolCalendar, inject: [Pedagogy], useFactory: (p: Pedagogy) => new SchoolCalendar(uuidGenerator, systemClock, p) },
     { provide: Timetable, inject: [Pedagogy], useFactory: (p: Pedagogy) => new Timetable(uuidGenerator, systemClock, p) },
     { provide: Teaching, inject: [Pedagogy], useFactory: (p: Pedagogy) => new Teaching(systemClock, p) },
   ],

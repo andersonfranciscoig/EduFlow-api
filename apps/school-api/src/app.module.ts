@@ -5,6 +5,7 @@ import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
 import { validateEnv } from "./config/env";
 import { AdmissionsModule } from "./modules/admissions/admissions.module";
+import { AttendanceModule } from "./modules/attendance/attendance.module";
 import { FamilyModule } from "./modules/family/family.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HrModule } from "./modules/hr/hr.module";
@@ -45,6 +46,7 @@ class HealthController {
     HrModule,
     AdmissionsModule,
     FamilyModule,
+    AttendanceModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
