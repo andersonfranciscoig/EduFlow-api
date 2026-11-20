@@ -84,4 +84,26 @@ export class EmailFamilyMailer implements FamilyMailer {
 <p style="margin:0;font-size:15px;line-height:1.6;color:#235347">Entre com o seu email e senha. Se se esqueceu da senha, use “Esqueci-me da senha”.</p>`;
     await this.mailer.send({ to: input.to, subject: `Já tem conta na área da família · ${input.school.name}`, html: frame(escapeHtml(input.school.name), body, url), text, tags: ["eduflow-portal", "family-exists"] });
   }
+
+  async handoverInvite(input: Parameters<FamilyMailer["handoverInvite"]>[0]) {
+    const firstName = input.to.name.split(" ")[0];
+    const url = `${this.portalUrlTemplate.replace("{slug}", input.school.slug)}/familia/criar-conta?tipo=aluno&email=${encodeURIComponent(input.to.email)}`;
+    const text = [
+      `Olá, ${firstName}.`,
+      "",
+      "Já fez 18 anos: a partir de agora é você quem trata dos seus assuntos no colégio (inscrições, renovações, horário…).",
+      `${input.guardianName}, o seu encarregado de educação até agora, convidou-o a usar a sua própria conta na área da família.`,
+      "",
+      `Crie a conta de aluno maior de idade com este email (${input.to.email}) e a sua data de nascimento: o seu registo passa a ser seu.`,
+      `Criar a conta: ${url}`,
+      "Se já tem conta de aluno com este email, basta entrar.",
+      "",
+      `EduFlow · ${input.school.name}`,
+    ].join("\n");
+    const body = `<p style="margin:0 0 12px;font-size:20px;font-weight:600">Olá, ${escapeHtml(firstName)}.</p>
+<p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:#235347">Já fez 18 anos: a partir de agora é <strong>você</strong> quem trata dos seus assuntos no colégio — inscrições, renovações, horário.</p>
+<p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:#235347">${escapeHtml(input.guardianName)}, o seu encarregado de educação até agora, convidou-o a usar a sua própria conta na área da família.</p>
+<p style="margin:0;font-size:15px;line-height:1.6;color:#235347">Crie a conta de <strong>aluno maior de idade</strong> com este email e a sua data de nascimento (se já tem, basta entrar): o seu registo passa a ser seu.</p>`;
+    await this.mailer.send({ to: input.to, subject: `Passe a gerir a sua conta · ${input.school.name}`, html: frame(escapeHtml(input.school.name), body, url), text, tags: ["eduflow-portal", "family-handover"] });
+  }
 }

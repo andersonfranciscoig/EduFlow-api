@@ -49,7 +49,17 @@ import { FamilyAuthController, FamilyController } from "./presentation/family.co
         );
       },
     },
-    { provide: FamilyHome, inject: [ConfigService], useFactory: (config: ConfigService<Env, true>) => new FamilyHome(systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })) },
+    {
+      provide: FamilyHome,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<Env, true>) => {
+        // o convite ao aluno que fez 18 anos vai por email
+        const keyFile = config.get("EMAIL_API_KEY_FILE", { infer: true });
+        const settings = { from: config.get("EMAIL_FROM", { infer: true }), fromName: config.get("EMAIL_FROM_NAME", { infer: true }), replyTo: config.get("EMAIL_REPLY_TO", { infer: true }) };
+        const mailer = config.get("EMAIL_PROVIDER", { infer: true }) === "brevo" && keyFile ? new BrevoMailer(readKeyFile(keyFile), settings) : new ConsoleMailer();
+        return new FamilyHome(systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true }), new EmailFamilyMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })), uuidGenerator);
+      },
+    },
     FamilyAuthGuard,
   ],
   exports: [FamilyAuth, FamilyAuthGuard],

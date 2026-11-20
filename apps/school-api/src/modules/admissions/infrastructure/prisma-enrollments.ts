@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
+import { notifyFamily } from "../../family/infrastructure/family-notify";
 import { effectiveVacancies, pickGroup } from "../../pedagogy/domain/seats";
 import type { ClassFeeRow, ClassSeats, EnrollmentRow, EnrollmentsRepository, EnrollOutcome, GroupSeats, HoldOutcome } from "../application/enrollments-ports";
 import { DEFAULT_CONFIG, type EnrollmentConfig, type EnrollmentMode, formatEnrollmentNumber } from "../domain/enrollment";
@@ -220,9 +221,11 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
     try {
       const id = await this.db.$transaction(async (tx) => {
         const [app] = await tx.$queryRaw<
-          { id: string; status: string; student_id: string | null; class_id: string | null; academic_year_id: string | null; number: string | null; seat_reservation_id: string | null; enrolled: boolean; starts_on: Date | null }[]
+          { id: string; status: string; student_id: string | null; class_id: string | null; academic_year_id: string | null; number: string | null; seat_reservation_id: string | null; enrolled: boolean; starts_on: Date | null; account_id: string; student_name: string | null; year_name: string | null }[]
         >`
-          SELECT a.id, a.status, a.student_id, a.class_id, a.academic_year_id, a.number, a.seat_reservation_id,
+          SELECT a.id, a.status, a.student_id, a.class_id, a.academic_year_id, a.number, a.seat_reservation_id, a.account_id,
+                 (SELECT s.full_name FROM students s WHERE s.id = a.student_id) AS student_name,
+                 (SELECT y.name FROM academic_years y WHERE y.id = a.academic_year_id) AS year_name,
                  EXISTS (SELECT 1 FROM enrollments e WHERE e.application_id = a.id
                           OR (e.student_id = a.student_id AND e.academic_year_id = a.academic_year_id AND e.status = 'ACTIVE')) AS enrolled,
                  (SELECT y.starts_on FROM academic_years y WHERE y.id = a.academic_year_id) AS starts_on
@@ -294,6 +297,16 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
           },
         });
         await tx.application.update({ where: { id: app.id }, data: { seatReservationId: seatId, version: { increment: 1 }, updatedAt: input.now } });
+        // o aviso na área da família (com o comprovativo)
+        await notifyFamily(tx, {
+          accountId: app.account_id,
+          kind: "ENROLLED",
+          title: `Matrícula confirmada: ${app.student_name ?? "aluno"}`,
+          body: `N.º ${number} · ${app.year_name ?? ""} · turma ${group.name}`,
+          link: `/familia/inscricoes/${app.id}/matricula`,
+          studentId: app.student_id,
+          now: input.now,
+        });
         return eid;
       });
       return { ok: true, enrollment: (await this.byId(id))! };

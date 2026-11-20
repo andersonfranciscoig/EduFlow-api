@@ -60,12 +60,49 @@ export interface FamilyRepository {
   linkedStudents(accountId: string): Promise<LinkedStudent[]>;
   guardianOf(accountId: string): Promise<{ id: string; fullName: string } | null>;
   record(type: string, subjectId: string, actorId: string | null, details: Record<string, unknown>, now: Date): Promise<void>;
+  // ---- notificações (fase H)
+  notifications(accountId: string, limit: number): Promise<NotificationRow[]>;
+  unreadCount(accountId: string): Promise<number>;
+  /** Marca como lidas (as indicadas, ou todas com `null`); devolve quantas. */
+  markRead(accountId: string, ids: string[] | null, now: Date): Promise<number>;
+  notify(n: { accountId: string; kind: NotificationRow["kind"] & string; title: string; body?: string | null; link?: string | null; studentId?: string | null; now: Date }): Promise<void>;
+  // ---- passar a conta ao aluno que fez 18 anos
+  handoverTarget(accountId: string, studentId: string): Promise<{ id: string; fullName: string; birthDate: string; hasAccount: boolean; managing: boolean } | null>;
+  /** O último convite (não cancelado) de cada aluno. */
+  handovers(studentIds: string[]): Promise<HandoverRow[]>;
+  /** Cria o convite (cancela o anterior por responder). */
+  createHandover(input: { id: string; studentId: string; email: string; createdById: string; now: Date }): Promise<void>;
+  pendingHandovers(email: string): Promise<{ id: string; studentId: string; createdById: string | null; studentBirthDate: string; studentName: string; studentHasAccount: boolean }[]>;
+  completeHandover(input: { id: string; studentId: string; accountId: string; now: Date }): Promise<boolean>;
+}
+
+export interface NotificationRow {
+  id: string;
+  kind: "APPLICATION_CORRECTION" | "APPLICATION_APPROVED" | "APPLICATION_REJECTED" | "ENROLLED" | "HANDOVER_INVITED" | "HANDOVER_DONE" | "HANDOVER_WELCOME" | string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  studentId: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+}
+
+export interface HandoverRow {
+  id: string;
+  studentId: string;
+  email: string;
+  status: "PENDING" | "DONE";
+  createdAt: Date;
+  completedAt: Date | null;
+  studentHasAccount: boolean;
 }
 
 export interface FamilyMailer {
   sendCode(input: { to: { email: string; name: string }; school: { name: string; slug: string }; purpose: CodePurpose; code: string; validMinutes: number }): Promise<void>;
   /** Alguém tentou criar conta com um email que já tem conta. */
   alreadyRegistered(input: { to: { email: string; name: string }; school: { name: string; slug: string } }): Promise<void>;
+  /** O encarregado convida o aluno que fez 18 anos a gerir a própria conta. */
+  handoverInvite(input: { to: { email: string; name: string }; school: { name: string; slug: string }; guardianName: string }): Promise<void>;
 }
 
 export interface FamilyTokens {
