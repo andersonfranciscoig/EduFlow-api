@@ -37,6 +37,8 @@ export const PERMISSIONS = {
   "attendance.access": { group: "attendance", label: "Aceder à assiduidade e avaliação", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
   "attendance.settings.manage": { group: "attendance", label: "Configurar as regras de assiduidade", hint: "Modelo dos professores (por aula ou por dia), procedimento sem presenças, prazo, alertas e fuso horário." },
   "attendance.teachers.view": { group: "attendance", label: "Consultar a assiduidade dos professores", hint: "Ver as faltas e atrasos dos professores (marcados pelo RH ou automáticos) e o histórico." },
+  "attendance.students.view": { group: "attendance", label: "Consultar as presenças dos alunos", hint: "Ver as aulas registadas de cada turma e a assiduidade de cada aluno." },
+  "attendance.students.edit": { group: "attendance", label: "Corrigir as presenças dos alunos", hint: "Alterar presenças já registadas (depois do prazo do professor), sempre com motivo." },
   "attendance.teachers.manage": { group: "attendance", label: "Gerir as faltas dos professores", hint: "Marcar faltas e atrasos, justificar, alterar, anular e reabrir — sempre com o motivo." },
 } as const;
 

@@ -19,6 +19,7 @@ export const ATTENDANCE_HTTP: Partial<Record<AttendanceErrorCode, HttpStatus>> =
   INVALID_STATE: HttpStatus.CONFLICT,
   OCCURRENCE_EXISTS: HttpStatus.CONFLICT,
   NO_CLASSES: HttpStatus.UNPROCESSABLE_ENTITY,
+  DEADLINE_PASSED: HttpStatus.CONFLICT,
 };
 
 const rulesBody = z

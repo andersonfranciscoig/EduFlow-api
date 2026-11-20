@@ -289,6 +289,41 @@ model TeacherOccurrence {
   @@map("teacher_occurrences")
 }
 
+/// A aula dada num dia (presenças submetidas). Cópia de turma/disciplina/professor/horas.
+model LessonSession {
+  id             String    @id @db.Uuid
+  lessonId       String?   @map("lesson_id") @db.Uuid
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  groupId        String    @map("group_id") @db.Uuid
+  subjectId      String    @map("subject_id") @db.Uuid
+  teacherId      String?   @map("teacher_id") @db.Uuid
+  day            DateTime  @db.Date
+  startsAt       DateTime  @map("starts_at") @db.Time(6)
+  endsAt         DateTime  @map("ends_at") @db.Time(6)
+  submittedAt    DateTime  @map("submitted_at")
+  submittedById  String?   @map("submitted_by_id") @db.Uuid
+  late           Boolean   @default(false)
+  createdAt      DateTime  @map("created_at")
+  updatedAt      DateTime  @map("updated_at")
+
+  @@index([day], map: "lesson_sessions_day_idx")
+  @@map("lesson_sessions")
+}
+
+/// Presença de um aluno numa aula: PRESENTE | AUSENTE | ATRASADO | FALTA_JUSTIFICADA.
+model StudentAttendance {
+  sessionId   String   @map("session_id") @db.Uuid
+  studentId   String   @map("student_id") @db.Uuid
+  status      String
+  minutesLate Int?     @map("minutes_late")
+  note        String?
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @map("updated_at")
+
+  @@id([sessionId, studentId])
+  @@map("student_attendance")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt
