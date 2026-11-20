@@ -324,6 +324,61 @@ model StudentAttendance {
   @@map("student_attendance")
 }
 
+/// Caixa de notificações de um utilizador do portal (equipa).
+model StaffNotification {
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  kind      String
+  title     String
+  body      String?
+  link      String?
+  dedupeKey String?   @map("dedupe_key")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @map("created_at")
+
+  @@map("staff_notifications")
+}
+
+/// Histórico de envios (equipa e família), por canal e estado.
+model NotificationDelivery {
+  id             String   @id @db.Uuid
+  audience       String
+  notificationId String?  @map("notification_id") @db.Uuid
+  recipientId    String   @map("recipient_id") @db.Uuid
+  recipientName  String?  @map("recipient_name")
+  kind           String
+  title          String
+  channel        String
+  destination    String?
+  status         String
+  error          String?
+  createdAt      DateTime @map("created_at")
+
+  @@map("notification_deliveries")
+}
+
+/// Tipos de notificação ligados/desligados pelo colégio (e se vão por email).
+model NotificationType {
+  kind        String   @id
+  enabled     Boolean
+  email       Boolean
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @map("updated_at")
+
+  @@map("notification_types")
+}
+
+/// Preferência de email de cada pessoa da equipa por tipo.
+model NotificationPreference {
+  userId    String   @map("user_id") @db.Uuid
+  kind      String
+  email     Boolean
+  updatedAt DateTime @map("updated_at")
+
+  @@id([userId, kind])
+  @@map("notification_preferences")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt
