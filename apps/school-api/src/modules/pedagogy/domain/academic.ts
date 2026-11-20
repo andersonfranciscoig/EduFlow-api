@@ -51,7 +51,11 @@ export type PedagogyErrorCode =
   // professores
   | "TEACHER_NOT_FOUND"
   | "TEACHER_BUSY"
-  | "QUALIFICATION_NOT_FOUND";
+  | "QUALIFICATION_NOT_FOUND"
+  // calendário escolar
+  | "PERIODS_INVALID"
+  | "CLOSURE_NOT_FOUND"
+  | "CLOSURE_OVERLAP";
 
 export type PedagogyError = DomainError<PedagogyErrorCode>;
 export const pedagogyError = (code: PedagogyErrorCode, message: string, meta?: Record<string, unknown>): PedagogyError =>
