@@ -92,8 +92,12 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
       data: {
         id: row.id,
         accountId: row.accountId,
+        studentId: row.studentId ?? null,
         processType: row.processType,
         formVersion: row.formVersion,
+        academicYearId: row.academicYearId,
+        classId: row.classId,
+        shift: row.shift,
         studentData: row.studentData as Prisma.InputJsonValue,
         guardianData: row.guardianData as Prisma.InputJsonValue,
         sectionsData: row.sectionsData as unknown as Prisma.InputJsonValue,
@@ -159,6 +163,40 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
         shifts: order.filter((s) => c.groups.some((g) => g.shift === s)),
       })),
     }));
+  }
+
+  async renewalOffer(studentId: string, today: string): Promise<OpenYear[]> {
+    // a matrícula ativa mais recente (ano, classe, curso)
+    const [cur] = await this.db.$queryRaw<{ starts_on: Date; grade: number; course_id: string | null }[]>`
+      SELECT y.starts_on, c.grade, c.course_id FROM enrollments e
+        JOIN academic_years y ON y.id = e.academic_year_id JOIN school_classes c ON c.id = e.class_id
+       WHERE e.student_id = ${studentId}::uuid AND e.status = 'ACTIVE' ORDER BY y.starts_on DESC LIMIT 1`;
+    if (!cur) return [];
+    const day = new Date(`${today}T00:00:00Z`);
+    // o ano seguinte: o primeiro (por início) depois do da matrícula, com renovações abertas hoje
+    const years = await this.db.academicYear.findMany({
+      where: { status: { not: "CLOSED" }, startsOn: { gt: cur.starts_on }, admissionPeriods: { renewalsFrom: { not: null }, renewalsTo: { not: null } } },
+      orderBy: { startsOn: "asc" },
+      take: 1,
+      include: {
+        admissionPeriods: true,
+        classes: {
+          where: { grade: cur.grade + 1, ...(cur.course_id ? { courseId: cur.course_id } : {}) },
+          orderBy: { createdAt: "asc" },
+          include: { course: { select: { name: true } }, groups: { select: { shift: true } } },
+        },
+      },
+    });
+    const order: Shift[] = ["MANHA", "TARDE", "NOITE"];
+    return years
+      .filter((y) => y.admissionPeriods!.renewalsFrom! <= day && y.admissionPeriods!.renewalsTo! >= day)
+      .map((y) => ({
+        id: y.id,
+        name: y.name,
+        from: iso(y.admissionPeriods!.renewalsFrom!),
+        to: iso(y.admissionPeriods!.renewalsTo!),
+        classes: y.classes.map((c) => ({ id: c.id, grade: c.grade, courseName: c.course?.name ?? null, description: c.description, shifts: order.filter((s) => c.groups.some((g) => g.shift === s)) })),
+      }));
   }
 
   async yearName(id: string) {
@@ -315,6 +353,7 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
     const q = f.q?.trim();
     const where: Prisma.ApplicationWhereInput = {
       status: { not: "DRAFT" },
+      ...(f.processType ? { processType: f.processType } : {}),
       ...(f.yearId ? { academicYearId: f.yearId } : {}),
       ...(f.classId ? { classId: f.classId } : {}),
       ...(q

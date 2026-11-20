@@ -16,6 +16,8 @@ import { AdmissionSettingsController } from "./presentation/admission-settings.c
 import { Enrollments } from "./application/Enrollments";
 import { Students } from "./application/Students";
 import { PedagogyModule } from "../pedagogy/pedagogy.module";
+import { Renewals } from "./application/Renewals";
+import { FamilyRenewalsController, StaffRenewalsController } from "./presentation/renewals.controller";
 import { FamilyStudentsController, StaffStudentsController, TeacherStudentsController } from "./presentation/students.controller";
 import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissionsController, StaffApplicationsController } from "./presentation/applications.controller";
 
@@ -29,7 +31,7 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
   // PedagogyModule: o horário da turma (família) e o acesso do professor às suas turmas
   imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule],
-  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController, TeacherStudentsController],
+  controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController, TeacherStudentsController, FamilyRenewalsController, StaffRenewalsController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },
     { provide: AdmissionForms, useFactory: () => new AdmissionForms(uuidGenerator, systemClock) },
@@ -53,6 +55,7 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
         return new ApplicationReview(systemClock, new EmailApplicationsMailer(mailer, config.get("PORTAL_URL_TEMPLATE", { infer: true })));
       },
     },
+    { provide: Renewals, useFactory: () => new Renewals(uuidGenerator, systemClock) },
     { provide: Students, inject: [ConfigService], useFactory: (config: ConfigService<Env, true>) => new Students(systemClock, config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true })) },
     {
       provide: Enrollments,

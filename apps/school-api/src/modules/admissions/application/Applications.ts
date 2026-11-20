@@ -137,8 +137,9 @@ export class Applications {
    * Os anos que se podem escolher: os de inscrições abertas e, numa inscrição já submetida,
    * também o ano que já tinha (corrigir dados não obriga a mudar de ano se o período fechou).
    */
-  private async yearsFor(repo: ApplicationsRepository, app: Pick<ApplicationRow, "status" | "academicYearId">) {
-    const open = await repo.openYears(this.today());
+  private async yearsFor(repo: ApplicationsRepository, app: Pick<ApplicationRow, "status" | "academicYearId" | "processType" | "studentId">) {
+    // renovação: só o ano seguinte (período de renovações) e a classe a que o aluno passa
+    const open = app.processType === "RENOVACAO" && app.studentId ? await repo.renewalOffer(app.studentId, this.today()) : await repo.openYears(this.today());
     if (app.status === "DRAFT" || !app.academicYearId || open.some((y) => y.id === app.academicYearId)) return open;
     const own = await repo.yearOffer(app.academicYearId);
     return own ? [own, ...open] : open;

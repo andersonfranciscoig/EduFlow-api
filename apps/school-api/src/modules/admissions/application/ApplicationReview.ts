@@ -2,7 +2,7 @@ import type { Clock } from "../../../../../../libs/kernel/src/application/ports"
 import { fail, ok } from "../../../../../../libs/kernel/src/domain/Result";
 import { isAdult, luandaToday } from "../../family/domain/family";
 import { APPLICATION_STATUS, type ApplicationStatus, isStepKey, STEPS, type StepKey, stepsFor } from "../domain/applications";
-import { admissionError, PROCESS_TYPES } from "../domain/settings";
+import { admissionError, PROCESS_TYPES, type ProcessType } from "../domain/settings";
 import { applicationView, classLabelOf, loadForm } from "./Applications";
 import type { ApplicationFileStore, ApplicationsMailer, ApplicationsRepository } from "./applications-ports";
 import type { AdmissionFormsRepository } from "./forms-ports";
@@ -37,15 +37,17 @@ export class ApplicationReview {
     return luandaToday(this.clock.now());
   }
 
-  async list(repo: ApplicationsRepository, input: { yearId?: string; classId?: string; status?: string; q?: string; page?: number }) {
+  async list(repo: ApplicationsRepository, input: { yearId?: string; classId?: string; status?: string; processType?: string; q?: string; page?: number }) {
     const status = input.status && input.status in APPLICATION_STATUS && input.status !== "DRAFT" ? (input.status as ApplicationStatus) : undefined;
+    const processType = input.processType && input.processType in PROCESS_TYPES ? (input.processType as ProcessType) : undefined;
     const page = Math.max(1, Math.floor(input.page ?? 1));
     const pageSize = 25;
-    const [res, years] = await Promise.all([repo.staffList({ yearId: input.yearId || undefined, classId: input.classId || undefined, status, q: input.q?.slice(0, 80), page, pageSize }), repo.yearsWithApplications()]);
+    const [res, years] = await Promise.all([repo.staffList({ yearId: input.yearId || undefined, classId: input.classId || undefined, status, processType, q: input.q?.slice(0, 80), page, pageSize }), repo.yearsWithApplications()]);
     return {
       page,
       pageSize,
       total: res.total,
+      processes: Object.entries(PROCESS_TYPES).map(([value, p]) => ({ value, label: p.label })),
       statuses: (Object.keys(APPLICATION_STATUS) as ApplicationStatus[]).filter((s) => s !== "DRAFT").map((s) => ({ value: s, label: APPLICATION_STATUS[s], count: res.counts[s] ?? 0 })),
       years: years.map((y) => ({ id: y.id, name: y.name, classes: y.classes.map((c) => ({ id: c.id, label: classLabelOf(c) })) })),
       applications: res.rows.map((r) => ({

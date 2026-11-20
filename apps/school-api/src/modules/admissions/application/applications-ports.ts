@@ -91,6 +91,8 @@ export interface StaffFilters {
   yearId?: string;
   classId?: string;
   status?: ApplicationStatus;
+  /** NOVA | RENOVACAO | TRANSFERENCIA | REINGRESSO */
+  processType?: ProcessType;
   q?: string;
   page: number;
   pageSize: number;
@@ -122,7 +124,8 @@ export type SubmitOutcome = { ok: true; number: string; studentId: string } | { 
 export interface ApplicationsRepository {
   byAccount(accountId: string): Promise<ApplicationSummaryRow[]>;
   byId(id: string): Promise<ApplicationRow | null>;
-  create(row: Omit<ApplicationRow, "number" | "studentId" | "version" | "termsAcceptedAt" | "legitimacyDeclared" | "submittedAt" | "updatedAt">): Promise<void>;
+  /** `studentId`: na renovação, o aluno já existe (a inscrição nasce ligada a ele). */
+  create(row: Omit<ApplicationRow, "number" | "studentId" | "version" | "termsAcceptedAt" | "legitimacyDeclared" | "submittedAt" | "updatedAt"> & { studentId?: string | null }): Promise<void>;
   /** Grava se a versão ainda for a esperada (e sobe-a). false = alterada noutra janela. */
   save(id: string, expectedVersion: number, set: Partial<Pick<ApplicationRow, "academicYearId" | "classId" | "shift" | "studentData" | "guardianData" | "sectionsData" | "currentStep">>, now: Date): Promise<number | null>;
   remove(id: string): Promise<void>;
@@ -131,6 +134,11 @@ export interface ApplicationsRepository {
   removeFile(id: string): Promise<void>;
   /** Anos com o período de inscrições aberto hoje (ou todos os que têm período, com `includeClosed`). */
   openYears(today: string): Promise<OpenYear[]>;
+  /**
+   * Renovação: o ano seguinte com o período de renovações aberto hoje e só as classes a que o aluno
+   * pode passar (a classe seguinte; o mesmo curso se já tiver curso).
+   */
+  renewalOffer(studentId: string, today: string): Promise<OpenYear[]>;
   yearName(id: string): Promise<string | null>;
   classLabel(id: string): Promise<{ grade: number; courseName: string | null } | null>;
   submit(input: SubmitInput): Promise<SubmitOutcome>;

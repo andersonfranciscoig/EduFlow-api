@@ -19,6 +19,8 @@ import { PrismaTimetableRepository } from "../../pedagogy/infrastructure/prisma-
 import { Students } from "../application/Students";
 import type { AdmissionErrorCode } from "../domain/settings";
 import { PrismaStudentsRepository } from "../infrastructure/prisma-students";
+import { Renewals } from "../application/Renewals";
+import { PrismaRenewalsRepository } from "../infrastructure/prisma-renewals";
 
 const STUDENTS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> = {
   INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -141,6 +143,7 @@ export class FamilyStudentsController {
     private readonly students: Students,
     private readonly stores: HrFileStores,
     private readonly timetable: Timetable,
+    private readonly renewals: Renewals,
   ) {}
 
   @Get("journey")
@@ -148,15 +151,17 @@ export class FamilyStudentsController {
   async journey(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal) {
     const r = repo(t);
     const day = this.students.schoolDay();
-    const list = await this.students.journey(r, f.account.id);
+    const [list, renewal] = await Promise.all([this.students.journey(r, f.account.id), this.renewals.familyStates(new PrismaRenewalsRepository(t.db), f.account.id)]);
     const cache = new Map<string, Promise<FamilyTimetable | null>>();
     const students = await Promise.all(
       list.map(async ({ groupId, ...s }) => {
-        if (!groupId) return { ...s, hasTimetable: false, day: null };
+        // a etapa "Renovação" do percurso: aberta, por abrir, em curso ou renovada
+        const ren = renewal.get(s.id) ?? null;
+        if (!groupId) return { ...s, renewal: ren, hasTimetable: false, day: null };
         if (!cache.has(groupId)) cache.set(groupId, familyTimetable(this.timetable, t, groupId));
         const tt = await cache.get(groupId)!;
         const weekday = tt?.weekdays.find((w) => w.value === day.weekday);
-        return { ...s, hasTimetable: !!tt && tt.lessons.length > 0, day: tt && weekday ? { today: day.today, label: day.today ? "Hoje" : weekday.label, lessons: lessonsOn(tt, day.weekday) } : null };
+        return { ...s, renewal: ren, hasTimetable: !!tt && tt.lessons.length > 0, day: tt && weekday ? { today: day.today, label: day.today ? "Hoje" : weekday.label, lessons: lessonsOn(tt, day.weekday) } : null };
       }),
     );
     return { students };
