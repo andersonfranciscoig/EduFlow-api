@@ -71,7 +71,7 @@ export class Presence {
     const d = day && isDay(day) ? day : today;
     const year = await repo.yearOn(d);
     const closure = year ? await repo.closureOn(year.id, d) : null;
-    const lessons = year && !closure ? await repo.teacherLessons(t.value.id, year.id, d) : [];
+    const [lessons, coordinates] = await Promise.all([year && !closure ? repo.teacherLessons(t.value.id, year.id, d) : [], repo.coordinatedGroups(t.value.id)]);
     return ok({
       teacher: t.value,
       today,
@@ -79,6 +79,8 @@ export class Presence {
       year,
       closure,
       deadlineMinutes: rules.deadlineMinutes,
+      /** turmas que coordena (abre a coordenação) */
+      coordinates: coordinates.map((g) => ({ id: g.id, name: g.name })),
       lessons: lessons.map((l) => {
         const s = lessonState(d, l.startsAt, l.endsAt, rules.deadlineMinutes, now, !!l.session);
         return {
@@ -243,12 +245,73 @@ export class Presence {
     return { year, groups: (await repo.yearGroups(year.id)).map(groupDto) };
   }
 
-  async group(repo: PresenceRepository, groupId: string) {
+  /**
+   * A assiduidade de uma turma (gestão e coordenador): totais, todas as aulas (com o sumário),
+   * cada aluno (faltas seguidas atuais e alertas pelas regras), cada disciplina/professor e as
+   * aulas que ficaram sem presenças no prazo.
+   */
+  private async insights(repo: PresenceRepository, rules: AttendanceRules, g: GroupRow) {
+    const [sessions, students, marks, subjects, pendings] = await Promise.all([repo.groupSessions(g.id), repo.groupStudents(g.id), repo.groupMarks(g.id), repo.groupSubjects(g.id), repo.groupPendings(g.id)]);
+    const total = sessions.reduce((a, s) => ({ present: a.present + s.counts.present, absent: a.absent + s.counts.absent, late: a.late + s.counts.late, justified: a.justified + s.counts.justified, total: a.total + s.counts.total }), { present: 0, absent: 0, late: 0, justified: 0, total: 0 });
+    // faltas seguidas: as faltas (não justificadas) desde a última aula em que o aluno esteve
+    const streak = new Map<string, number>();
+    const closed = new Set<string>();
+    for (const m of marks) {
+      if (closed.has(m.student_id)) continue;
+      if (m.status === "AUSENTE") streak.set(m.student_id, (streak.get(m.student_id) ?? 0) + 1);
+      else if (m.status !== "FALTA_JUSTIFICADA") closed.add(m.student_id);
+    }
+    const studentRows = students.map((s) => {
+      const st = streak.get(s.id) ?? 0;
+      const alerts = [
+        ...(s.counts.absent >= rules.absenceLimit ? [`${s.counts.absent} faltas (limite ${rules.absenceLimit})`] : []),
+        ...(st >= rules.consecutiveLimit ? [`${st} faltas seguidas`] : []),
+      ];
+      return { ...s, rate: rate(s.counts), streak: st, alerts };
+    });
+    return {
+      group: groupDto(g),
+      rules: { absenceLimit: rules.absenceLimit, consecutiveLimit: rules.consecutiveLimit },
+      totals: { ...total, rate: rate(total) },
+      sessions: sessions.map(sessionDto),
+      students: studentRows,
+      atRisk: studentRows.filter((s) => s.alerts.length).map((s) => ({ id: s.id, fullName: s.fullName, alerts: s.alerts, rate: s.rate })),
+      subjects: subjects.map((x) => ({ subjectName: x.subject_name, color: x.color, teacherName: x.teacher_name, weekly: x.weekly, sessions: x.sessions, withoutSummary: x.no_summary, late: x.late, lastDay: x.last_day })),
+      pendings: pendings.map((p) => ({ id: p.id, day: p.day, startsAt: p.starts_at, subjectName: p.subject_name, teacherName: p.teacher_name, status: p.status, statusLabel: { OPEN: "Por decidir (RH)", SUBMITTED_LATE: "Registadas fora do prazo", FAULT: "Falta registada", DISMISSED: "Dispensada" }[p.status] ?? p.status })),
+    };
+  }
+
+  async group(repo: PresenceRepository, rules: AttendanceRules, groupId: string) {
     const g = await repo.group(groupId);
     if (!g) return fail(attendanceError("NOT_FOUND", "Turma não encontrada."));
-    const [sessions, students] = await Promise.all([repo.groupSessions(groupId), repo.groupStudents(groupId)]);
-    const total = sessions.reduce((a, s) => ({ present: a.present + s.counts.present, absent: a.absent + s.counts.absent, late: a.late + s.counts.late, justified: a.justified + s.counts.justified, total: a.total + s.counts.total }), { present: 0, absent: 0, late: 0, justified: 0, total: 0 });
-    return ok({ group: groupDto(g), totals: { ...total, rate: rate(total) }, sessions: sessions.map(sessionDto), students: students.map((s) => ({ ...s, rate: rate(s.counts) })) });
+    return ok(await this.insights(repo, rules, g));
+  }
+
+  // ============================================================ coordenador de turma (professor)
+
+  /** As turmas que o professor coordena. */
+  async coordination(repo: PresenceRepository, userId: string) {
+    const t = await this.teacher(repo, userId);
+    if (!t.ok) return t;
+    return ok({ teacher: t.value, groups: (await repo.coordinatedGroups(t.value.id)).map(groupDto) });
+  }
+
+  /** A assiduidade da turma que coordena (todas as disciplinas e professores). */
+  async coordinatedGroup(repo: PresenceRepository, rules: AttendanceRules, userId: string, groupId: string) {
+    const t = await this.teacher(repo, userId);
+    if (!t.ok) return t;
+    const g = (await repo.coordinatedGroups(t.value.id)).find((x) => x.id === groupId);
+    if (!g) return fail(attendanceError("NOT_FOUND", "Turma não encontrada nas turmas que coordena."));
+    return ok(await this.insights(repo, rules, g));
+  }
+
+  /** Uma aula da turma que coordena (de qualquer professor): presenças e sumário, só de leitura. */
+  async coordinatedSession(repo: PresenceRepository, userId: string, sessionId: string) {
+    const t = await this.teacher(repo, userId);
+    if (!t.ok) return t;
+    const s = await repo.sessionById(sessionId);
+    if (!s || !(await repo.coordinatedGroups(t.value.id)).some((g) => g.id === s.groupId)) return fail(attendanceError("NOT_FOUND", "Aula não encontrada."));
+    return ok({ session: sessionDto(s), marks: (await repo.marks(s.id)).map(markDto) });
   }
 
   async session(repo: PresenceRepository, actor: { canEdit: boolean }, sessionId: string) {
