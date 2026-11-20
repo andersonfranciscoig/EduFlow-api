@@ -36,6 +36,8 @@ export const PERMISSIONS = {
   // ---- Assiduidade e avaliação: presenças, ocorrências dos professores, provas (as restantes chegam com cada fase)
   "attendance.access": { group: "attendance", label: "Aceder à assiduidade e avaliação", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
   "attendance.settings.manage": { group: "attendance", label: "Configurar as regras de assiduidade", hint: "Modelo dos professores (por aula ou por dia), procedimento sem presenças, prazo, alertas e fuso horário." },
+  "attendance.teachers.view": { group: "attendance", label: "Consultar a assiduidade dos professores", hint: "Ver as faltas e atrasos dos professores (marcados pelo RH ou automáticos) e o histórico." },
+  "attendance.teachers.manage": { group: "attendance", label: "Gerir as faltas dos professores", hint: "Marcar faltas e atrasos, justificar, alterar, anular e reabrir — sempre com o motivo." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

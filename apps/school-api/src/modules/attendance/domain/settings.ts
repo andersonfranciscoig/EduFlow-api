@@ -38,7 +38,7 @@ export interface AttendanceRules {
 
 export const DEFAULT_RULES: AttendanceRules = { teacherModel: "PER_LESSON", missingProcedure: "MANUAL", deadlineMinutes: 60, absenceLimit: 10, consecutiveLimit: 3, timeZone: "Africa/Luanda" };
 
-export type AttendanceErrorCode = "INVALID_INPUT" | "FORBIDDEN";
+export type AttendanceErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "OCCURRENCE_EXISTS" | "NO_CLASSES";
 export type AttendanceError = DomainError<AttendanceErrorCode>;
 export const attendanceError = (code: AttendanceErrorCode, message: string, meta?: Record<string, unknown>): AttendanceError => new DomainError(code, message, meta);
 
