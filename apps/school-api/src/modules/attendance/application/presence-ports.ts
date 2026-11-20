@@ -112,6 +112,10 @@ export interface PresenceRepository {
     now: Date,
   ): Promise<string>;
   setSummary(sessionId: string, summary: string | null, actorId: string | null, now: Date): Promise<void>;
+  coordinatedGroups(employeeId: string): Promise<GroupRow[]>;
+  groupMarks(groupId: string): Promise<{ student_id: string; status: PresenceStatus; day: string; starts_at: string }[]>;
+  groupSubjects(groupId: string): Promise<{ subject_name: string; color: string; teacher_name: string | null; weekly: number; sessions: number; no_summary: number; late: number; last_day: string | null }[]>;
+  groupPendings(groupId: string): Promise<{ id: string; day: string; starts_at: string; subject_name: string; teacher_name: string | null; status: string }[]>;
   /** Substitui as presenças de uma aula já registada (correção). */
   replaceMarks(sessionId: string, marks: Mark[], actorId: string | null, now: Date): Promise<void>;
   teacherGroups(employeeId: string): Promise<(GroupRow & { subjects: string[] })[]>;

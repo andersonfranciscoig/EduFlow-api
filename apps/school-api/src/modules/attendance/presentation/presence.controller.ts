@@ -94,6 +94,29 @@ export class MyPresenceController {
   async session(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("sessionId", id) sessionId: string) {
     return unwrap(await this.presence.mySession(new PrismaPresenceRepository(t.db), u.id, sessionId), ATTENDANCE_HTTP);
   }
+
+  // ---------------------------------------------------------------- coordenação da turma
+
+  @Get("coordination")
+  @TeacherMay()
+  @ApiOperation({ summary: "As turmas que coordeno" })
+  async coordination(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
+    return unwrap(await this.presence.coordination(new PrismaPresenceRepository(t.db), u.id), ATTENDANCE_HTTP);
+  }
+
+  @Get("coordination/groups/:groupId")
+  @TeacherMay()
+  @ApiOperation({ summary: "A assiduidade da turma que coordeno: aulas e sumários de todos os professores, alunos (faltas seguidas, alertas), disciplinas e aulas sem presenças" })
+  async coordinatedGroup(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("groupId", id) groupId: string) {
+    return unwrap(await this.presence.coordinatedGroup(new PrismaPresenceRepository(t.db), await rulesOf(this.settings, t), u.id, groupId), ATTENDANCE_HTTP);
+  }
+
+  @Get("coordination/sessions/:sessionId")
+  @TeacherMay()
+  @ApiOperation({ summary: "Uma aula da turma que coordeno (de qualquer professor): presenças e sumário" })
+  async coordinatedSession(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("sessionId", id) sessionId: string) {
+    return unwrap(await this.presence.coordinatedSession(new PrismaPresenceRepository(t.db), u.id, sessionId), ATTENDANCE_HTTP);
+  }
 }
 
 /** Presenças dos alunos — a GESTÃO (pedagógico). Ver: attendance.students.view · corrigir: attendance.students.edit. */
@@ -120,7 +143,7 @@ export class StudentPresenceController {
   @RequirePermission("attendance.students.view")
   @ApiOperation({ summary: "Uma turma: as aulas registadas e a assiduidade de cada aluno" })
   async group(@CurrentTenant() t: TenantContext, @Param("groupId", id) groupId: string) {
-    return unwrap(await this.presence.group(new PrismaPresenceRepository(t.db), groupId), ATTENDANCE_HTTP);
+    return unwrap(await this.presence.group(new PrismaPresenceRepository(t.db), await rulesOf(this.settings, t), groupId), ATTENDANCE_HTTP);
   }
 
   @Get("sessions/:sessionId")

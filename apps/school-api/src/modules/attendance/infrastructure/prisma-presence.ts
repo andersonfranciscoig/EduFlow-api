@@ -208,6 +208,47 @@ export class PrismaPresenceRepository implements PresenceRepository {
     });
   }
 
+  // ------------------------------------------------------------ coordenação da turma
+
+  /** As turmas que o professor coordena (anos não encerrados). */
+  async coordinatedGroups(employeeId: string) {
+    const r = await this.db.$queryRaw<GroupRaw[]>`
+      ${GROUP} JOIN academic_years y ON y.id = g.academic_year_id
+       WHERE g.coordinator_id = ${employeeId}::uuid AND y.status <> 'CLOSED' ORDER BY c.grade, g.name`;
+    return r.map(group);
+  }
+
+  /** As presenças registadas na turma (todas as disciplinas), da mais recente para a mais antiga. */
+  async groupMarks(groupId: string) {
+    return this.db.$queryRaw<{ student_id: string; status: PresenceStatus; day: string; starts_at: string }[]>`
+      SELECT a.student_id, a.status, to_char(s.day, 'YYYY-MM-DD') AS day, to_char(s.starts_at, 'HH24:MI') AS starts_at
+        FROM student_attendance a JOIN lesson_sessions s ON s.id = a.session_id
+       WHERE s.group_id = ${groupId}::uuid ORDER BY s.day DESC, s.starts_at DESC`;
+  }
+
+  /** Por disciplina: o professor, os tempos por semana, as aulas registadas e as sem sumário. */
+  async groupSubjects(groupId: string) {
+    return this.db.$queryRaw<{ subject_name: string; color: string; teacher_name: string | null; weekly: number; sessions: number; no_summary: number; late: number; last_day: string | null }[]>`
+      WITH planned AS (
+        SELECT l.subject_id, max(e.full_name) AS teacher_name, count(*)::int AS weekly
+          FROM lessons l LEFT JOIN employees e ON e.id = l.teacher_id WHERE l.group_id = ${groupId}::uuid GROUP BY l.subject_id
+      )
+      SELECT sub.name AS subject_name, sub.color, p.teacher_name, p.weekly,
+             count(s.id)::int AS sessions, count(s.id) FILTER (WHERE s.summary IS NULL)::int AS no_summary,
+             count(s.id) FILTER (WHERE s.late)::int AS late, to_char(max(s.day), 'YYYY-MM-DD') AS last_day
+        FROM planned p JOIN subjects sub ON sub.id = p.subject_id
+        LEFT JOIN lesson_sessions s ON s.group_id = ${groupId}::uuid AND s.subject_id = p.subject_id
+       GROUP BY sub.name, sub.color, p.teacher_name, p.weekly ORDER BY sub.name`;
+  }
+
+  /** Aulas da turma cujo prazo passou sem presenças (as 30 mais recentes). */
+  async groupPendings(groupId: string) {
+    return this.db.$queryRaw<{ id: string; day: string; starts_at: string; subject_name: string; teacher_name: string | null; status: string }[]>`
+      SELECT p.id, to_char(p.day, 'YYYY-MM-DD') AS day, to_char(p.starts_at, 'HH24:MI') AS starts_at, p.subject_name, e.full_name AS teacher_name, p.status
+        FROM lesson_pendings p LEFT JOIN employees e ON e.id = p.teacher_id
+       WHERE p.group_id = ${groupId}::uuid ORDER BY p.day DESC, p.starts_at DESC LIMIT 30`;
+  }
+
   async setSummary(sessionId: string, summary: string | null, actorId: string | null, now: Date) {
     await this.db.$executeRaw`UPDATE lesson_sessions SET summary = ${summary}, summary_by_id = ${actorId}::uuid, summary_updated_at = ${now} WHERE id = ${sessionId}::uuid`;
   }
