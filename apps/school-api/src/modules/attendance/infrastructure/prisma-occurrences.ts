@@ -106,7 +106,7 @@ export class PrismaOccurrencesRepository implements OccurrencesRepository {
         items.map(
           (o) => this.db.$executeRaw`
             INSERT INTO teacher_occurrences (id, employee_id, day, scope, lesson_id, group_name, subject_name, starts_at, ends_at, kind, minutes_late, source, status, note, created_by_id, created_at, updated_by_id, updated_at)
-            VALUES (${o.id}::uuid, ${o.employeeId}::uuid, ${o.day}::date, ${o.scope}, ${o.lesson?.id ?? null}::uuid, ${o.lesson?.groupName ?? null}, ${o.lesson?.subjectName ?? null},
+            VALUES (${o.id}::uuid, ${o.employeeId}::uuid, ${o.day}::date, ${o.scope}, ${o.lesson?.id || null}::uuid, ${o.lesson?.groupName ?? null}, ${o.lesson?.subjectName ?? null},
                     ${o.lesson?.startsAt ?? null}::time, ${o.lesson?.endsAt ?? null}::time, ${o.kind}, ${o.minutesLate}, ${o.source}, 'REGISTADA', ${o.note}, ${actorId}::uuid, ${now}, ${actorId}::uuid, ${now})`,
         ),
       );

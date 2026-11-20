@@ -30,6 +30,7 @@ const rulesBody = z
     absenceLimit: z.number().int(),
     consecutiveLimit: z.number().int(),
     timeZone: z.string().min(3).max(60),
+    trackingSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD.").nullish(),
     reason: z.string().max(300).nullish(),
   })
   .meta({ title: "AttendanceRules", description: "Regras de assiduidade do colégio. O motivo fica no histórico." });

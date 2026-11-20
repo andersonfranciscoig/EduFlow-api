@@ -103,6 +103,12 @@ export class TenantDirectory implements OnModuleDestroy {
     return entry;
   }
 
+  /** Os colégios ativos (para as tarefas automáticas, que correm em todos). */
+  async activeSlugs(): Promise<string[]> {
+    const rows = await this.db.tenantDatabase.findMany({ where: { active: true }, select: { slug: true }, orderBy: { slug: "asc" } });
+    return rows.map((r) => r.slug);
+  }
+
   onModuleDestroy() {
     return this.db.$disconnect();
   }

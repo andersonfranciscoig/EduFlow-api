@@ -11,8 +11,8 @@ export class PrismaAttendanceSettingsRepository implements AttendanceSettingsRep
 
   async get() {
     const rows = await this.db.$queryRaw<
-      { teacher_model: string; missing_procedure: string; deadline_minutes: number; absence_limit: number; consecutive_limit: number; time_zone: string; updated_at: Date; by: string | null }[]
-    >`SELECT s.teacher_model, s.missing_procedure, s.deadline_minutes, s.absence_limit, s.consecutive_limit, s.time_zone, s.updated_at, u.full_name AS by
+      { teacher_model: string; missing_procedure: string; deadline_minutes: number; absence_limit: number; consecutive_limit: number; time_zone: string; tracking_since: string; updated_at: Date; by: string | null }[]
+    >`SELECT s.teacher_model, s.missing_procedure, s.deadline_minutes, s.absence_limit, s.consecutive_limit, s.time_zone, to_char(s.tracking_since, 'YYYY-MM-DD') AS tracking_since, s.updated_at, u.full_name AS by
         FROM attendance_settings s LEFT JOIN school_users u ON u.id = s.updated_by_id WHERE s.id = 1`;
     const r = rows[0];
     if (!r) return null;
@@ -23,13 +23,22 @@ export class PrismaAttendanceSettingsRepository implements AttendanceSettingsRep
       absenceLimit: r.absence_limit,
       consecutiveLimit: r.consecutive_limit,
       timeZone: r.time_zone,
+      trackingSince: r.tracking_since,
       updatedAt: r.updated_at,
       updatedByName: r.by,
     };
   }
 
   async save(rules: AttendanceRules, actorId: string | null, now: Date) {
-    await this.db.attendanceSettings.upsert({ where: { id: 1 }, update: { ...rules, updatedById: actorId, updatedAt: now }, create: { id: 1, ...rules, updatedById: actorId, updatedAt: now } });
+    const { trackingSince, ...rest } = rules;
+    // sem data: fica a de hoje (a da BD), a primeira vez; depois mantém-se
+    const since = trackingSince ? { trackingSince: new Date(`${trackingSince}T00:00:00Z`) } : {};
+    await this.db.attendanceSettings.upsert({ where: { id: 1 }, update: { ...rest, ...since, updatedById: actorId, updatedAt: now }, create: { id: 1, ...rest, ...since, updatedById: actorId, updatedAt: now } });
+  }
+
+  /** As tarefas automáticas precisam de uma data de início fixa: a primeira vez, fica a de hoje. */
+  async ensure(now: Date) {
+    await this.db.$executeRaw`INSERT INTO attendance_settings (id, updated_at) VALUES (1, ${now}) ON CONFLICT (id) DO NOTHING`;
   }
 
   async record(type: string, actorId: string | null, details: Record<string, unknown>, now: Date) {

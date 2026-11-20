@@ -87,6 +87,7 @@ export class Presence {
           stateLabel: STATE_LABELS[s.state],
           deadline: s.deadline.slice(11),
           session: l.session ? { id: l.session.id, late: l.session.late, counts: l.session.counts } : null,
+          substitutionFor: l.substitutionFor,
         };
       }),
     });
@@ -97,7 +98,10 @@ export class Presence {
     if (!isDay(day)) return fail(attendanceError("INVALID_INPUT", "Data inválida."));
     const l = await repo.lesson(lessonId);
     const weekday = new Date(`${day}T00:00:00Z`).getUTCDay() || 7;
-    if (!l || l.teacherId !== teacherId || l.weekday !== weekday) return fail(attendanceError("NOT_FOUND", "Aula não encontrada no seu horário nesse dia."));
+    if (!l || l.weekday !== weekday) return fail(attendanceError("NOT_FOUND", "Aula não encontrada no seu horário nesse dia."));
+    // numa substituição, a aula desse dia é do substituto (e deixa de ser do titular)
+    const substitute = await repo.substituteOn(l.id, day);
+    if ((substitute ?? l.teacherId) !== teacherId) return fail(attendanceError("NOT_FOUND", "Aula não encontrada no seu horário nesse dia."));
     const year = await repo.yearOn(day);
     if (!year || year.id !== l.yearId) return fail(attendanceError("NOT_FOUND", "Esse dia não pertence ao ano letivo desta aula."));
     const closure = await repo.closureOn(year.id, day);
@@ -158,8 +162,10 @@ export class Presence {
     );
     const names = new Map(roster.map((s) => [s.id, s.fullName]));
     const changes = diff(before, checked.value, names);
-    if (!existing) await repo.record("LESSON_ATTENDANCE_SUBMITTED", id, actor.userId, { late, total: checked.value.length }, now);
-    else if (changes.length) await repo.record("LESSON_ATTENDANCE_UPDATED", id, actor.userId, { changes, reason: null }, now);
+    if (!existing) {
+      await repo.record("LESSON_ATTENDANCE_SUBMITTED", id, actor.userId, { late, total: checked.value.length }, now);
+      if (late) await repo.resolvePending(l.groupId, day, l.startsAt, now);
+    } else if (changes.length) await repo.record("LESSON_ATTENDANCE_UPDATED", id, actor.userId, { changes, reason: null }, now);
     const s = await repo.sessionById(id);
     return ok({ sessionId: id, late, counts: s?.counts ?? { present: 0, absent: 0, late: 0, justified: 0, total: 0 } });
   }

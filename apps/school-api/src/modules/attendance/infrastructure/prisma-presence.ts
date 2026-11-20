@@ -93,14 +93,19 @@ export class PrismaPresenceRepository implements PresenceRepository {
 
   async teacherLessons(employeeId: string, yearId: string, day: string): Promise<TeacherLessonRow[]> {
     const rows = await this.db.$queryRaw<
-      (Partial<CountRaw> & { lesson_id: string; starts_at: string; ends_at: string; group_id: string; group_name: string; subject_id: string; subject_name: string; color: string; room: string | null; session_id: string | null; submitted_at: Date | null; late: boolean | null })[]
+      (Partial<CountRaw> & { lesson_id: string; starts_at: string; ends_at: string; group_id: string; group_name: string; subject_id: string; subject_name: string; color: string; room: string | null; session_id: string | null; submitted_at: Date | null; late: boolean | null; original_name: string | null })[]
     >`
       SELECT l.id AS lesson_id, to_char(p.starts_at, 'HH24:MI') AS starts_at, to_char(p.ends_at, 'HH24:MI') AS ends_at, g.id AS group_id, g.name AS group_name,
              sub.id AS subject_id, sub.name AS subject_name, sub.color, coalesce(l.room, g.room) AS room,
-             s.id AS session_id, s.submitted_at, s.late, ${COUNTS("s")}
+             s.id AS session_id, s.submitted_at, s.late, ${COUNTS("s")},
+             CASE WHEN xs.substitute_id = ${employeeId}::uuid THEN coalesce(eo.full_name, '—') END AS original_name
         FROM lessons l JOIN school_periods p ON p.id = l.period_id JOIN class_groups g ON g.id = l.group_id JOIN subjects sub ON sub.id = l.subject_id
         LEFT JOIN lesson_sessions s ON s.group_id = l.group_id AND s.day = ${day}::date AND s.starts_at = date_trunc('minute', p.starts_at::interval)::time
-       WHERE l.teacher_id = ${employeeId}::uuid AND l.academic_year_id = ${yearId}::uuid AND l.weekday = extract(isodow FROM ${day}::date)::int
+        LEFT JOIN lesson_substitutions xs ON xs.lesson_id = l.id AND xs.day = ${day}::date
+        LEFT JOIN employees eo ON eo.id = l.teacher_id
+       WHERE l.academic_year_id = ${yearId}::uuid AND l.weekday = extract(isodow FROM ${day}::date)::int
+         -- as suas aulas (menos as que alguém substitui nesse dia) e as que ele substitui
+         AND ((l.teacher_id = ${employeeId}::uuid AND xs.id IS NULL) OR xs.substitute_id = ${employeeId}::uuid)
        ORDER BY p.starts_at`;
     return rows.map((r) => ({
       lessonId: r.lesson_id,
@@ -113,7 +118,17 @@ export class PrismaPresenceRepository implements PresenceRepository {
       subjectColor: r.color,
       room: r.room,
       session: r.session_id ? { id: r.session_id, submittedAt: r.submitted_at as Date, late: !!r.late, counts: counts(r as CountRaw) } : null,
+      substitutionFor: r.original_name,
     }));
+  }
+
+  async substituteOn(lessonId: string, day: string) {
+    const r = await this.db.$queryRaw<{ substitute_id: string }[]>`SELECT substitute_id FROM lesson_substitutions WHERE lesson_id = ${lessonId}::uuid AND day = ${day}::date`;
+    return r[0]?.substitute_id ?? null;
+  }
+
+  async resolvePending(groupId: string, day: string, startsAt: string, now: Date) {
+    await this.db.$executeRaw`UPDATE lesson_pendings SET status = 'SUBMITTED_LATE', decided_at = ${now} WHERE group_id = ${groupId}::uuid AND day = ${day}::date AND starts_at = ${startsAt}::time AND status = 'OPEN'`;
   }
 
   async lesson(lessonId: string): Promise<LessonRow | null> {
