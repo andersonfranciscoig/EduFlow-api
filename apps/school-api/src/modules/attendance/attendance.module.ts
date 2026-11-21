@@ -1,14 +1,18 @@
 import { Module } from "@nestjs/common";
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
+import { HrModule } from "../hr/hr.module";
 import { IdentityModule } from "../identity/identity.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { AttendanceSettings } from "./application/AttendanceSettings";
 import { DeadlineJob } from "./application/DeadlineJob";
+import { Justifications } from "./application/Justifications";
 import { Pendings } from "./application/Pendings";
 import { Presence } from "./application/Presence";
+import { StudentAlerts } from "./application/StudentAlerts";
 import { TeacherOccurrences } from "./application/TeacherOccurrences";
 import { AttendanceScheduler } from "./infrastructure/attendance-scheduler";
 import { AttendanceSettingsController } from "./presentation/attendance-settings.controller";
+import { JustificationsController } from "./presentation/justifications.controller";
 import { PendingsController } from "./presentation/pendings.controller";
 import { MyPresenceController, StudentPresenceController } from "./presentation/presence.controller";
 import { TeacherOccurrencesController } from "./presentation/teacher-occurrences.controller";
@@ -19,16 +23,18 @@ import { TeacherOccurrencesController } from "./presentation/teacher-occurrences
  * (tarefa automática: aulas pendentes, faltas automáticas, modelo por dia) e substituições.
  */
 @Module({
-  imports: [IdentityModule, NotificationsModule],
-  controllers: [AttendanceSettingsController, TeacherOccurrencesController, MyPresenceController, StudentPresenceController, PendingsController],
+  imports: [IdentityModule, NotificationsModule, HrModule],
+  controllers: [AttendanceSettingsController, TeacherOccurrencesController, MyPresenceController, StudentPresenceController, PendingsController, JustificationsController],
   providers: [
     { provide: AttendanceSettings, useFactory: () => new AttendanceSettings(systemClock) },
     { provide: TeacherOccurrences, useFactory: () => new TeacherOccurrences(uuidGenerator, systemClock) },
+    { provide: Justifications, inject: [TeacherOccurrences], useFactory: (o: TeacherOccurrences) => new Justifications(uuidGenerator, systemClock, o) },
     { provide: Presence, useFactory: () => new Presence(uuidGenerator, systemClock) },
+    { provide: StudentAlerts, useFactory: () => new StudentAlerts(uuidGenerator, systemClock) },
     { provide: Pendings, useFactory: () => new Pendings(uuidGenerator, systemClock) },
     { provide: DeadlineJob, inject: [AttendanceSettings], useFactory: (s: AttendanceSettings) => new DeadlineJob(s) },
     AttendanceScheduler,
   ],
-  exports: [AttendanceSettings, TeacherOccurrences, Presence],
+  exports: [AttendanceSettings, TeacherOccurrences, Presence, StudentAlerts],
 })
 export class AttendanceModule {}

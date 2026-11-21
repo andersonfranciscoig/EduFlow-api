@@ -29,7 +29,16 @@ const ALLOWED: Record<OccurrenceAction, OccurrenceStatus[]> = {
   CANCEL: ["REGISTADA", "JUSTIFICADA"],
   REOPEN: ["JUSTIFICADA", "ANULADA"],
 };
-export const ACTION_LABELS: Record<OccurrenceAction | "CREATED", string> = { CREATED: "Registada", JUSTIFY: "Justificada", CHANGE: "Alterada", CANCEL: "Anulada", REOPEN: "Reaberta" };
+export const ACTION_LABELS: Record<OccurrenceAction | "CREATED" | "JUSTIFICATION_SUBMITTED" | "JUSTIFICATION_REJECTED" | "JUSTIFICATION_WITHDRAWN", string> = {
+  CREATED: "Registada",
+  JUSTIFY: "Justificada",
+  CHANGE: "Alterada",
+  CANCEL: "Anulada",
+  REOPEN: "Reaberta",
+  JUSTIFICATION_SUBMITTED: "Justificação enviada pelo professor",
+  JUSTIFICATION_REJECTED: "Justificação não aceite",
+  JUSTIFICATION_WITHDRAWN: "Justificação retirada pelo professor",
+};
 
 /** As ações possíveis num estado (o portal só mostra estas). */
 export const actionsFor = (s: OccurrenceStatus) => (Object.keys(ALLOWED) as OccurrenceAction[]).filter((a) => ALLOWED[a].includes(s));
