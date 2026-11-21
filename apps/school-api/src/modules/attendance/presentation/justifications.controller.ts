@@ -10,7 +10,7 @@ import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import { sendFile } from "../../hr/presentation/employees.controller";
 import type { SchoolAccess } from "../../identity/application/ports";
-import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from "../../identity/presentation/http/permissions";
+import { HrMay, NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { Justifications } from "../application/Justifications";
@@ -35,6 +35,7 @@ const rejectBody = z.object({ note: z.string().max(300) }).meta({ title: "Justif
 @ApiBearerAuth()
 @Controller("v1/attendance")
 @UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
+@HrMay()
 export class JustificationsController {
   constructor(
     private readonly justifications: Justifications,

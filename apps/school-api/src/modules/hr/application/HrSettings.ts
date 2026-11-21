@@ -24,6 +24,7 @@ import {
   SUGGESTED_DOCUMENTS,
   SUGGESTED_EMPLOYEE_TYPES,
   SUGGESTED_FIELDS,
+  SYSTEM_ROLES,
 } from "../domain/form";
 import type { ConfigOutcome, DocumentRow, EmployeeTypeRow, FieldRow, HrSettingsRepository, SectionRow, VersionInfo } from "./ports";
 
@@ -127,7 +128,9 @@ export class HrSettings {
       canPublish: can.manageForm || can.manageDocuments,
       fieldTypes: Object.entries(FIELD_TYPES).map(([value, t]) => ({ value, ...t })),
       fileFormats: FILE_FORMATS,
-      employeeTypes: types.map((t) => ({ ...t, restrictedItems: usage[t.id] ?? 0 })),
+      employeeTypes: types.map((t) => ({ ...t, systemRoleLabel: SYSTEM_ROLES[t.systemRole].label, restrictedItems: usage[t.id] ?? 0 })),
+      /** o papel no sistema de cada tipo (o acesso ao portal que a ficha pode dar) */
+      systemRoles: Object.entries(SYSTEM_ROLES).map(([value, r]) => ({ value, ...r })),
       employeeTypeSuggestions: SUGGESTED_EMPLOYEE_TYPES.filter((t) => !typeNames.has(t.name.toLowerCase())),
       personal: PERSONAL_FIELDS.map((f) => ({ ...f, typeLabel: FIELD_TYPES[f.type].label, options: f.key === "province" ? [] : (f.options ?? []) })),
       sections: sections.map((s) => ({
@@ -167,23 +170,26 @@ export class HrSettings {
 
   // ================================================================ tipos de funcionário
 
-  async createEmployeeType(repo: HrSettingsRepository, actorId: string | null, input: { name: string; description?: string | null }) {
+  async createEmployeeType(repo: HrSettingsRepository, actorId: string | null, input: { name: string; description?: string | null; systemRole?: string | null }) {
     const t = checkEmployeeType(input);
     if (!t.ok) return t;
     const now = this.clock.now();
     const r = await repo.createEmployeeType({ ...t.value, id: this.ids.next(), now });
     if (!r.ok) return fail(outcomeError(r, "type"));
-    await repo.record("HR_EMPLOYEE_TYPE_CREATED", r.value.id, actorId, { name: r.value.name }, now);
+    await repo.record("HR_EMPLOYEE_TYPE_CREATED", r.value.id, actorId, { name: r.value.name, systemRole: r.value.systemRole }, now);
     return ok(r.value);
   }
 
-  async updateEmployeeType(repo: HrSettingsRepository, actorId: string | null, id: string, input: { name: string; description?: string | null }) {
-    const t = checkEmployeeType(input);
+  /** Sem `systemRole` no pedido, o papel fica como está. Mudar o papel não mexe nas contas que já existem. */
+  async updateEmployeeType(repo: HrSettingsRepository, actorId: string | null, id: string, input: { name: string; description?: string | null; systemRole?: string | null }) {
+    const before = (await repo.employeeTypes()).find((x) => x.id === id);
+    if (!before) return fail(hrError("EMPLOYEE_TYPE_NOT_FOUND", "Tipo de funcionário não encontrado."));
+    const t = checkEmployeeType({ ...input, systemRole: input.systemRole ?? before.systemRole });
     if (!t.ok) return t;
     const now = this.clock.now();
     const r = await repo.updateEmployeeType(id, t.value, now);
     if (!r.ok) return fail(outcomeError(r, "type"));
-    await repo.record("HR_EMPLOYEE_TYPE_UPDATED", id, actorId, { name: r.value.name }, now);
+    await repo.record("HR_EMPLOYEE_TYPE_UPDATED", id, actorId, { name: r.value.name, ...(before.systemRole !== r.value.systemRole ? { systemRole: { before: before.systemRole, after: r.value.systemRole } } : {}) }, now);
     return ok(r.value);
   }
 

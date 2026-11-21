@@ -11,16 +11,16 @@ import type {
   TransitionOutcome,
 } from "../application/employee-ports";
 import { EMPLOYEE_STATUSES, type EmployeeStatus, type PersonalData, type Progress, type SectionsData, type StepKey } from "../domain/employee";
-import type { FormSnapshot } from "../domain/form";
+import { type FormSnapshot, isSystemRole, type SystemRole } from "../domain/form";
 
 type Tx = Prisma.TransactionClient;
 const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 
 const INCLUDE = {
-  employeeType: { select: { name: true } },
+  employeeType: { select: { name: true, systemRole: true } },
   formVersion: { select: { id: true, number: true, snapshot: true } },
   documents: { orderBy: { createdAt: "asc" } },
-  user: { select: { id: true, status: true, email: true } },
+  user: { select: { id: true, status: true, email: true, role: true } },
 } as const satisfies Prisma.EmployeeInclude;
 type Row = Prisma.EmployeeGetPayload<{ include: typeof INCLUDE }>;
 
@@ -37,7 +37,7 @@ const docRow = (d: EmployeeDocument): EmployeeDocumentRow => ({
   createdAt: d.createdAt,
 });
 
-function base(r: Omit<Row, "formVersion" | "documents" | "personal" | "sections" | "user">) {
+function base(r: Omit<Row, "formVersion" | "documents" | "personal" | "sections" | "user" | "employeeType"> & { employeeType: { name: string } | null }) {
   return {
     id: r.id,
     number: r.number,
@@ -71,7 +71,9 @@ const toRow = (r: Row): EmployeeRow => ({
   personal: (r.personal ?? {}) as PersonalData,
   sections: (r.sections ?? {}) as SectionsData,
   documents: r.documents.map(docRow),
-  portalUser: r.user ? { id: r.user.id, status: r.user.status, email: r.user.email } : null,
+  portalUser: r.user ? { id: r.user.id, status: r.user.status, email: r.user.email, role: r.user.role } : null,
+  // sem tipo: como até aqui (pode ter conta de professor)
+  systemRole: isSystemRole(r.employeeType?.systemRole ?? "") ? (r.employeeType!.systemRole as SystemRole) : "PROFESSOR",
 });
 
 /** Cadastros na BD do PRÓPRIO colégio (a ligação já é a deste colégio — TenantGuard). */

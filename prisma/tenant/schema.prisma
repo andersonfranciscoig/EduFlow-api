@@ -39,6 +39,8 @@ enum SchoolRole {
   DIRETOR
   SECRETARIA
   PROFESSOR
+  /// só a área dos Recursos Humanos
+  RH
 }
 
 enum SchoolUserStatus {
@@ -980,6 +982,8 @@ model HrEmployeeType {
   id          String   @id @db.Uuid
   name        String
   description String?
+  /// papel no sistema de quem é deste tipo: PROFESSOR | RH | NONE (sem acesso ao portal)
+  systemRole  String   @default("PROFESSOR") @map("system_role")
   position    Int
   active      Boolean  @default(true)
   createdAt   DateTime @map("created_at")

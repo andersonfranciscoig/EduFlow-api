@@ -127,17 +127,34 @@ export const cleanTypeIds = (ids: string[] | null | undefined) => [...new Set((i
 /** Um campo ou documento aparece a este tipo? (sem lista = a todos) */
 export const appliesTo = (item: { employeeTypeIds?: string[] }, typeId: string) => !item.employeeTypeIds?.length || item.employeeTypeIds.includes(typeId);
 
+/**
+ * O papel no sistema de quem é deste tipo (o acesso ao portal dado a partir da ficha):
+ *  PROFESSOR — conta de professor (as suas aulas, presenças, horário, faltas);
+ *  RH        — conta de Recursos Humanos (só a área do RH; só o responsável do colégio a dá);
+ *  NONE      — sem acesso ao sistema (limpeza, segurança, cozinha…): só a ficha, contratos e assiduidade no RH.
+ */
+export const SYSTEM_ROLES = {
+  PROFESSOR: { label: "Professor", hint: "Pode ter conta de professor: o seu horário, as turmas, as presenças e as suas faltas." },
+  RH: { label: "Recursos Humanos", hint: "Pode ter conta só da área dos Recursos Humanos (dada pelo responsável do colégio)." },
+  NONE: { label: "Sem acesso ao sistema", hint: "Limpeza, segurança, cozinha, transporte…: nunca recebe conta. O RH gere a ficha, os contratos e a assiduidade." },
+} as const;
+export type SystemRole = keyof typeof SYSTEM_ROLES;
+export const isSystemRole = (r: string): r is SystemRole => r in SYSTEM_ROLES;
+
 export interface EmployeeTypeInput {
   name: string;
   description: string | null;
+  systemRole: SystemRole;
 }
 
-export function checkEmployeeType(input: { name: string; description?: string | null }): Result<EmployeeTypeInput, HrError> {
+export function checkEmployeeType(input: { name: string; description?: string | null; systemRole?: string | null }): Result<EmployeeTypeInput, HrError> {
   const name = clean(input.name);
   if (name.length < 2 || name.length > 60) return fail(hrError("INVALID_INPUT", "O nome do tipo tem 2 a 60 caracteres."));
   const description = optional(input.description);
   if (description && description.length > 240) return fail(hrError("INVALID_INPUT", "A descrição tem no máximo 240 caracteres."));
-  return ok({ name, description });
+  const systemRole = input.systemRole ?? "PROFESSOR";
+  if (!isSystemRole(systemRole)) return fail(hrError("INVALID_INPUT", "Escolha o papel no sistema: professor, recursos humanos ou sem acesso."));
+  return ok({ name, description, systemRole });
 }
 
 export interface FieldSettings {
@@ -260,9 +277,11 @@ export function checkSection(input: { title: string; description?: string | null
 // ================================================================ sugestões (o colégio escolhe se as quer)
 
 export const SUGGESTED_EMPLOYEE_TYPES: EmployeeTypeInput[] = [
-  { name: "Docente", description: "Professores e educadores." },
-  { name: "Administrativo", description: "Secretaria, tesouraria, direção e serviços." },
-  { name: "Auxiliar", description: "Limpeza, segurança, cozinha, transporte e apoio." },
+  { name: "Docente", description: "Professores e educadores.", systemRole: "PROFESSOR" },
+  { name: "Recursos Humanos", description: "Quem trata do pessoal: cadastros, contratos e assiduidade.", systemRole: "RH" },
+  // a secretaria e a direção têm conta criada pelo responsável (Definições → Utilizadores), não pela ficha
+  { name: "Administrativo", description: "Secretaria, tesouraria, direção e serviços.", systemRole: "NONE" },
+  { name: "Auxiliar", description: "Limpeza, segurança, cozinha, transporte e apoio.", systemRole: "NONE" },
 ];
 
 /** `forTypes`: nomes dos tipos a que a sugestão se aplica, se existirem no colégio (senão, a todos). */

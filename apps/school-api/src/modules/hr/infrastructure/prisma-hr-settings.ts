@@ -9,6 +9,7 @@ import {
   type FieldType,
   type FileFormat,
   type FormSnapshot,
+  isSystemRole,
   MAX_DOCUMENT_TYPES,
   MAX_EMPLOYEE_TYPES,
   MAX_FIELDS_PER_SECTION,
@@ -58,7 +59,14 @@ const toDocument = (d: Prisma.HrDocumentTypeGetPayload<object>): DocumentRow => 
   employeeTypeIds: d.employeeTypeIds,
 });
 
-const toType = (t: Prisma.HrEmployeeTypeGetPayload<object>): EmployeeTypeRow => ({ id: t.id, name: t.name, description: t.description, position: t.position, active: t.active });
+const toType = (t: Prisma.HrEmployeeTypeGetPayload<object>): EmployeeTypeRow => ({
+  id: t.id,
+  name: t.name,
+  description: t.description,
+  systemRole: isSystemRole(t.systemRole) ? t.systemRole : "PROFESSOR",
+  position: t.position,
+  active: t.active,
+});
 
 const fieldData = (input: FieldInput) => ({
   label: input.label,
@@ -85,7 +93,7 @@ export class PrismaHrSettingsRepository implements HrSettingsRepository {
         const agg = await tx.hrEmployeeType.aggregate({ _count: { _all: true }, _max: { position: true } });
         if (agg._count._all >= MAX_EMPLOYEE_TYPES) return { ok: false, reason: "limit" } as const;
         const row = await tx.hrEmployeeType.create({
-          data: { id: input.id, name: input.name, description: input.description, position: (agg._max.position ?? 0) + 1, createdAt: input.now, updatedAt: input.now },
+          data: { id: input.id, name: input.name, description: input.description, systemRole: input.systemRole, position: (agg._max.position ?? 0) + 1, createdAt: input.now, updatedAt: input.now },
         });
         return { ok: true, value: toType(row) } as const;
       });

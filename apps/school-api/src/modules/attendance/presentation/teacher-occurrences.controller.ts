@@ -6,7 +6,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
-import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
+import { HrMay, NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { AttendanceSettings } from "../application/AttendanceSettings";
 import { Justifications } from "../application/Justifications";
@@ -45,6 +45,7 @@ const actionPipe = new ZodValidationPipe(z.enum(["justificar", "alterar", "anula
 @ApiBearerAuth()
 @Controller("v1/attendance/teachers")
 @UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
+@HrMay()
 export class TeacherOccurrencesController {
   constructor(
     private readonly occurrences: TeacherOccurrences,

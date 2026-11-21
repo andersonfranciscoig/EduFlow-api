@@ -6,7 +6,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
-import { NoTeachersGuard, TeacherMay } from "../../identity/presentation/http/permissions";
+import { HrMay, NoTeachersGuard, TeacherMay } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import type { PedagogyActor } from "../application/ports";
 import { Teaching } from "../application/Teaching";
@@ -38,6 +38,7 @@ const actorOf = (u: SchoolAccess): PedagogyActor => ({ id: u.id, role: u.role, i
 /**
  * Professores: quem dá cada disciplina em cada turma, coordenadores de turma, carga e choques,
  * o horário de cada professor e "O meu horário". Ver: qualquer utilizador do colégio. Atribuir: direção.
+ * O papel RH vê a lista de professores, o horário e as habilitações de cada um (`@HrMay`), nada mais daqui.
  */
 @ApiTags("Portal · Professores")
 @ApiHeader({ name: "X-Tenant", required: false })
@@ -81,12 +82,14 @@ export class TeachingController {
   }
 
   @Get("teachers")
+  @HrMay()
   @ApiOperation({ summary: "Professores do ano (?yearId=; por omissão o ano em curso): carga, coordenações e choques" })
   async teachers(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
     return unwrap(await this.teaching.teachers(this.repo(t), actorOf(u), q), PEDAGOGY_HTTP);
   }
 
   @Get("teachers/:employeeId/timetable")
+  @HrMay()
   @ApiOperation({ summary: "Horário de um professor: dias, tempos, turmas, disciplinas e salas" })
   async teacherTimetable(@CurrentTenant() t: TenantContext, @Param("employeeId", id) employeeId: string, @Query(new ZodValidationPipe(yearQuery)) q: z.infer<typeof yearQuery>) {
     return unwrap(await this.teaching.teacherTimetable(this.repo(t), employeeId, q), PEDAGOGY_HTTP);
@@ -112,6 +115,7 @@ export class TeachingController {
   }
 
   @Get("teachers/:employeeId/qualifications")
+  @HrMay()
   @ApiOperation({ summary: "Habilitações do professor (tipo de ensino → classes/cursos → disciplinas) e o catálogo para as escolher" })
   async qualifications(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("employeeId", id) employeeId: string) {
     return unwrap(await this.teaching.qualifications(this.repo(t), actorOf(u), employeeId), PEDAGOGY_HTTP);
