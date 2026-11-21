@@ -2,7 +2,7 @@ import type { Clock, IdGenerator } from "../../../../../../libs/kernel/src/appli
 import { EmailAddress, FullName } from "../../../../../../libs/kernel/src/domain/contact";
 import { fail, ok } from "../../../../../../libs/kernel/src/domain/Result";
 import { identityError } from "../domain/errors";
-import { ALL_PERMISSIONS, HR_ROLE_DEFAULTS, HR_ROLE_PERMISSIONS, normalizePermissions, PERMISSION_GROUPS, PERMISSIONS, type Permission } from "../domain/permissions";
+import { ALL_PERMISSIONS, HR_ROLE_DEFAULTS, normalizePermissions, PERMISSION_GROUPS, PERMISSIONS, type Permission } from "../domain/permissions";
 import { ROLE_LABELS, SCHOOL_ROLES, type SchoolRole, type SchoolUserStatus } from "../domain/SchoolUser";
 import type { SchoolAccess } from "./ports";
 
@@ -24,8 +24,20 @@ export interface UserAdminRow {
 export interface UserAdminRepository {
   list(): Promise<UserAdminRow[]>;
   find(id: string): Promise<UserAdminRow | null>;
-  /** Utilizador por ativar (INVITED) com as permissões, numa transação. */
-  create(input: { id: string; fullName: string; email: string; role: SchoolRole; permissions: Permission[]; grantedById: string; now: Date }): Promise<{ ok: true; value: UserAdminRow } | { ok: false; reason: "email_taken" }>;
+  /**
+   * Utilizador por ativar (INVITED) com as permissões, numa transação. Com `employeeId`, a conta fica
+   * ligada a esse funcionário (que tem de estar aprovado/ativo/suspenso e ainda sem conta).
+   */
+  create(input: {
+    id: string;
+    fullName: string;
+    email: string;
+    role: SchoolRole;
+    permissions: Permission[];
+    grantedById: string;
+    now: Date;
+    employeeId?: string | null;
+  }): Promise<{ ok: true; value: UserAdminRow } | { ok: false; reason: "email_taken" | "employee" }>;
   /** Muda o papel e substitui as permissões (numa transação). */
   update(id: string, input: { role: SchoolRole; permissions: Permission[]; grantedById: string; now: Date }): Promise<UserAdminRow>;
   /** Suspender termina também as sessões abertas. */
@@ -43,7 +55,7 @@ const STATUS_LABELS: Record<SchoolUserStatus, string> = { INVITED: "Por ativar",
 const ROLE_HINTS: Record<SchoolRole, string> = {
   DIRETOR: "Gestão do colégio; o que pode fazer depende das permissões.",
   SECRETARIA: "Secretaria; o que pode fazer depende das permissões.",
-  RH: "Só a área dos Recursos Humanos (funcionários, contratos, assiduidade, faltas dos professores), com as permissões do RH.",
+  RH: "A área dos Recursos Humanos e o que lhe der nas permissões (ex.: consultar os alunos). Não entra no pedagógico nem nas finanças.",
   PROFESSOR: "Só o que é do professor: horário, turmas, presenças e as suas faltas.",
 };
 
@@ -82,7 +94,8 @@ export class ManageUsers {
 
   catalog() {
     return {
-      roles: SCHOOL_ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r], hint: ROLE_HINTS[r], permissions: r === "RH" ? HR_ROLE_PERMISSIONS : null })),
+      // defaults: as permissões sugeridas ao escolher o papel (o responsável pode juntar outras)
+      roles: SCHOOL_ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r], hint: ROLE_HINTS[r], defaults: r === "RH" ? HR_ROLE_DEFAULTS : null })),
       permissionGroups: PERMISSION_GROUPS.map((g) => ({ key: g.key, label: g.label, permissions: g.permissions.map((p) => ({ key: p, label: PERMISSIONS[p].label, hint: PERMISSIONS[p].hint })) })),
     };
   }
@@ -97,13 +110,14 @@ export class ManageUsers {
     if (!SCHOOL_ROLES.includes(role as SchoolRole)) return fail(identityError("INVALID_INPUT", "Escolha um papel válido."));
     const p = normalizePermissions(permissions);
     if (!p.ok) return fail(identityError("INVALID_PERMISSION", p.error.message));
-    // o papel RH só entra nos Recursos Humanos: as permissões de outras áreas não lhe servem
-    const outside = role === "RH" ? p.value.filter((x) => !HR_ROLE_PERMISSIONS.includes(x)) : [];
-    if (outside.length) return fail(identityError("INVALID_PERMISSION", `O papel Recursos Humanos só pode ter permissões do RH (não: ${outside.map((x) => PERMISSIONS[x].label).join("; ")}).`));
     return ok({ role: role as SchoolRole, permissions: p.value });
   }
 
-  async invite(repo: UserAdminRepository, actor: SchoolAccess, school: { slug: string; name: string }, input: { fullName: string; email: string; role: string; permissions: string[] }) {
+  /**
+   * Convidar. Com `employeeId` (a partir da ficha de um funcionário — ex.: um tipo "sem acesso ao
+   * sistema" a quem o responsável decide dar acesso), a conta fica ligada a esse funcionário.
+   */
+  async invite(repo: UserAdminRepository, actor: SchoolAccess, school: { slug: string; name: string }, input: { fullName: string; email: string; role: string; permissions: string[]; employeeId?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const name = FullName.create(input.fullName);
@@ -113,9 +127,14 @@ export class ManageUsers {
     const checked = this.checkRoleAndPermissions(input.role, input.permissions);
     if (!checked.ok) return checked;
     const now = this.clock.now();
-    const created = await repo.create({ id: this.ids.next(), fullName: name.value.value, email: email.value.value, ...checked.value, grantedById: actor.id, now });
-    if (!created.ok) return fail(identityError("EMAIL_TAKEN", "Já existe um utilizador com este email."));
-    await repo.record("USER_INVITED", created.value.id, actor.id, { role: checked.value.role, permissions: checked.value.permissions }, now);
+    const created = await repo.create({ id: this.ids.next(), fullName: name.value.value, email: email.value.value, ...checked.value, grantedById: actor.id, now, employeeId: input.employeeId ?? null });
+    if (!created.ok)
+      return fail(
+        created.reason === "employee"
+          ? identityError("INVALID_STATE", "Este funcionário já tem conta ou ainda não foi aprovado.")
+          : identityError("EMAIL_TAKEN", "Já existe um utilizador com este email."),
+      );
+    await repo.record("USER_INVITED", created.value.id, actor.id, { role: checked.value.role, permissions: checked.value.permissions, ...(input.employeeId ? { employeeId: input.employeeId } : {}) }, now);
     const emailSent = await this.sendInvite(created.value, school, actor);
     return ok({ user: dto(created.value), emailSent });
   }

@@ -14,11 +14,11 @@ import { CurrentUser, NoSupport, SchoolAuthGuard } from "./school-auth";
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const permissions = z.array(z.string().max(60)).max(40);
 const inviteBody = z
-  .object({ fullName: z.string().min(3).max(120), email: z.string().max(254), role: z.enum(SCHOOL_ROLES), permissions })
+  .object({ fullName: z.string().min(3).max(120), email: z.string().max(254), role: z.enum(SCHOOL_ROLES), permissions, employeeId: z.uuid().nullish() })
   .meta({ title: "UserInvite", description: "Convida um utilizador: fica por ativar até entrar no portal com o email (código → senha → 2FA)." });
 const updateBody = z
   .object({ role: z.enum(SCHOOL_ROLES), permissions })
-  .meta({ title: "UserAccess", description: "Papel e permissões (substitui as atuais). Qualquer permissão do RH inclui hr.access. O papel RH só aceita permissões do RH." });
+  .meta({ title: "UserAccess", description: "Papel e permissões (substitui as atuais). Qualquer permissão de um grupo inclui a de acesso desse grupo." });
 
 /**
  * Utilizadores do portal do colégio e as suas permissões.

@@ -53,9 +53,11 @@ const HR_OK = "school:hr-ok";
 /**
  * Áreas de gestão (pedagógico, secretaria, finanças): os papéis restritos não entram.
  *  - PROFESSOR: só no que é dele (rotas `@TeacherMay()`, ex.: "o meu horário").
- *  - RH: só no que é dos Recursos Humanos (rotas `@HrMay()`, ex.: as faltas dos professores) e no
- *    que é pessoal (`@TeacherMay()`: a caixa de notificações…). As áreas do RH (`v1/hr/*`) não usam
- *    este guard: lá decidem as permissões.
+ *  - RH: no que é dos Recursos Humanos (rotas `@HrMay()`, ex.: a lista de professores), no que é
+ *    pessoal (`@TeacherMay()`: a caixa de notificações…) e em qualquer rota protegida por permissões
+ *    (`@RequirePermission`): aí decidem as permissões que o responsável lhe der (ex.: consultar os
+ *    alunos). Nas áreas sem permissões (pedagógico, finanças) não entra. As áreas do RH (`v1/hr/*`)
+ *    não usam este guard.
  * Direção, secretaria, o responsável e o suporte não são afetados. Corre DEPOIS do SchoolAuthGuard.
  */
 @Injectable()
@@ -72,6 +74,9 @@ export class NoTeachersGuard implements CanActivate {
     }
     if (access.role === "RH") {
       if (marked(HR_OK) || marked(TEACHER_OK)) return true;
+      // rota com permissões: o PermissionsGuard (a seguir) confirma que as tem
+      const required = this.reflector.getAllAndOverride<Permission[]>(REQUIRED, [context.getHandler(), context.getClass()]) ?? [];
+      if (required.length) return true;
       throw new ForbiddenException({ code: "FORBIDDEN", message: "Esta área não é dos Recursos Humanos." });
     }
     return true;

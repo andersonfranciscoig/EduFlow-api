@@ -19,6 +19,8 @@ const SELECT = {
 } as const satisfies Prisma.SchoolUserSelect;
 
 type Row = Prisma.SchoolUserGetPayload<{ select: typeof SELECT }>;
+/** o funcionário já tem conta ou não está aprovado: desfaz a transação */
+class EmployeeNotLinkable extends Error {}
 
 const toRow = (u: Row): UserAdminRow => ({
   id: u.id,
@@ -47,17 +49,38 @@ export class PrismaUserAdminRepository implements UserAdminRepository {
     return row ? toRow(row) : null;
   }
 
-  async create(input: { id: string; fullName: string; email: string; role: SchoolRole; permissions: Permission[]; grantedById: string; now: Date }) {
+  async create(input: { id: string; fullName: string; email: string; role: SchoolRole; permissions: Permission[]; grantedById: string; now: Date; employeeId?: string | null }) {
     try {
       const row = await this.db.$transaction(async (tx) => {
         await tx.schoolUser.create({ data: { id: input.id, fullName: input.fullName, email: input.email, role: input.role, status: "INVITED", createdAt: input.now, updatedAt: input.now } });
         if (input.permissions.length) {
           await tx.schoolUserPermission.createMany({ data: input.permissions.map((permission) => ({ userId: input.id, permission, grantedById: input.grantedById, grantedAt: input.now })) });
         }
+        if (input.employeeId) {
+          // a ficha do funcionário (aprovado, ativo ou suspenso; ainda sem conta) fica ligada a esta conta
+          const linked = await tx.employee.updateMany({ where: { id: input.employeeId, userId: null, status: { in: ["APPROVED", "ACTIVE", "SUSPENDED"] } }, data: { userId: input.id } });
+          if (linked.count !== 1) throw new EmployeeNotLinkable();
+          const e = await tx.employee.findUniqueOrThrow({ where: { id: input.employeeId }, select: { status: true } });
+          const by = await tx.schoolUser.findUnique({ where: { id: input.grantedById }, select: { fullName: true } });
+          await tx.employeeApprovalHistory.create({
+            data: {
+              id: randomUUID(),
+              subjectType: "EMPLOYEE",
+              subjectId: input.employeeId,
+              fromStatus: e.status,
+              toStatus: e.status,
+              actorId: input.grantedById,
+              actorName: by?.fullName ?? null,
+              reason: `Acesso ao portal dado pelo responsável do colégio (${input.role}): convite enviado para ${input.email}.`,
+              createdAt: input.now,
+            },
+          });
+        }
         return tx.schoolUser.findUniqueOrThrow({ where: { id: input.id }, select: SELECT });
       });
       return { ok: true as const, value: toRow(row) };
     } catch (e) {
+      if (e instanceof EmployeeNotLinkable) return { ok: false as const, reason: "employee" as const };
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { ok: false as const, reason: "email_taken" as const };
       throw e;
     }

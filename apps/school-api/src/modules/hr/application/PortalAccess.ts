@@ -56,7 +56,13 @@ export class PortalAccess {
   async grant(repo: PortalAccessRepository, userRepo: UserAdminRepository, actor: HrActor & { id: string; name: string; isOwner: boolean }, school: School, employeeId: string) {
     const e = await repo.employee(employeeId);
     if (!e) return fail(hrError("EMPLOYEE_NOT_FOUND", "Funcionário não encontrado."));
-    if (e.systemRole === "NONE") return fail(hrError("INVALID_STATE", `${e.typeName ? `O tipo «${e.typeName}»` : "Este tipo de funcionário"} não tem acesso ao sistema.`));
+    if (e.systemRole === "NONE")
+      return fail(
+        hrError(
+          "INVALID_STATE",
+          `${e.typeName ? `O tipo «${e.typeName}»` : "Este tipo de funcionário"} não tem acesso ao sistema. Só o responsável do colégio pode dar acesso, escolhendo o papel e o que pode usar (Definições → Utilizadores).`,
+        ),
+      );
     if (e.systemRole === "RH" && !actor.isOwner) return fail(hrError("FORBIDDEN", "Só o responsável do colégio dá acesso de Recursos Humanos."));
     if (!ELIGIBLE.includes(e.status)) return fail(hrError("INVALID_STATE", "Só um funcionário aprovado ou ativo pode ter acesso ao portal."));
     if (e.userId) return fail(hrError("INVALID_STATE", "Este funcionário já tem acesso ao portal."));
