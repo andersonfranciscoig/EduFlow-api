@@ -135,8 +135,11 @@ export const appliesTo = (item: { employeeTypeIds?: string[] }, typeId: string) 
  */
 export const SYSTEM_ROLES = {
   PROFESSOR: { label: "Professor", hint: "Pode ter conta de professor: o seu horário, as turmas, as presenças e as suas faltas." },
-  RH: { label: "Recursos Humanos", hint: "Pode ter conta só da área dos Recursos Humanos (dada pelo responsável do colégio)." },
-  NONE: { label: "Sem acesso ao sistema", hint: "Limpeza, segurança, cozinha, transporte…: nunca recebe conta. O RH gere a ficha, os contratos e a assiduidade." },
+  RH: { label: "Recursos Humanos", hint: "Pode ter conta da área dos Recursos Humanos (dada pelo responsável do colégio, que pode juntar outras permissões)." },
+  NONE: {
+    label: "Sem acesso ao sistema",
+    hint: "Limpeza, segurança, cozinha, transporte…: sem conta. O RH gere a ficha, os contratos e a assiduidade. Se um dia for preciso, o responsável dá acesso escolhendo o que pode usar.",
+  },
 } as const;
 export type SystemRole = keyof typeof SYSTEM_ROLES;
 export const isSystemRole = (r: string): r is SystemRole => r in SYSTEM_ROLES;
