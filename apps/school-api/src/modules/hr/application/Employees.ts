@@ -29,14 +29,16 @@ import {
   stepsFor,
   SUBMITTABLE,
 } from "../domain/employee";
-import { type FileFormat, forEmployeeType, type FormSnapshot, hrError } from "../domain/form";
+import { type FileFormat, forEmployeeType, type FormSnapshot, hrError, SYSTEM_ROLES } from "../domain/form";
 import { checkReason, inviteExpiry, inviteState } from "../domain/registration";
+import { ROLE_LABELS } from "../../identity/domain/SchoolUser";
 import type { ApplicantAccessRepository, ApplicantSession, EmployeeDocumentRow, EmployeeMailer, EmployeeRepository, EmployeeRow, HrFileStore, StepPatch } from "./employee-ports";
 import type { HrSettingsRepository } from "./ports";
 import { type HrActor, hashInviteToken, newInviteToken } from "./Registration";
 import type { HistoryRow, RegistrationRepository, School } from "./registration-ports";
 
 export const EMPLOYEES_PAGE_SIZE = 20;
+const ROLE_LABEL: Record<string, string> = ROLE_LABELS;
 /** Sessão do formulário: 2 h, renovada enquanto a pessoa trabalha. */
 export const SESSION_MINUTES = 120;
 const MAX_ATTEMPTS = 5;
@@ -143,7 +145,9 @@ export class Employees {
       documents: e.documents.map(documentDto),
       photoId: e.documents.find((d) => d.slot === "PHOTO")?.id ?? null,
       /** conta do portal: INVITED (convite por ativar), ACTIVE, SUSPENDED; null = sem acesso */
-      portalAccess: e.portalUser ? { status: e.portalUser.status, email: e.portalUser.email } : null,
+      portalAccess: e.portalUser ? { status: e.portalUser.status, email: e.portalUser.email, role: e.portalUser.role, roleLabel: ROLE_LABEL[e.portalUser.role] ?? e.portalUser.role } : null,
+      /** o papel no sistema que o tipo define: PROFESSOR | RH (só o responsável dá) | NONE (sem acesso) */
+      systemRole: { value: e.systemRole, label: SYSTEM_ROLES[e.systemRole].label },
       issues,
       complete: Object.keys(issues).length === 0,
     };

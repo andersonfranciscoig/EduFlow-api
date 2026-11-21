@@ -82,7 +82,9 @@ const documentBody = z
     employeeTypeIds: z.array(z.uuid()).max(20).nullish(),
   })
   .meta({ title: "HrDocumentType", description: "Documento pedido: formatos permitidos, tamanho máximo (MB), se aceita vários ficheiros e a que tipos de funcionário se aplica (vazio = todos)." });
-const typeBody = z.object({ name: z.string().min(2).max(60), description: z.string().max(240).nullish() }).meta({ title: "HrEmployeeType", description: "Tipo de funcionário (ex.: Docente)." });
+const typeBody = z
+  .object({ name: z.string().min(2).max(60), description: z.string().max(240).nullish(), systemRole: z.enum(["PROFESSOR", "RH", "NONE"]).nullish() })
+  .meta({ title: "HrEmployeeType", description: "Tipo de funcionário (ex.: Docente) e o papel no sistema (PROFESSOR, RH ou NONE = sem acesso; ao criar, por omissão PROFESSOR; ao alterar, sem o campo fica como está)." });
 const printQuery = z.object({ version: z.coerce.number().int().min(1).optional(), type: z.uuid().optional() });
 const activeBody = z.object({ active: z.boolean() }).meta({ title: "HrActive" });
 const orderBody = z.object({ ids: z.array(z.uuid()).max(60) }).meta({ title: "HrOrder", description: "Todos os ids, pela nova ordem." });

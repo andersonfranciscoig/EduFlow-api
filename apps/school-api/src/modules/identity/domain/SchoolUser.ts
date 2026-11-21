@@ -2,7 +2,11 @@ import type { EmailAddress, FullName, PhoneNumber } from "../../../../../../libs
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import { identityError, type IdentityError } from "./errors";
 
-export const SCHOOL_ROLES = ["DIRETOR", "SECRETARIA", "PROFESSOR"] as const;
+/**
+ * Papéis do portal. PROFESSOR e RH são papéis restritos: só entram nas áreas que lhes são
+ * próprias (o professor no que é dele; o RH só nos Recursos Humanos), seja quais forem as permissões.
+ */
+export const SCHOOL_ROLES = ["DIRETOR", "SECRETARIA", "RH", "PROFESSOR"] as const;
 export type SchoolRole = (typeof SCHOOL_ROLES)[number];
 export type SchoolUserStatus = "INVITED" | "ACTIVE" | "SUSPENDED";
 export type EmailCodePurpose = "ACTIVATION" | "PASSWORD_RESET";
@@ -10,6 +14,7 @@ export type EmailCodePurpose = "ACTIVATION" | "PASSWORD_RESET";
 export const ROLE_LABELS: Record<SchoolRole, string> = {
   DIRETOR: "Direção",
   SECRETARIA: "Secretaria",
+  RH: "Recursos Humanos",
   PROFESSOR: "Professor(a)",
 };
 

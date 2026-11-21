@@ -8,7 +8,7 @@ import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentatio
 import type { Env } from "../../../config/env";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import type { SchoolAccess } from "../../identity/application/ports";
-import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
+import { HrMay, NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { AttendanceSettings } from "../application/AttendanceSettings";
@@ -38,6 +38,7 @@ const candQuery = new ZodValidationPipe(z.object({ aula: z.uuid(), data: day }))
 @ApiBearerAuth()
 @Controller("v1/attendance")
 @UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
+@HrMay()
 export class PendingsController {
   constructor(
     private readonly pendings: Pendings,

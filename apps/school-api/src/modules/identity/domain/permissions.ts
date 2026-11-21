@@ -69,6 +69,14 @@ export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.mana
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 
 /**
+ * O papel Recursos Humanos só pode ter as permissões do RH: o grupo hr e as faltas dos professores
+ * (com o acesso à assiduidade, que elas pedem). As outras áreas não lhe servem (o papel não entra).
+ */
+export const HR_ROLE_PERMISSIONS: Permission[] = [...ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === "hr"), "attendance.access", "attendance.teachers.view", "attendance.teachers.manage"];
+/** O que o RH recebe por omissão quando o responsável lhe dá acesso a partir da ficha (o salário não: é sensível). */
+export const HR_ROLE_DEFAULTS: Permission[] = HR_ROLE_PERMISSIONS.filter((p) => p !== "hr.contracts.salary");
+
+/**
  * Lista a gravar: só permissões conhecidas, sem repetidas; qualquer permissão de um grupo
  * traz consigo a de acesso desse grupo (sem ela as outras não serviriam de nada).
  */

@@ -223,15 +223,16 @@ export class EmployeesController {
   /** Dar/retirar acesso ao portal: um utilizador do colégio (nunca uma sessão de suporte). */
   private staff(u: SchoolAccess) {
     if (u.support) throw new ForbiddenException({ code: "FORBIDDEN", message: "Numa sessão de suporte não se dá acesso ao portal." });
-    return { id: u.id, name: u.fullName };
+    return { id: u.id, name: u.fullName, isOwner: u.isOwner };
   }
 
   @Post(":id/portal-access")
   @HttpCode(HttpStatus.OK)
   @RequirePermission("hr.employees.edit")
   @ApiOperation({
-    summary: "Dar acesso ao portal (conta de professor ligada ao funcionário)",
-    description: "Convite por email (ativação normal: código → senha → 2FA). Se já existir uma conta com o email, liga-se a ela.",
+    summary: "Dar acesso ao portal (conta ligada ao funcionário, com o papel do tipo de funcionário)",
+    description:
+      "O papel vem do tipo: Professor (o RH dá), Recursos Humanos (só o responsável do colégio; com as permissões do RH por omissão) ou Sem acesso (recusa). Convite por email (código → senha → 2FA). Se já existir uma conta com o email, liga-se a ela.",
   })
   async grantAccess(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) employeeId: string) {
     return unwrap(await this.access.grant(new PrismaPortalAccess(t.db), new PrismaUserAdminRepository(t.db), this.staff(u), school(t), employeeId), HR_HTTP);

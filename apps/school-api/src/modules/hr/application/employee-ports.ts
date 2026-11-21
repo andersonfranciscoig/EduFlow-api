@@ -1,5 +1,5 @@
 import type { EmployeeStatus, Entry, PersonalData, Progress, SectionsData, StepKey } from "../domain/employee";
-import type { FormSnapshot, SectionKey } from "../domain/form";
+import type { FormSnapshot, SectionKey, SystemRole } from "../domain/form";
 import type { HistoryRow, NewInvite, School } from "./registration-ports";
 
 export interface EmployeeDocumentRow {
@@ -44,11 +44,13 @@ export interface EmployeeRow {
   updatedAt: Date;
   documents: EmployeeDocumentRow[];
   /** conta do portal ligada (ex.: professor) */
-  portalUser: { id: string; status: string; email: string | null } | null;
+  portalUser: { id: string; status: string; email: string | null; role: string } | null;
+  /** o papel no sistema que o tipo de funcionário define (sem tipo: PROFESSOR) */
+  systemRole: SystemRole;
 }
 
 /** Na lista: sem os dados do formulário. */
-export type EmployeeListRow = Omit<EmployeeRow, "formVersion" | "personal" | "sections" | "documents" | "portalUser"> & { hasPhoto: boolean; photoId: string | null };
+export type EmployeeListRow = Omit<EmployeeRow, "formVersion" | "personal" | "sections" | "documents" | "portalUser" | "systemRole"> & { hasPhoto: boolean; photoId: string | null };
 
 export interface StepPatch {
   personal?: PersonalData;

@@ -6,6 +6,7 @@ import { ZodValidationPipe } from "../../../../../../../libs/kernel/src/presenta
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../../tenancy/tenant-context";
 import { ManageUsers } from "../../application/ManageUsers";
 import type { SchoolAccess } from "../../application/ports";
+import { SCHOOL_ROLES } from "../../domain/SchoolUser";
 import { PrismaUserAdminRepository } from "../../infrastructure/user-admin-repository";
 import { orThrow } from "./http-support";
 import { CurrentUser, NoSupport, SchoolAuthGuard } from "./school-auth";
@@ -13,11 +14,11 @@ import { CurrentUser, NoSupport, SchoolAuthGuard } from "./school-auth";
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const permissions = z.array(z.string().max(60)).max(40);
 const inviteBody = z
-  .object({ fullName: z.string().min(3).max(120), email: z.string().max(254), role: z.enum(["DIRETOR", "SECRETARIA", "PROFESSOR"]), permissions })
+  .object({ fullName: z.string().min(3).max(120), email: z.string().max(254), role: z.enum(SCHOOL_ROLES), permissions })
   .meta({ title: "UserInvite", description: "Convida um utilizador: fica por ativar até entrar no portal com o email (código → senha → 2FA)." });
 const updateBody = z
-  .object({ role: z.enum(["DIRETOR", "SECRETARIA", "PROFESSOR"]), permissions })
-  .meta({ title: "UserAccess", description: "Papel e permissões (substitui as atuais). Qualquer permissão do RH inclui hr.access." });
+  .object({ role: z.enum(SCHOOL_ROLES), permissions })
+  .meta({ title: "UserAccess", description: "Papel e permissões (substitui as atuais). Qualquer permissão do RH inclui hr.access. O papel RH só aceita permissões do RH." });
 
 /**
  * Utilizadores do portal do colégio e as suas permissões.
