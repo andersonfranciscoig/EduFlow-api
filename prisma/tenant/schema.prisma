@@ -435,6 +435,44 @@ model JobRun {
   @@map("job_runs")
 }
 
+/// Justificação de uma falta/atraso pelo professor (PENDING | APPROVED | REJECTED), com comprovativo cifrado opcional.
+model OccurrenceJustification {
+  id              String    @id @db.Uuid
+  occurrenceId    String    @map("occurrence_id") @db.Uuid
+  employeeId      String    @map("employee_id") @db.Uuid
+  reason          String
+  proofName       String?   @map("proof_name")
+  proofMimeType   String?   @map("proof_mime_type")
+  proofSize       Int?      @map("proof_size")
+  proofSha256     String?   @map("proof_sha256")
+  proofStorageKey String?   @map("proof_storage_key")
+  status          String    @default("PENDING")
+  decisionNote    String?   @map("decision_note")
+  decidedById     String?   @map("decided_by_id") @db.Uuid
+  decidedAt       DateTime? @map("decided_at")
+  createdById     String?   @map("created_by_id") @db.Uuid
+  createdAt       DateTime  @map("created_at")
+
+  @@map("occurrence_justifications")
+}
+
+/// Alerta de assiduidade de um aluno (limite de faltas ou faltas seguidas), enviado uma vez por limite.
+model AttendanceAlert {
+  id        String   @id @db.Uuid
+  studentId String   @map("student_id") @db.Uuid
+  groupId   String   @map("group_id") @db.Uuid
+  /// ABSENCES | STREAK
+  rule      String
+  dedupeKey String   @map("dedupe_key")
+  count     Int
+  sessionId String?  @map("session_id") @db.Uuid
+  createdAt DateTime @map("created_at")
+
+  @@unique([studentId, dedupeKey], map: "attendance_alerts_key")
+  @@index([groupId, createdAt], map: "attendance_alerts_group_idx")
+  @@map("attendance_alerts")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt

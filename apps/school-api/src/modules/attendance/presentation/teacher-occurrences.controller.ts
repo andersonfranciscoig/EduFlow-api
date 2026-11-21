@@ -9,7 +9,9 @@ import type { SchoolAccess } from "../../identity/application/ports";
 import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { AttendanceSettings } from "../application/AttendanceSettings";
+import { Justifications } from "../application/Justifications";
 import { TeacherOccurrences } from "../application/TeacherOccurrences";
+import { PrismaJustificationsRepository } from "../infrastructure/prisma-justifications";
 import type { OccurrenceAction } from "../domain/occurrences";
 import { PrismaAttendanceSettingsRepository } from "../infrastructure/prisma-attendance-settings";
 import { PrismaOccurrencesRepository } from "../infrastructure/prisma-occurrences";
@@ -48,6 +50,7 @@ export class TeacherOccurrencesController {
     private readonly occurrences: TeacherOccurrences,
     private readonly settings: AttendanceSettings,
     private readonly notifier: Notifier,
+    private readonly justifications: Justifications,
   ) {}
 
   private repo(t: TenantContext) {
@@ -81,7 +84,8 @@ export class TeacherOccurrencesController {
   @RequirePermission("attendance.teachers.view")
   @ApiOperation({ summary: "Uma ocorrência, as ações possíveis e o histórico (antes → depois, motivo)" })
   async detail(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) occurrenceId: string) {
-    return unwrap(await this.occurrences.detail(this.repo(t), await this.actor(t, u), occurrenceId), ATTENDANCE_HTTP);
+    const [d, justifications] = await Promise.all([this.occurrences.detail(this.repo(t), await this.actor(t, u), occurrenceId), this.justifications.forOccurrence(new PrismaJustificationsRepository(t.db), occurrenceId)]);
+    return { ...unwrap(d, ATTENDANCE_HTTP), justifications };
   }
 
   @Post("occurrences/:id/:action")

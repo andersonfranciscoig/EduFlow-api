@@ -6,6 +6,11 @@ import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-ht
 import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi";
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
+import { AttendanceSettings } from "../../attendance/application/AttendanceSettings";
+import { StudentAlerts } from "../../attendance/application/StudentAlerts";
+import { localNow } from "../../attendance/domain/presence";
+import { PrismaAttendanceSettingsRepository } from "../../attendance/infrastructure/prisma-attendance-settings";
+import { PrismaStudentAttendanceRepository } from "../../attendance/infrastructure/prisma-student-attendance";
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import type { SchoolAccess } from "../../identity/application/ports";
@@ -144,7 +149,20 @@ export class FamilyStudentsController {
     private readonly stores: HrFileStores,
     private readonly timetable: Timetable,
     private readonly renewals: Renewals,
+    private readonly alerts: StudentAlerts,
+    private readonly attendanceSettings: AttendanceSettings,
   ) {}
+
+  @Get(":id/attendance")
+  @ApiOperation({ summary: "A assiduidade do aluno na turma atual: totais, por disciplina, faltas e atrasos (os mais recentes) e os alertas" })
+  async attendance(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string) {
+    // familyGroup confirma o acesso ao aluno (e que tem turma)
+    const { groupId: latest } = unwrap(await this.students.familyGroup(repo(t), f.account.id, studentId), STUDENTS_HTTP);
+    const rules = await this.attendanceSettings.rules(new PrismaAttendanceSettingsRepository(t.db));
+    const att = new PrismaStudentAttendanceRepository(t.db);
+    const groupId = (await att.attendanceGroup(studentId, localNow(rules.timeZone, new Date()).slice(0, 10))) ?? latest;
+    return unwrap(await this.alerts.familyView(att, rules, studentId, groupId), STUDENTS_HTTP);
+  }
 
   @Get("journey")
   @ApiOperation({ summary: "O percurso: os alunos matriculados da conta, a matrícula atual e as aulas do dia (ou de segunda, ao fim de semana)" })

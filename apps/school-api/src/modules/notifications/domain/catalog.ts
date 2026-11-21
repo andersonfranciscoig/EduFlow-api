@@ -64,6 +64,24 @@ export const KINDS = {
     defaultEmail: true,
     emailAvailable: true,
   },
+  JUSTIFICATION_SUBMITTED: {
+    audience: "STAFF",
+    label: "Justificações dos professores",
+    hint: "Um professor justificou uma falta ou atraso: fica à espera da decisão do RH.",
+    to: "O RH (quem gere as faltas dos professores) e o responsável",
+    defaultEnabled: true,
+    defaultEmail: false,
+    emailAvailable: true,
+  },
+  ATTENDANCE_ALERT: {
+    audience: "STAFF",
+    label: "Alertas de assiduidade dos alunos",
+    hint: "Um aluno chegou ao limite de faltas ou de faltas seguidas das regras do colégio (uma vez por limite).",
+    to: "O diretor de turma",
+    defaultEnabled: true,
+    defaultEmail: true,
+    emailAvailable: true,
+  },
   // ---- família (área da família)
   APPLICATION_CORRECTION: { audience: "FAMILY", label: "Correções pedidas", hint: "A secretaria pede correções numa inscrição.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
   APPLICATION_APPROVED: { audience: "FAMILY", label: "Inscrição aprovada", hint: "A inscrição foi aprovada.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
@@ -72,6 +90,15 @@ export const KINDS = {
   HANDOVER_INVITED: { audience: "FAMILY", label: "Convite ao aluno maior", hint: "O encarregado convidou o aluno maior a gerir a conta.", to: "O encarregado", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
   HANDOVER_DONE: { audience: "FAMILY", label: "Conta passada ao aluno", hint: "O aluno maior passou a gerir a própria conta.", to: "O encarregado", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
   HANDOVER_WELCOME: { audience: "FAMILY", label: "Boas-vindas ao aluno maior", hint: "O registo de aluno passou a ser do próprio aluno.", to: "O aluno", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
+  STUDENT_ATTENDANCE_ALERT: {
+    audience: "FAMILY",
+    label: "Alertas de assiduidade",
+    hint: "O aluno chegou ao limite de faltas ou de faltas seguidas das regras do colégio.",
+    to: "O encarregado (aluno menor) ou o próprio aluno (maior, com conta)",
+    defaultEnabled: true,
+    defaultEmail: false,
+    emailAvailable: false,
+  },
 } satisfies Record<string, KindInfo>;
 
 export type Kind = keyof typeof KINDS;

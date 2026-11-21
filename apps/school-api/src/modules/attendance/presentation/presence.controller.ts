@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Logger, Param, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -10,8 +10,13 @@ import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from ".
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { AttendanceSettings } from "../application/AttendanceSettings";
 import { Presence } from "../application/Presence";
+import { StudentAlerts } from "../application/StudentAlerts";
+import { localNow } from "../domain/presence";
+import type { AttendanceRules } from "../domain/settings";
 import { PrismaAttendanceSettingsRepository } from "../infrastructure/prisma-attendance-settings";
 import { PrismaPresenceRepository } from "../infrastructure/prisma-presence";
+import { PrismaStudentAttendanceRepository } from "../infrastructure/prisma-student-attendance";
+import { notifyFamily } from "../../family/infrastructure/family-notify";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { ATTENDANCE_HTTP } from "./attendance-settings.controller";
 
@@ -28,6 +33,17 @@ const summaryBody = z.object({ summary: z.string().max(4000).nullable() }).meta(
 const correctBody = z.object({ marks: z.array(mark).max(200), reason: z.string().max(300) }).meta({ title: "LessonAttendanceCorrection", description: "Correção pela gestão: todos os alunos registados e o motivo." });
 
 const rulesOf = (settings: AttendanceSettings, t: TenantContext) => settings.rules(new PrismaAttendanceSettingsRepository(t.db));
+const logger = new Logger("StudentAlerts");
+
+/** Depois de gravar as presenças: os alertas de assiduidade (um erro aqui não desfaz o registo). */
+async function checkAlerts(alerts: StudentAlerts, notifier: Notifier, t: TenantContext, rules: AttendanceRules, sessionId: string) {
+  try {
+    const notify = notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName });
+    await alerts.afterSession(new PrismaStudentAttendanceRepository(t.db), rules, sessionId, localNow(rules.timeZone, new Date()).slice(0, 10), notify, (n) => notifyFamily(t.db, n));
+  } catch (e) {
+    logger.warn(`${t.entry.slug}: alertas de assiduidade falharam (${(e as Error).message})`);
+  }
+}
 
 /**
  * Presenças — o PROFESSOR (conta ligada a um funcionário): as suas aulas, a lista da turma,
@@ -42,6 +58,8 @@ export class MyPresenceController {
   constructor(
     private readonly presence: Presence,
     private readonly settings: AttendanceSettings,
+    private readonly alerts: StudentAlerts,
+    private readonly notifier: Notifier,
   ) {}
 
   @Get("lessons")
@@ -63,7 +81,10 @@ export class MyPresenceController {
   @ApiOperation({ summary: "Submeter (ou corrigir até ao fim do prazo) as presenças de uma aula" })
   @ApiBody({ schema: openApi(submitBody) })
   async submit(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("lessonId", id) lessonId: string, @Query("data", dayPipe) date: string, @Body(new ZodValidationPipe(submitBody)) body: z.infer<typeof submitBody>) {
-    return unwrap(await this.presence.submit(new PrismaPresenceRepository(t.db), await rulesOf(this.settings, t), { userId: u.id }, lessonId, date, body.marks, body.summary), ATTENDANCE_HTTP);
+    const rules = await rulesOf(this.settings, t);
+    const r = unwrap(await this.presence.submit(new PrismaPresenceRepository(t.db), rules, { userId: u.id }, lessonId, date, body.marks, body.summary), ATTENDANCE_HTTP);
+    await checkAlerts(this.alerts, this.notifier, t, rules, r.sessionId);
+    return r;
   }
 
   @Put("sessions/:sessionId/summary")
@@ -130,6 +151,7 @@ export class StudentPresenceController {
     private readonly presence: Presence,
     private readonly settings: AttendanceSettings,
     private readonly notifier: Notifier,
+    private readonly alerts: StudentAlerts,
   ) {}
 
   @Get("groups")
@@ -160,6 +182,8 @@ export class StudentPresenceController {
   @ApiBody({ schema: openApi(correctBody) })
   async correct(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("sessionId", id) sessionId: string, @Body(new ZodValidationPipe(correctBody)) body: z.infer<typeof correctBody>) {
     const notify = this.notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName });
-    return unwrap(await this.presence.correct(new PrismaPresenceRepository(t.db), { id: u.id, canEdit: true }, sessionId, body, notify), ATTENDANCE_HTTP);
+    const r = unwrap(await this.presence.correct(new PrismaPresenceRepository(t.db), { id: u.id, canEdit: true }, sessionId, body, notify), ATTENDANCE_HTTP);
+    await checkAlerts(this.alerts, this.notifier, t, await rulesOf(this.settings, t), sessionId);
+    return r;
   }
 }
