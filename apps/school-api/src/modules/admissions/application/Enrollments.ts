@@ -2,6 +2,7 @@ import type { Clock } from "../../../../../../libs/kernel/src/application/ports"
 import { fail, ok } from "../../../../../../libs/kernel/src/domain/Result";
 import type { FamilyAccountRow } from "../../family/application/ports";
 import { luandaToday } from "../../family/domain/family";
+import { CHARGED_AT_LABELS, chargesAt } from "../../finance/domain/pricing";
 import { gradeLabel } from "../../pedagogy/domain/academic";
 import { SHIFTS } from "../domain/applications";
 import { checkConfig, ENROLLMENT_BY, ENROLLMENT_MODES, type EnrollmentConfig, formatEnrollmentNumber, formatStudentNumber } from "../domain/enrollment";
@@ -105,6 +106,30 @@ export class Enrollments {
 
   // ---------------------------------------------------------------- confirmar a matrícula
 
+  /**
+   * O que se paga na inscrição e no ato da matrícula (ou da renovação), para este aluno nesta classe,
+   * pelo preçário do colégio. Ainda não há pagamento no sistema: só se informa (paga-se na secretaria).
+   * Renovação = aluno que continua; as outras inscrições = aluno novo.
+   */
+  async charges(repo: EnrollmentsRepository, classId: string | null, processType: string) {
+    const student = processType === "RENOVACAO" ? "CONTINUANTES" : "NOVOS";
+    const fees = classId ? await repo.fees(classId) : [];
+    const application = chargesAt(fees, "INSCRICAO", student);
+    const enrollment = chargesAt(fees, "MATRICULA", student);
+    return {
+      student,
+      studentLabel: student === "CONTINUANTES" ? "aluno que continua" : "aluno novo",
+      /** sem classe escolhida ainda não se sabe o preço */
+      known: !!classId,
+      application,
+      enrollment,
+      /** nada a pagar nem na inscrição nem na matrícula (colégio gratuito, ou tudo a 0 Kz) */
+      free: application.free && enrollment.free,
+      online: false,
+      notice: "O pagamento pela plataforma chega em breve. Por agora, os pagamentos fazem-se na secretaria do colégio (indique o n.º da inscrição).",
+    };
+  }
+
   /** O que a secretaria vê para confirmar: vagas, turmas com lugares, a vaga guardada, o preçário. */
   async options(repo: EnrollmentsRepository, applicationId: string) {
     const [seats, cfg] = await Promise.all([repo.seats(applicationId, this.clock.now()), repo.config()]);
@@ -117,7 +142,12 @@ export class Enrollments {
       available: seats.available,
       held: seats.heldForApplication ? { expiresAt: seats.heldForApplication.expiresAt?.toISOString() ?? null, expired: seats.heldForApplication.expired } : null,
       groups: seats.groups.map((g) => ({ id: g.id, name: g.name, shift: g.shift, shiftLabel: SHIFTS[g.shift], capacity: g.capacity, confirmed: g.confirmed, free: Math.max(0, (g.capacity ?? 0) - g.confirmed) })),
-      fees: fees.map((f) => ({ ...f, billingLabel: f.billing === "MENSAL" ? "Mensal" : "Única", appliesToLabel: { TODOS: "Todos", NOVOS: "Alunos novos", CONTINUANTES: "Continuantes" }[f.appliesTo] })),
+      fees: fees.map((f) => ({
+        ...f,
+        billingLabel: f.billing === "MENSAL" ? "Mensal" : "Única",
+        appliesToLabel: { TODOS: "Todos", NOVOS: "Alunos novos", CONTINUANTES: "Continuantes" }[f.appliesTo],
+        chargedAtLabel: f.chargedAt === "MATRICULA" && f.billing === "MENSAL" ? "1.ª mensalidade na matrícula" : CHARGED_AT_LABELS[f.chargedAt],
+      })),
     };
   }
 

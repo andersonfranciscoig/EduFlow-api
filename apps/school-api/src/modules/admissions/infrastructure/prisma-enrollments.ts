@@ -203,12 +203,18 @@ export class PrismaEnrollmentsRepository implements EnrollmentsRepository {
   }
 
   async fees(classId: string): Promise<ClassFeeRow[]> {
-    const rows = await this.db.$queryRaw<{ name: string; billing: string; applies_to: string; amount: number }[]>`
-      SELECT f.name, f.billing, f.applies_to, cf.amount
+    const rows = await this.db.$queryRaw<{ name: string; billing: string; applies_to: string; charged_at: string; amount: number }[]>`
+      SELECT f.name, f.billing, f.applies_to, f.charged_at, cf.amount
         FROM class_fees cf JOIN fee_items f ON f.id = cf.fee_item_id
        WHERE cf.class_id = ${classId}::uuid AND f.archived_at IS NULL
        ORDER BY f.position, f.name`;
-    return rows.map((f) => ({ name: f.name, billing: f.billing as ClassFeeRow["billing"], appliesTo: f.applies_to as ClassFeeRow["appliesTo"], amount: f.amount }));
+    return rows.map((f) => ({
+      name: f.name,
+      billing: f.billing as ClassFeeRow["billing"],
+      appliesTo: f.applies_to as ClassFeeRow["appliesTo"],
+      chargedAt: f.charged_at as ClassFeeRow["chargedAt"],
+      amount: f.amount,
+    }));
   }
 
   /**
