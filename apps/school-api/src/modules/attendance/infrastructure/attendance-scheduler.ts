@@ -5,12 +5,15 @@ import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { DeadlineJob } from "../application/DeadlineJob";
+import { DigestJob } from "../application/DigestJob";
 import { PrismaAttendanceSettingsRepository } from "./prisma-attendance-settings";
 import { PrismaDeadlineRepository } from "./prisma-deadline";
+import { PrismaDigestsRepository } from "./prisma-digests";
 
 /**
  * O ciclo das tarefas automáticas: de JOBS_INTERVAL_MS em JOBS_INTERVAL_MS percorre os colégios
- * ativos e corre o prazo das presenças em cada um (um de cada vez; a falha de um não para os outros).
+ * ativos e corre, em cada um, o prazo das presenças e depois os resumos diários (um colégio de cada
+ * vez; a falha de um, ou de uma tarefa, não para as outras).
  * Nunca se sobrepõe a si próprio; entre instâncias, a BD de cada colégio decide quem corre
  * (registo em job_runs com bloqueio). Desligado com JOBS_ENABLED=false (ex.: testes).
  */
@@ -21,12 +24,14 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
   private busy = false;
   /** colégios cuja BD ainda não tem as tabelas da assiduidade (já avisados) */
   private readonly missing = new Set<string>();
+  private readonly missingDigests = new Set<string>();
 
   constructor(
     private readonly config: ConfigService<Env, true>,
     private readonly directory: TenantDirectory,
     private readonly connections: TenantConnections,
     private readonly job: DeadlineJob,
+    private readonly digests: DigestJob,
     private readonly notifier: Notifier,
   ) {}
 
@@ -76,11 +81,40 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
           }
           this.logger.warn(`prazo das presenças falhou em ${slug}: ${(e as Error).message}`);
         }
+        await this.runDigests(slug);
       }
     } catch (e) {
       this.logger.warn(`não foi possível ler os colégios: ${(e as Error).message}`);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Os resumos diários de um colégio (à parte: uma falha no prazo das presenças não os impede). */
+  private async runDigests(slug: string) {
+    try {
+      const entry = await this.directory.findBySlug(slug);
+      if (!entry) return;
+      const db = this.connections.get(entry);
+      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('daily_digests') IS NOT NULL AS ok`;
+      if (!ready?.ok) {
+        if (!this.missingDigests.has(slug)) this.logger.warn(`${slug}: falta a migração 0037 (resumos diários) — reinicie o provisioner (aplica-a ao arrancar).`);
+        this.missingDigests.add(slug);
+        return;
+      }
+      this.missingDigests.delete(slug);
+      const tenant = { slug: entry.slug, name: entry.schoolName };
+      await this.digests.run(
+        new PrismaDigestsRepository(db),
+        new PrismaDeadlineRepository(db),
+        new PrismaAttendanceSettingsRepository(db),
+        this.notifier.for(db, tenant),
+        (m) => this.notifier.familyEmail(tenant, { ...m, kind: "FAMILY_DAILY_DIGEST" }),
+        "SCHEDULER",
+        new Date(),
+      );
+    } catch (e) {
+      this.logger.warn(`resumos diários falharam em ${slug}: ${(e as Error).message}`);
     }
   }
 }
