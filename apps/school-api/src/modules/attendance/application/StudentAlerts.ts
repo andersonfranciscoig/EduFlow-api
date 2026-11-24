@@ -37,8 +37,9 @@ export function currentStreak(marks: StandingRow["marks"]) {
 /**
  * ALERTAS DE ASSIDUIDADE (fase P5). Depois de registar ou corrigir as presenças de uma aula, para
  * cada aluno que faltou: se chegou ao limite de faltas ou de faltas seguidas das regras do colégio,
- * avisa (uma vez por limite) o diretor de turma e a família — o encarregado se o aluno é menor,
- * o próprio aluno se é maior e tem a conta (senão, o encarregado).
+ * avisa (uma vez por limite) o diretor de turma e a família — o encarregado que o gere se é menor,
+ * o próprio aluno se é maior e tem conta. A mesma regra do acesso na área da família (canAccessStudent):
+ * só o encarregado que gere o aluno, e só enquanto é menor; um aluno maior sem conta não tem destinatário.
  */
 export class StudentAlerts {
   constructor(
@@ -73,13 +74,13 @@ export class StudentAlerts {
           });
         if (family) {
           const adult = ageOn(s.birthDate, today) >= 18;
-          const to = adult && s.accountId ? [s.accountId] : await repo.guardianAccounts(s.id);
+          const to = adult ? (s.accountId ? [s.accountId] : []) : await repo.guardianAccounts(s.id);
           for (const accountId of to)
             await family({
               accountId,
               kind: "STUDENT_ATTENDANCE_ALERT",
-              title: adult && s.accountId ? "Alerta de assiduidade" : `Alerta de assiduidade · ${firstNames(s.fullName)}`,
-              body: `${adult && s.accountId ? "Na turma " + info.groupName + ", " : firstNames(s.fullName) + " (" + info.groupName + ") "}${h.text}. Veja o detalhe em Assiduidade.`,
+              title: adult ? "Alerta de assiduidade" : `Alerta de assiduidade · ${firstNames(s.fullName)}`,
+              body: `${adult ? "Na turma " + info.groupName + ", " : firstNames(s.fullName) + " (" + info.groupName + ") "}${h.text}. Veja o detalhe em Assiduidade.`,
               link: `/familia/assiduidade?aluno=${s.id}`,
               studentId: s.id,
               now,

@@ -475,6 +475,37 @@ model AttendanceAlert {
   @@map("attendance_alerts")
 }
 
+/// Resumo diário de uma pessoa (STAFF: school_users; FAMILY: family_accounts) — um por dia.
+model DailyDigest {
+  id            String   @id @db.Uuid
+  audience      String
+  recipientId   String   @map("recipient_id") @db.Uuid
+  recipientName String?  @map("recipient_name")
+  day           DateTime @db.Date
+  dueAt         DateTime @map("due_at") @db.Timestamp(0)
+  headline      String
+  content       Json
+  /// NONE | PENDING | SENT | FAILED (só o email da família)
+  emailState    String   @default("NONE") @map("email_state")
+  emailAttempts Int      @default(0) @map("email_attempts")
+  createdAt     DateTime @map("created_at")
+
+  @@unique([audience, recipientId, day], map: "daily_digests_recipient_day_key")
+  @@index([day], map: "daily_digests_day_idx")
+  @@map("daily_digests")
+}
+
+/// Preferência de email da conta da família, por tipo de notificação.
+model FamilyNotificationPreference {
+  accountId String   @map("account_id") @db.Uuid
+  kind      String
+  email     Boolean
+  updatedAt DateTime @map("updated_at")
+
+  @@id([accountId, kind])
+  @@map("family_notification_preferences")
+}
+
 /// Configuração da assiduidade do colégio (uma linha).
 model AttendanceSettings {
   id               Int      @id @default(1) @db.SmallInt

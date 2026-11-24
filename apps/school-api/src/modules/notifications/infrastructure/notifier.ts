@@ -15,6 +15,13 @@ export interface StaffNotice {
   link?: string | null;
   /** o mesmo aviso (mesma chave) não chega duas vezes à mesma pessoa */
   dedupeKey?: string | null;
+  /** o detalhe, só no email (na plataforma fica o resumo no corpo e a ligação) */
+  sections?: EmailSection[];
+}
+
+export interface EmailSection {
+  title: string;
+  lines: string[];
 }
 
 /** Porta que os serviços usam (já ligada ao colégio do pedido). */
@@ -22,12 +29,21 @@ export interface StaffNotify {
   notify(n: StaffNotice): Promise<{ delivered: number }>;
 }
 
-const frame = (school: string, title: string, body: string, url: string | null) => `<!doctype html><html lang="pt"><body style="margin:0;background:#DAF1DE;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#051F20">
+const sectionsHtml = (list: EmailSection[]) =>
+  list
+    .map(
+      (s) =>
+        `<p style="margin:18px 0 6px;font-size:13px;font-weight:600;color:#163832">${escapeHtml(s.title)}</p><ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.6;color:#235347">${s.lines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`,
+    )
+    .join("");
+const sectionsText = (list: EmailSection[]) => list.map((s) => `\n\n${s.title}\n${s.lines.map((l) => `- ${l}`).join("\n")}`).join("");
+
+const frame = (school: string, title: string, body: string, url: string | null, sections: EmailSection[] = [], cta = "Abrir no portal") => `<!doctype html><html lang="pt"><body style="margin:0;background:#DAF1DE;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#051F20">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:24px;overflow:hidden">
 <tr><td style="background:#0B2B26;padding:22px 28px;color:#DAF1DE;font-size:15px;font-weight:600">EduFlow <span style="color:#8EB69B;font-weight:400">· ${escapeHtml(school)}</span></td></tr>
-<tr><td style="padding:28px 28px 8px"><p style="margin:0 0 10px;font-size:18px;font-weight:600">${escapeHtml(title)}</p><p style="margin:0;font-size:14px;line-height:1.6;color:#235347">${escapeHtml(body)}</p></td></tr>
-<tr><td style="padding:20px 28px 30px">${url ? `<a href="${escapeHtml(url)}" style="display:inline-block;background:#163832;color:#DAF1DE;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:999px">Abrir no portal</a>` : ""}
+<tr><td style="padding:28px 28px 8px"><p style="margin:0 0 10px;font-size:18px;font-weight:600">${escapeHtml(title)}</p><p style="margin:0;font-size:14px;line-height:1.6;color:#235347">${escapeHtml(body)}</p>${sectionsHtml(sections)}</td></tr>
+<tr><td style="padding:20px 28px 30px">${url ? `<a href="${escapeHtml(url)}" style="display:inline-block;background:#163832;color:#DAF1DE;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:999px">${escapeHtml(cta)}</a>` : ""}
 <p style="margin:18px 0 0;font-size:12px;line-height:1.6;color:#8EB69B">Pode deixar de receber estes emails em Notificações → Preferências.</p></td></tr>
 </table></td></tr></table></body></html>`;
 
@@ -96,8 +112,8 @@ export class Notifier {
         await this.mailer.send({
           to: { email: u.email, name: u.full_name },
           subject: `${title} · ${tenant.name ?? "EduFlow"}`,
-          html: frame(tenant.name ?? "EduFlow", title, body ?? "", url),
-          text: `${title}\n\n${body ?? ""}${url ? `\n\nAbrir no portal: ${url}` : ""}`,
+          html: frame(tenant.name ?? "EduFlow", title, body ?? "", url, n.sections),
+          text: `${title}\n\n${body ?? ""}${sectionsText(n.sections ?? [])}${url ? `\n\nAbrir no portal: ${url}` : ""}`,
           tags: [`notify-${n.kind.toLowerCase()}`],
         });
         await log("EMAIL", "SENT", id, u.email, null);
@@ -107,5 +123,18 @@ export class Notifier {
       }
     }
     return { delivered };
+  }
+
+  /** Email para uma conta da família (quem chama confirma o tipo e a preferência, e regista o envio). */
+  async familyEmail(tenant: { slug: string; name?: string }, m: { to: { email: string; name: string }; kind: Kind; title: string; body: string; link: string; sections: EmailSection[] }) {
+    const school = tenant.name ?? "EduFlow";
+    const url = `${this.portalUrlTemplate.replace("{slug}", tenant.slug)}${m.link}`;
+    await this.mailer.send({
+      to: m.to,
+      subject: `${m.title} · ${school}`,
+      html: frame(school, m.title, m.body, url, m.sections, "Abrir na área da família"),
+      text: `${m.title}\n\n${m.body}${sectionsText(m.sections)}\n\nAbrir na área da família: ${url}`,
+      tags: [`notify-${m.kind.toLowerCase()}`],
+    });
   }
 }

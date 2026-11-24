@@ -52,11 +52,11 @@ export class PrismaStudentAttendanceRepository {
     });
   }
 
-  /** As contas dos encarregados do aluno (com acesso à área da família). */
+  /** As contas dos encarregados que GEREM o aluno (os outros não têm acesso aos dados dele na área da família). */
   async guardianAccounts(studentId: string) {
     const r = await this.db.$queryRaw<{ account_id: string }[]>`
-      SELECT DISTINCT g.account_id FROM student_guardians sg JOIN guardians g ON g.id = sg.guardian_id
-       WHERE sg.student_id = ${studentId}::uuid AND g.account_id IS NOT NULL`;
+      SELECT DISTINCT g.account_id FROM student_guardians sg JOIN guardians g ON g.id = sg.guardian_id JOIN family_accounts a ON a.id = g.account_id AND a.status = 'ACTIVE'
+       WHERE sg.student_id = ${studentId}::uuid AND sg.can_manage`;
     return r.map((x) => x.account_id);
   }
 

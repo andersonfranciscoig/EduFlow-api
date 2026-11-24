@@ -13,7 +13,7 @@ export interface KindInfo {
   to: string;
   defaultEnabled: boolean;
   defaultEmail: boolean;
-  /** pode ir por email (as da família têm, para já, os emails próprios de cada processo) */
+  /** pode ir por email (na família, para já, só o resumo diário; os processos têm emails próprios) */
   emailAvailable: boolean;
 }
 
@@ -82,6 +82,15 @@ export const KINDS = {
     defaultEmail: true,
     emailAvailable: true,
   },
+  DAILY_DIGEST: {
+    audience: "STAFF",
+    label: "Resumo diário",
+    hint: "Um por dia, 1 hora depois da última aula: as aulas e presenças do dia e, para o diretor de turma, a assiduidade da turma.",
+    to: "Professores e diretores de turma (com conta no portal)",
+    defaultEnabled: true,
+    defaultEmail: false,
+    emailAvailable: true,
+  },
   // ---- família (área da família)
   APPLICATION_CORRECTION: { audience: "FAMILY", label: "Correções pedidas", hint: "A secretaria pede correções numa inscrição.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
   APPLICATION_APPROVED: { audience: "FAMILY", label: "Inscrição aprovada", hint: "A inscrição foi aprovada.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
@@ -94,10 +103,19 @@ export const KINDS = {
     audience: "FAMILY",
     label: "Alertas de assiduidade",
     hint: "O aluno chegou ao limite de faltas ou de faltas seguidas das regras do colégio.",
-    to: "O encarregado (aluno menor) ou o próprio aluno (maior, com conta)",
+    to: "O encarregado que gere o aluno (menor) ou o próprio aluno (maior, com conta)",
     defaultEnabled: true,
     defaultEmail: false,
     emailAvailable: false,
+  },
+  FAMILY_DAILY_DIGEST: {
+    audience: "FAMILY",
+    label: "Resumo diário",
+    hint: "Um por dia, 1 hora depois da última aula: presenças, faltas, atrasos e sumários do dia.",
+    to: "O encarregado que gere o aluno (menor) ou o próprio aluno (maior, com conta)",
+    defaultEnabled: true,
+    defaultEmail: false,
+    emailAvailable: true,
   },
 } satisfies Record<string, KindInfo>;
 
