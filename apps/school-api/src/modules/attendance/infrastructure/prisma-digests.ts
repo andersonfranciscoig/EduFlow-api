@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
+import { lessonsSuspended } from "../../exams/infrastructure/exam-break";
 import { notifyFamily } from "../../family/infrastructure/family-notify";
 import type { DayNotice, DigestContent, GroupDay, StudentDay, TeacherLesson } from "../domain/digest";
 import type { PresenceStatus } from "../domain/presence";
@@ -42,7 +43,8 @@ const PLANNED = (days: string[]) => Prisma.sql`
     JOIN subjects s ON s.id = l.subject_id
     LEFT JOIN lesson_substitutions sub ON sub.lesson_id = l.id AND sub.day = d.day
     LEFT JOIN lesson_sessions ss ON ss.group_id = l.group_id AND ss.day = d.day AND ss.starts_at = date_trunc('minute', p.starts_at::interval)::time
-   WHERE NOT EXISTS (SELECT 1 FROM school_closures c WHERE c.academic_year_id = y.id AND d.day BETWEEN c.starts_on AND c.ends_on)`;
+   WHERE NOT EXISTS (SELECT 1 FROM school_closures c WHERE c.academic_year_id = y.id AND d.day BETWEEN c.starts_on AND c.ends_on)
+     AND (ss.id IS NOT NULL OR NOT ${lessonsSuspended("l.group_id", "d.day")})`;
 
 /** As contas com acesso aos dados de cada aluno: o próprio (maior, com conta) ou o encarregado que o gere (menor). */
 const RECIPIENTS = Prisma.sql`

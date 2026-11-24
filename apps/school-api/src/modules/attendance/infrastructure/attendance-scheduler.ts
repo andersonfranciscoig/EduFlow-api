@@ -3,9 +3,13 @@ import { ConfigService } from "@nestjs/config";
 import type { Env } from "../../../config/env";
 import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
+import { ExamNotices } from "../../exams/application/ExamNotices";
+import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { DeadlineJob } from "../application/DeadlineJob";
 import { DigestJob } from "../application/DigestJob";
+import { AttendanceSettings } from "../application/AttendanceSettings";
+import { localNow } from "../domain/presence";
 import { PrismaAttendanceSettingsRepository } from "./prisma-attendance-settings";
 import { PrismaDeadlineRepository } from "./prisma-deadline";
 import { PrismaDigestsRepository } from "./prisma-digests";
@@ -33,6 +37,8 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     private readonly job: DeadlineJob,
     private readonly digests: DigestJob,
     private readonly notifier: Notifier,
+    private readonly examNotices: ExamNotices,
+    private readonly settings: AttendanceSettings,
   ) {}
 
   onApplicationBootstrap() {
@@ -61,8 +67,8 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
           const entry = await this.directory.findBySlug(slug);
           if (!entry) continue;
           const db = this.connections.get(entry);
-          // BD ainda sem as migrações 0030/0031? não tenta (sem erros no log a cada minuto)
-          const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT (to_regclass('job_runs') IS NOT NULL AND to_regclass('staff_notifications') IS NOT NULL) AS ok`;
+          // BD ainda sem as migrações da assiduidade ou das provas? não tenta (sem erros no log a cada minuto)
+          const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT (to_regclass('job_runs') IS NOT NULL AND to_regclass('staff_notifications') IS NOT NULL AND to_regclass('exam_notices') IS NOT NULL) AS ok`;
           if (!ready?.ok) {
             if (!this.missing.has(slug)) this.logger.warn(`${slug}: faltam migrações da assiduidade na BD do colégio — reinicie o provisioner (aplica-as ao arrancar). Até lá, o prazo das presenças não corre aqui.`);
             this.missing.add(slug);
@@ -82,11 +88,30 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
           this.logger.warn(`prazo das presenças falhou em ${slug}: ${(e as Error).message}`);
         }
         await this.runDigests(slug);
+        await this.runExamNotices(slug);
       }
     } catch (e) {
       this.logger.warn(`não foi possível ler os colégios: ${(e as Error).message}`);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Os avisos das provas que ficaram por entregar (a entrega normal é logo a seguir a cada alteração). */
+  private async runExamNotices(slug: string) {
+    try {
+      const entry = await this.directory.findBySlug(slug);
+      if (!entry) return;
+      const db = this.connections.get(entry);
+      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('exam_notices') IS NOT NULL AS ok`;
+      if (!ready?.ok) return;
+      const now = new Date();
+      const repo = PrismaExamsRepository.for(db);
+      if (!(await repo.pendingNotices(now))) return;
+      const rules = await this.settings.rules(new PrismaAttendanceSettingsRepository(db));
+      await this.examNotices.deliver(repo, this.notifier.for(db, { slug: entry.slug, name: entry.schoolName }), localNow(rules.timeZone, now).slice(0, 10), now);
+    } catch (e) {
+      this.logger.warn(`avisos das provas falharam em ${slug}: ${(e as Error).message}`);
     }
   }
 
@@ -96,9 +121,9 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
       const entry = await this.directory.findBySlug(slug);
       if (!entry) return;
       const db = this.connections.get(entry);
-      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('daily_digests') IS NOT NULL AS ok`;
+      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT (to_regclass('daily_digests') IS NOT NULL AND to_regclass('exam_notices') IS NOT NULL) AS ok`;
       if (!ready?.ok) {
-        if (!this.missingDigests.has(slug)) this.logger.warn(`${slug}: falta a migração 0037 (resumos diários) — reinicie o provisioner (aplica-a ao arrancar).`);
+        if (!this.missingDigests.has(slug)) this.logger.warn(`${slug}: faltam as migrações 0037/0038 (resumos diários, provas) — reinicie o provisioner (aplica-as ao arrancar).`);
         this.missingDigests.add(slug);
         return;
       }

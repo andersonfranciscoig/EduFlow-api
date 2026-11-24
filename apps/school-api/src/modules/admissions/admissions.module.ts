@@ -5,6 +5,7 @@ import { BrevoMailer, ConsoleMailer } from "../../../../../libs/kernel/src/infra
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
 import type { Env } from "../../config/env";
 import { AttendanceModule } from "../attendance/attendance.module";
+import { ExamsModule } from "../exams/exams.module";
 import { FamilyModule } from "../family/family.module";
 import { HrModule } from "../hr/hr.module";
 import { IdentityModule } from "../identity/identity.module";
@@ -33,8 +34,8 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
 @Module({
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
   // PedagogyModule: o horário da turma (família) e o acesso do professor às suas turmas
-  // AttendanceModule: a assiduidade do aluno na área da família
-  imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule, AttendanceModule],
+  // AttendanceModule: a assiduidade do aluno na área da família · ExamsModule: as provas do aluno
+  imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule, AttendanceModule, ExamsModule],
   controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController, TeacherStudentsController, FamilyRenewalsController, StaffRenewalsController, RegistryController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },

@@ -6,6 +6,7 @@ import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler
 import { validateEnv } from "./config/env";
 import { AdmissionsModule } from "./modules/admissions/admissions.module";
 import { AttendanceModule } from "./modules/attendance/attendance.module";
+import { ExamsModule } from "./modules/exams/exams.module";
 import { FamilyModule } from "./modules/family/family.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HrModule } from "./modules/hr/hr.module";
@@ -48,6 +49,7 @@ class HealthController {
     AdmissionsModule,
     FamilyModule,
     AttendanceModule,
+    ExamsModule,
     NotificationsModule,
   ],
   controllers: [HealthController],

@@ -10,7 +10,7 @@ import { DEADLINE_JOB } from "./DeadlineJob";
 import type { OccurrencesRepository } from "./occurrence-ports";
 import type { PresenceRepository } from "./presence-ports";
 
-type PresenceLessonLookup = Pick<PresenceRepository, "lesson" | "yearOn" | "closureOn">;
+type PresenceLessonLookup = Pick<PresenceRepository, "lesson" | "yearOn" | "closureOn" | "examBreak">;
 
 type R<T> = Promise<Result<T, AttendanceError>>;
 const dmy = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
@@ -165,6 +165,8 @@ export class Pendings {
     if (!year || year.id !== l.yearId) return fail(attendanceError("NOT_FOUND", "Esse dia não pertence ao ano letivo da aula."));
     const closure = await lessons.closureOn(year.id, input.day);
     if (closure) return fail(attendanceError("NO_CLASSES", `${closure.kindLabel}: ${closure.reason}. Não há aulas.`));
+    const [suspended] = await lessons.examBreak([l.groupId], input.day);
+    if (suspended) return fail(attendanceError("NO_CLASSES", `Aulas suspensas na turma ${l.groupName}: ${suspended.name}.`));
     if (input.substituteId === l.teacherId) return fail(attendanceError("INVALID_INPUT", "O substituto tem de ser outro professor."));
     const cands = await repo.candidates(l.id, input.day);
     const c = cands.find((x) => x.id === input.substituteId);

@@ -11,6 +11,8 @@ import { StudentAlerts } from "../../attendance/application/StudentAlerts";
 import { localNow } from "../../attendance/domain/presence";
 import { PrismaAttendanceSettingsRepository } from "../../attendance/infrastructure/prisma-attendance-settings";
 import { PrismaStudentAttendanceRepository } from "../../attendance/infrastructure/prisma-student-attendance";
+import { Exams } from "../../exams/application/Exams";
+import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import type { SchoolAccess } from "../../identity/application/ports";
@@ -151,7 +153,18 @@ export class FamilyStudentsController {
     private readonly renewals: Renewals,
     private readonly alerts: StudentAlerts,
     private readonly attendanceSettings: AttendanceSettings,
+    private readonly exams: Exams,
   ) {}
+
+  @Get(":id/exams")
+  @ApiOperation({ summary: "As provas publicadas da turma do aluno (a do ano em curso), com as canceladas e as anteriores" })
+  async studentExams(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string) {
+    // familyGroup confirma o acesso ao aluno (e que tem turma)
+    const { groupId: latest } = unwrap(await this.students.familyGroup(repo(t), f.account.id, studentId), STUDENTS_HTTP);
+    const { timeZone } = await this.attendanceSettings.rules(new PrismaAttendanceSettingsRepository(t.db));
+    const groupId = (await new PrismaStudentAttendanceRepository(t.db).attendanceGroup(studentId, localNow(timeZone, new Date()).slice(0, 10))) ?? latest;
+    return this.exams.group(PrismaExamsRepository.for(t.db), timeZone, groupId);
+  }
 
   @Get(":id/attendance")
   @ApiOperation({ summary: "A assiduidade do aluno na turma atual: totais, por disciplina, faltas e atrasos (os mais recentes) e os alertas" })

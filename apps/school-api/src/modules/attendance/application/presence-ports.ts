@@ -94,6 +94,8 @@ export interface PresenceRepository {
   /** o ano em curso (ACTIVE) ou, sem nenhum, o primeiro não encerrado que ainda não acabou */
   currentYear(today: string): Promise<{ id: string; name: string } | null>;
   closureOn(yearId: string, day: string): Promise<{ kindLabel: string; reason: string } | null>;
+  /** épocas de provas publicadas que suspendem as aulas normais destas turmas nesse dia */
+  examBreak(groupIds: string[], day: string): Promise<{ groupId: string; groupName: string; name: string; endsOn: string }[]>;
   teacherLessons(employeeId: string, yearId: string, day: string): Promise<TeacherLessonRow[]>;
   lesson(lessonId: string): Promise<LessonRow | null>;
   /** o substituto da aula nesse dia (null = sem substituição) */
