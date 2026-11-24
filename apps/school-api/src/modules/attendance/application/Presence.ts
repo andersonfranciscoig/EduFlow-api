@@ -71,13 +71,18 @@ export class Presence {
     const d = day && isDay(day) ? day : today;
     const year = await repo.yearOn(d);
     const closure = year ? await repo.closureOn(year.id, d) : null;
-    const [lessons, coordinates] = await Promise.all([year && !closure ? repo.teacherLessons(t.value.id, year.id, d) : [], repo.coordinatedGroups(t.value.id)]);
+    const [planned, coordinates] = await Promise.all([year && !closure ? repo.teacherLessons(t.value.id, year.id, d) : [], repo.coordinatedGroups(t.value.id)]);
+    // provas com interrupção: as aulas dessas turmas não contam (as que já têm presenças ficam)
+    const breaks = await repo.examBreak([...new Set(planned.map((l) => l.groupId))], d);
+    const lessons = planned.filter((l) => l.session || !breaks.some((b) => b.groupId === l.groupId));
     return ok({
       teacher: t.value,
       today,
       day: d,
       year,
       closure,
+      /** turmas com as aulas suspensas neste dia por uma época de provas */
+      suspended: breaks.map((b) => ({ groupName: b.groupName, reason: b.name, until: b.endsOn })),
       deadlineMinutes: rules.deadlineMinutes,
       /** turmas que coordena (abre a coordenação) */
       coordinates: coordinates.map((g) => ({ id: g.id, name: g.name })),
@@ -115,6 +120,8 @@ export class Presence {
     if (closure) return fail(attendanceError("NO_CLASSES", `${closure.kindLabel}: ${closure.reason}. Não há aulas.`));
     const now = localNow(rules.timeZone, this.clock.now());
     const existing = await repo.sessionAt(l.groupId, day, l.startsAt);
+    const [suspended] = existing ? [] : await repo.examBreak([l.groupId], day);
+    if (suspended) return fail(attendanceError("NO_CLASSES", `Aulas suspensas na turma ${l.groupName}: ${suspended.name}.`));
     const st = lessonState(day, l.startsAt, l.endsAt, rules.deadlineMinutes, now, !!existing);
     return ok({ lesson: l, existing, ...st });
   }

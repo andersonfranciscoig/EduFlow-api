@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
+import { ExamNotices } from "../exams/application/ExamNotices";
 import { FamilyModule } from "../family/family.module";
 import { HrModule } from "../hr/hr.module";
 import { IdentityModule } from "../identity/identity.module";
@@ -38,8 +39,9 @@ import { TeacherOccurrencesController } from "./presentation/teacher-occurrences
     { provide: Pendings, useFactory: () => new Pendings(uuidGenerator, systemClock) },
     { provide: DeadlineJob, inject: [AttendanceSettings], useFactory: (s: AttendanceSettings) => new DeadlineJob(s) },
     { provide: DigestJob, inject: [AttendanceSettings], useFactory: (s: AttendanceSettings) => new DigestJob(s) },
+    { provide: ExamNotices, useFactory: () => new ExamNotices() },
     AttendanceScheduler,
   ],
-  exports: [AttendanceSettings, TeacherOccurrences, Presence, StudentAlerts],
+  exports: [ExamNotices, AttendanceSettings, TeacherOccurrences, Presence, StudentAlerts],
 })
 export class AttendanceModule {}

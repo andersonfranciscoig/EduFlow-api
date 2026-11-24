@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
+import { lessonsSuspended } from "../../exams/infrastructure/exam-break";
 
 export interface NewPending {
   id: string;
@@ -65,6 +66,7 @@ export class PrismaDeadlineRepository {
           LEFT JOIN lesson_substitutions sub ON sub.lesson_id = l.id AND sub.day = d.day
          WHERE coalesce(sub.substitute_id, l.teacher_id) IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM school_closures c WHERE c.academic_year_id = y.id AND d.day BETWEEN c.starts_on AND c.ends_on)
+           AND NOT ${lessonsSuspended("l.group_id", "d.day")}
            AND (d.day + p.ends_at + make_interval(mins => ${deadlineMinutes}::int)) <= ${nowLocal}::timestamp
            AND NOT EXISTS (SELECT 1 FROM lesson_sessions ss WHERE ss.group_id = l.group_id AND ss.day = d.day AND ss.starts_at = date_trunc('minute', p.starts_at::interval)::time)
       ),
@@ -110,6 +112,7 @@ export class PrismaDeadlineRepository {
           LEFT JOIN lesson_substitutions sub ON sub.lesson_id = l.id AND sub.day = d.day
          WHERE coalesce(sub.substitute_id, l.teacher_id) IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM school_closures c WHERE c.academic_year_id = y.id AND d.day BETWEEN c.starts_on AND c.ends_on)
+           AND (NOT ${lessonsSuspended("l.group_id", "d.day")} OR EXISTS (SELECT 1 FROM lesson_sessions sx WHERE sx.group_id = l.group_id AND sx.day = d.day AND sx.starts_at = date_trunc('minute', p.starts_at::interval)::time))
       )
       SELECT pl.teacher_id, e.full_name AS teacher_name, to_char(pl.day, 'YYYY-MM-DD') AS day, count(*)::int AS lessons,
              bool_or(EXISTS (SELECT 1 FROM lesson_sessions ss WHERE ss.group_id = pl.group_id AND ss.day = pl.day AND ss.starts_at = pl.starts_at)) AS submitted

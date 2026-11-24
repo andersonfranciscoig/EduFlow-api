@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import type { Counts, GroupRow, LessonRow, PresenceRepository, RosterRow, SessionMarkRow, SessionRow, StudentSummaryRow, TeacherLessonRow } from "../application/presence-ports";
+import { lessonsSuspended } from "../../exams/infrastructure/exam-break";
 import type { Mark, PresenceStatus } from "../domain/presence";
 
 type CountRaw = { present: number; absent: number; late_n: number; justified: number; total: number };
@@ -99,6 +100,16 @@ export class PrismaPresenceRepository implements PresenceRepository {
     const r = await this.db.$queryRaw<{ kind: string; reason: string }[]>`
       SELECT kind, reason FROM school_closures WHERE academic_year_id = ${yearId}::uuid AND ${day}::date BETWEEN starts_on AND ends_on LIMIT 1`;
     return r[0] ? { kindLabel: { FERIADO: "Feriado", PAUSA: "Pausa letiva", OUTRO: "Sem aulas" }[r[0].kind] ?? "Sem aulas", reason: r[0].reason } : null;
+  }
+
+  /** A época de provas publicada que suspende as aulas normais da turma neste dia. */
+  async examBreak(groupIds: string[], day: string) {
+    if (!groupIds.length) return [];
+    return this.db.$queryRaw<{ groupId: string; groupName: string; name: string; endsOn: string }[]>`
+      SELECT DISTINCT ON (g.id) g.id AS "groupId", g.name AS "groupName", s.name, to_char(s.ends_on, 'YYYY-MM-DD') AS "endsOn"
+        FROM exam_seasons s JOIN exam_season_groups sg ON sg.season_id = s.id JOIN class_groups g ON g.id = sg.group_id
+       WHERE s.status = 'PUBLISHED' AND s.interrupts AND ${day}::date BETWEEN s.starts_on AND s.ends_on AND g.id = ANY(${groupIds}::uuid[])
+       ORDER BY g.id, s.ends_on DESC`;
   }
 
   async teacherLessons(employeeId: string, yearId: string, day: string): Promise<TeacherLessonRow[]> {

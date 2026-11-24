@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
+import { lessonsSuspended } from "../../exams/infrastructure/exam-break";
 import type { HistoryRow, NewOccurrence, OccurrenceFilter, OccurrenceRow, OccurrencesRepository, PlanLesson, TeacherRow } from "../application/occurrence-ports";
 import type { OccurrenceKind, OccurrenceScope, OccurrenceSource, OccurrenceStatus } from "../domain/occurrences";
 
@@ -90,8 +91,10 @@ export class PrismaOccurrencesRepository implements OccurrencesRepository {
   async lessonsOn(employeeId: string, yearId: string, day: string): Promise<PlanLesson[]> {
     return this.db.$queryRaw<PlanLesson[]>`
       SELECT l.id, to_char(p.starts_at, 'HH24:MI') AS "startsAt", to_char(p.ends_at, 'HH24:MI') AS "endsAt", g.name AS "groupName", s.name AS "subjectName"
-        FROM lessons l JOIN school_periods p ON p.id = l.period_id JOIN class_groups g ON g.id = l.group_id JOIN subjects s ON s.id = l.subject_id
+        FROM (SELECT ${day}::date AS day) d, lessons l JOIN school_periods p ON p.id = l.period_id JOIN class_groups g ON g.id = l.group_id JOIN subjects s ON s.id = l.subject_id
        WHERE l.teacher_id = ${employeeId}::uuid AND l.academic_year_id = ${yearId}::uuid AND l.weekday = extract(isodow FROM ${day}::date)::int
+         -- provas com interrupção: nesse dia não há aulas nessa turma (a que tem presenças registadas houve)
+         AND (NOT ${lessonsSuspended("l.group_id", "d.day")} OR EXISTS (SELECT 1 FROM lesson_sessions ss WHERE ss.group_id = l.group_id AND ss.day = d.day AND ss.starts_at = date_trunc('minute', p.starts_at::interval)::time))
        ORDER BY p.starts_at`;
   }
 

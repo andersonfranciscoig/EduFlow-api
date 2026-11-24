@@ -495,6 +495,95 @@ model DailyDigest {
   @@map("daily_digests")
 }
 
+/// Uma prova de um período de avaliação (época): datas, interrupção das aulas, publicação. (turmas e disciplinas: exam_season_groups/_subjects)
+model ExamSeason {
+  id             String    @id @db.Uuid
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  periodPosition Int       @map("period_position")
+  position       Int
+  name           String
+  startsOn       DateTime? @map("starts_on") @db.Date
+  endsOn         DateTime? @map("ends_on") @db.Date
+  /// A. com interrupção das aulas | B. sem
+  interrupts     Boolean   @default(false)
+  /// ESCRITA | ORAL | PRATICA | OUTRA (a habitual)
+  format         String    @default("ESCRITA")
+  notes          String?
+  /// DRAFT | PUBLISHED
+  status         String    @default("DRAFT")
+  publishedAt    DateTime? @map("published_at")
+  publishedById  String?   @map("published_by_id") @db.Uuid
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @map("created_at")
+  updatedAt      DateTime  @map("updated_at")
+
+  @@index([academicYearId, periodPosition, position], map: "exam_seasons_year_idx")
+  @@map("exam_seasons")
+}
+
+model ExamSeasonGroup {
+  seasonId String @map("season_id") @db.Uuid
+  groupId  String @map("group_id") @db.Uuid
+
+  @@id([seasonId, groupId])
+  @@index([groupId], map: "exam_season_groups_group_idx")
+  @@map("exam_season_groups")
+}
+
+model ExamSeasonSubject {
+  seasonId  String @map("season_id") @db.Uuid
+  classId   String @map("class_id") @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+
+  @@id([seasonId, classId, subjectId])
+  @@map("exam_season_subjects")
+}
+
+/// Uma prova marcada: turma + disciplina, dia e hora. Única por época + turma + disciplina + modalidade (índice parcial na BD).
+model Exam {
+  id           String   @id @db.Uuid
+  seasonId     String   @map("season_id") @db.Uuid
+  groupId      String   @map("group_id") @db.Uuid
+  subjectId    String   @map("subject_id") @db.Uuid
+  teacherId    String?  @map("teacher_id") @db.Uuid
+  day          DateTime @db.Date
+  startsAt     DateTime @map("starts_at") @db.Time(0)
+  endsAt       DateTime @map("ends_at") @db.Time(0)
+  room         String?
+  format       String
+  notes        String?
+  /// SCHEDULED | CANCELLED
+  status       String   @default("SCHEDULED")
+  cancelReason String?  @map("cancel_reason")
+  createdById  String?  @map("created_by_id") @db.Uuid
+  createdAt    DateTime @map("created_at")
+  updatedById  String?  @map("updated_by_id") @db.Uuid
+  updatedAt    DateTime @map("updated_at")
+
+  @@index([groupId, day], map: "exams_group_day_idx")
+  @@index([teacherId, day], map: "exams_teacher_day_idx")
+  @@map("exams")
+}
+
+/// Avisos das provas por entregar (gravados com a alteração; entregues a seguir, retomados pelo ciclo automático).
+model ExamNotice {
+  id           String    @id @db.Uuid
+  seasonId     String    @map("season_id") @db.Uuid
+  groupIds     String[]  @map("group_ids") @db.Uuid
+  subjectId    String?   @map("subject_id") @db.Uuid
+  teacherIds   String[]  @default([]) @map("teacher_ids") @db.Uuid
+  title        String
+  body         String
+  createdAt    DateTime  @map("created_at")
+  claimedAt    DateTime? @map("claimed_at")
+  attempts     Int       @default(0)
+  familySentAt DateTime? @map("family_sent_at")
+  staffSentAt  DateTime? @map("staff_sent_at")
+  error        String?
+
+  @@map("exam_notices")
+}
+
 /// Preferência de email da conta da família, por tipo de notificação.
 model FamilyNotificationPreference {
   accountId String   @map("account_id") @db.Uuid
