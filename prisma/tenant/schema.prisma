@@ -887,6 +887,8 @@ model FeeItem {
   billing    String
   /// TODOS | NOVOS | CONTINUANTES
   appliesTo  String    @default("TODOS") @map("applies_to")
+  /// quando se paga: INSCRICAO | MATRICULA (numa mensal: a 1.ª mensalidade) | DURANTE (o ano)
+  chargedAt  String    @default("DURANTE") @map("charged_at")
   position   Int       @default(0)
   archivedAt DateTime? @map("archived_at")
   createdAt  DateTime  @map("created_at")

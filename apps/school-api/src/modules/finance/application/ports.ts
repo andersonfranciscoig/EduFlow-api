@@ -1,4 +1,4 @@
-import type { AppliesTo, Billing, FeeItemInput, FeePlanInput, LateFeeKind, PriceInput } from "../domain/pricing";
+import type { AppliesTo, Billing, ChargedAt, FeeItemInput, FeePlanInput, LateFeeKind, PriceInput } from "../domain/pricing";
 
 export type YearStatus = "PLANNED" | "ACTIVE" | "CLOSED";
 
@@ -7,6 +7,7 @@ export interface FeeItemRow {
   name: string;
   billing: Billing;
   appliesTo: AppliesTo;
+  chargedAt: ChargedAt;
   position: number;
   archivedAt: Date | null;
   /** preços definidos com esta rubrica (todos os anos) */

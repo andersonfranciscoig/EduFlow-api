@@ -28,8 +28,17 @@ export const FINANCE_HTTP: Partial<Record<FinanceErrorCode, HttpStatus>> = {
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const feeItemBody = z
-  .object({ name: z.string().min(2).max(40), billing: z.enum(["MENSAL", "UNICA"]), appliesTo: z.enum(["TODOS", "NOVOS", "CONTINUANTES"]).nullish() })
-  .meta({ title: "FeeItem", description: "Rubrica de cobrança: nome, mensal ou única, e a quem se aplica (todos, alunos novos, alunos que continuam)." });
+  .object({
+    name: z.string().min(2).max(40),
+    billing: z.enum(["MENSAL", "UNICA"]),
+    appliesTo: z.enum(["TODOS", "NOVOS", "CONTINUANTES"]).nullish(),
+    chargedAt: z.enum(["INSCRICAO", "MATRICULA", "DURANTE"]).nullish(),
+  })
+  .meta({
+    title: "FeeItem",
+    description:
+      "Rubrica de cobrança: nome, mensal ou única, a quem se aplica (todos, alunos novos, alunos que continuam) e quando se paga (na inscrição, na matrícula — numa mensal, a 1.ª mensalidade — ou durante o ano; por omissão: única na matrícula, mensal durante o ano).",
+  });
 const amount = z
   .number({ error: "Indique o valor em kwanzas." })
   .int({ error: "Os valores são em kwanzas, sem casas decimais." })

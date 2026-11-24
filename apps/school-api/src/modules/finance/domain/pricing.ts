@@ -12,9 +12,43 @@ import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/
 export type Billing = "MENSAL" | "UNICA";
 export type AppliesTo = "TODOS" | "NOVOS" | "CONTINUANTES";
 export type LateFeeKind = "NONE" | "PERCENT" | "FIXED";
+/** Quando se paga: na inscrição, no ato da matrícula (numa mensal: a 1.ª mensalidade) ou durante o ano. */
+export type ChargedAt = "INSCRICAO" | "MATRICULA" | "DURANTE";
 
 export const BILLING_LABELS: Record<Billing, string> = { MENSAL: "Mensal", UNICA: "Única" };
 export const APPLIES_LABELS: Record<AppliesTo, string> = { TODOS: "Todos os alunos", NOVOS: "Alunos novos", CONTINUANTES: "Alunos que continuam" };
+export const CHARGED_AT_LABELS: Record<ChargedAt, string> = { INSCRICAO: "Na inscrição", MATRICULA: "Na matrícula", DURANTE: "Durante o ano" };
+export const CHARGED_AT_HINTS: Record<ChargedAt, string> = {
+  INSCRICAO: "Paga-se ao fazer a inscrição (ex.: taxa de inscrição).",
+  MATRICULA: "Paga-se no ato da matrícula ou da renovação (ex.: matrícula, uniforme, cartão). Numa rubrica mensal: a 1.ª mensalidade.",
+  DURANTE: "Cobrada durante o ano letivo (ex.: a propina, pelo calendário das propinas).",
+};
+/** Por omissão: as únicas pagam-se na matrícula; as mensais durante o ano. */
+export const defaultChargedAt = (billing: Billing): ChargedAt => (billing === "UNICA" ? "MATRICULA" : "DURANTE");
+
+/** Uma linha do que se paga num momento (inscrição ou matrícula). */
+export interface ChargeLine {
+  name: string;
+  amount: number;
+  /** numa rubrica mensal paga na matrícula: "1.ª mensalidade" */
+  note: string | null;
+}
+
+/**
+ * O que um aluno (novo ou que continua) paga num momento, numa classe: as rubricas desse momento que
+ * se lhe aplicam. `free` = nada a pagar (sem rubricas ou tudo a 0 Kz — o colégio gratuito).
+ */
+export function chargesAt(
+  prices: { name: string; billing: Billing; appliesTo: AppliesTo; chargedAt: ChargedAt; amount: number }[],
+  moment: "INSCRICAO" | "MATRICULA",
+  student: "NOVOS" | "CONTINUANTES",
+): { lines: ChargeLine[]; total: number; free: boolean } {
+  const lines = prices
+    .filter((p) => p.chargedAt === moment && (p.appliesTo === "TODOS" || p.appliesTo === student))
+    .map((p) => ({ name: p.name, amount: p.amount, note: p.billing === "MENSAL" ? "1.ª mensalidade" : null }));
+  const total = lines.reduce((n, l) => n + l.amount, 0);
+  return { lines, total, free: total === 0 };
+}
 
 // As rubricas de partida (Propina mensal, Matrícula para novos, Confirmação para quem continua)
 // são criadas pela migração 0009_pricing.
@@ -43,16 +77,20 @@ export interface FeeItemInput {
   name: string;
   billing: Billing;
   appliesTo: AppliesTo;
+  chargedAt: ChargedAt;
 }
 
-export function checkFeeItem(input: { name: string; billing: string; appliesTo?: string | null }): Result<FeeItemInput, FinanceError> {
+export function checkFeeItem(input: { name: string; billing: string; appliesTo?: string | null; chargedAt?: string | null }): Result<FeeItemInput, FinanceError> {
   const name = clean(input.name);
   if (name.length < 2) return fail(financeError("INVALID_INPUT", "Indique o nome da rubrica."));
   if (name.length > 40) return fail(financeError("INVALID_INPUT", "O nome da rubrica tem no máximo 40 caracteres."));
   if (!(input.billing in BILLING_LABELS)) return fail(financeError("INVALID_INPUT", "Escolha se a rubrica é mensal ou única."));
   const appliesTo = input.appliesTo ?? "TODOS";
   if (!(appliesTo in APPLIES_LABELS)) return fail(financeError("INVALID_INPUT", "Escolha a quem se aplica a rubrica."));
-  return ok({ name, billing: input.billing as Billing, appliesTo: appliesTo as AppliesTo });
+  const billing = input.billing as Billing;
+  const chargedAt = input.chargedAt ?? defaultChargedAt(billing);
+  if (!(chargedAt in CHARGED_AT_LABELS)) return fail(financeError("INVALID_INPUT", "Escolha quando se paga: na inscrição, na matrícula ou durante o ano."));
+  return ok({ name, billing, appliesTo: appliesTo as AppliesTo, chargedAt: chargedAt as ChargedAt });
 }
 
 export interface PriceInput {

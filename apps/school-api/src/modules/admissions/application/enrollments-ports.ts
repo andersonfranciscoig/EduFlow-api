@@ -53,11 +53,12 @@ export type EnrollOutcome =
 
 export type HoldOutcome = { ok: true; id: string; expiresAt: Date } | { ok: false; reason: "no_vacancy" | "year_closed" | "not_found" };
 
-/** Fees da classe (preçário), só para mostrar na confirmação. */
+/** Preçário da classe: para mostrar e para dizer o que se paga na inscrição e na matrícula. */
 export interface ClassFeeRow {
   name: string;
   billing: "MENSAL" | "UNICA";
   appliesTo: "TODOS" | "NOVOS" | "CONTINUANTES";
+  chargedAt: "INSCRICAO" | "MATRICULA" | "DURANTE";
   amount: number;
 }
 

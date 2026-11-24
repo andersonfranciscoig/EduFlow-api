@@ -5,6 +5,9 @@ import {
   annualTotal,
   APPLIES_LABELS,
   BILLING_LABELS,
+  CHARGED_AT_HINTS,
+  CHARGED_AT_LABELS,
+  chargesAt,
   checkFeeItem,
   checkFeePlan,
   checkPrices,
@@ -18,6 +21,7 @@ import {
 import type { FeeItemOutcome, FeeItemRow, FinanceActor, PriceOutcome, PricingRepository } from "./ports";
 
 const YEAR_STATUS_LABELS = { PLANNED: "A preparar", ACTIVE: "Em curso", CLOSED: "Encerrado" } as const;
+const CHARGED_AT_OPTIONS = (Object.keys(CHARGED_AT_LABELS) as (keyof typeof CHARGED_AT_LABELS)[]).map((value) => ({ value, label: CHARGED_AT_LABELS[value], hint: CHARGED_AT_HINTS[value] }));
 
 const feeItemDto = (f: FeeItemRow) => ({
   id: f.id,
@@ -26,6 +30,8 @@ const feeItemDto = (f: FeeItemRow) => ({
   billingLabel: BILLING_LABELS[f.billing],
   appliesTo: f.appliesTo,
   appliesLabel: APPLIES_LABELS[f.appliesTo],
+  chargedAt: f.chargedAt,
+  chargedAtLabel: f.chargedAt === "MATRICULA" && f.billing === "MENSAL" ? "1.ª mensalidade na matrícula" : CHARGED_AT_LABELS[f.chargedAt],
   archived: !!f.archivedAt,
   priceCount: f.priceCount,
 });
@@ -88,10 +94,10 @@ export class Pricing {
   // ================================================================ rubricas
 
   async listFeeItems(repo: PricingRepository, actor: FinanceActor) {
-    return { canManage: this.canManage(actor), items: (await repo.listFeeItems()).map(feeItemDto) };
+    return { canManage: this.canManage(actor), items: (await repo.listFeeItems()).map(feeItemDto), chargedAtOptions: CHARGED_AT_OPTIONS };
   }
 
-  async createFeeItem(repo: PricingRepository, actor: FinanceActor, input: { name: string; billing: string; appliesTo?: string | null }) {
+  async createFeeItem(repo: PricingRepository, actor: FinanceActor, input: { name: string; billing: string; appliesTo?: string | null; chargedAt?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
     const f = checkFeeItem(input);
@@ -100,10 +106,12 @@ export class Pricing {
     return r.ok ? ok(feeItemDto(r.value)) : fail(feeItemError(r));
   }
 
-  async updateFeeItem(repo: PricingRepository, actor: FinanceActor, id: string, input: { name: string; billing: string; appliesTo?: string | null }) {
+  /** Sem `chargedAt` no pedido, fica como estava (os clientes antigos não o apagam). */
+  async updateFeeItem(repo: PricingRepository, actor: FinanceActor, id: string, input: { name: string; billing: string; appliesTo?: string | null; chargedAt?: string | null }) {
     const allowed = this.guard(actor);
     if (!allowed.ok) return allowed;
-    const f = checkFeeItem(input);
+    const current = input.chargedAt ? null : (await repo.listFeeItems()).find((x) => x.id === id);
+    const f = checkFeeItem({ ...input, chargedAt: input.chargedAt ?? current?.chargedAt ?? null });
     if (!f.ok) return f;
     const r = await repo.updateFeeItem(id, { ...f.value, now: this.clock.now() });
     return r.ok ? ok(feeItemDto(r.value)) : fail(feeItemError(r));
@@ -148,10 +156,11 @@ export class Pricing {
       availableMonths: available,
       plan,
       items: shown.map(feeItemDto),
+      chargedAtOptions: CHARGED_AT_OPTIONS,
       classes: classes.map((c) => {
         const priced = Object.entries(c.prices).flatMap(([feeItemId, amount]) => {
           const f = byId.get(feeItemId);
-          return f ? [{ billing: f.billing, appliesTo: f.appliesTo, amount }] : [];
+          return f ? [{ name: f.name, billing: f.billing, appliesTo: f.appliesTo, chargedAt: f.chargedAt, amount }] : [];
         });
         return {
           id: c.id,
@@ -168,6 +177,9 @@ export class Pricing {
           /** propina(s) mensal(is) somadas */
           monthly: monthly.reduce((n, f) => n + (c.prices[f.id] ?? 0), 0),
           totals: { novos: annualTotal(priced, plan.months.length, "NOVOS"), continuantes: annualTotal(priced, plan.months.length, "CONTINUANTES") },
+          /** o que se paga no ato da matrícula (aluno novo) e da renovação (aluno que continua); 0 = gratuito */
+          atEnrollment: { novos: chargesAt(priced, "MATRICULA", "NOVOS").total, continuantes: chargesAt(priced, "MATRICULA", "CONTINUANTES").total },
+          atApplication: chargesAt(priced, "INSCRICAO", "NOVOS").total,
         };
       }),
     });

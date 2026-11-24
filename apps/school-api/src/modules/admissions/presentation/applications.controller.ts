@@ -91,6 +91,11 @@ export class StaffApplicationsController {
 
   private repo = (t: TenantContext) => new PrismaApplicationsRepository(t.db);
 
+  private async chargesOf(t: TenantContext, appId: string) {
+    const app = await this.repo(t).byId(appId);
+    return app ? this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType) : null;
+  }
+
   @Get()
   @RequirePermission("admissions.applications.view")
   @ApiOperation({ summary: "Inscrições submetidas, com filtros (ano, classe, estado, pesquisa) e o n.º por estado" })
@@ -112,6 +117,8 @@ export class StaffApplicationsController {
       ...view,
       enrollment,
       enrollmentOptions: options,
+      // o que se paga na inscrição e na matrícula (pelo preçário; ainda sem pagamento no sistema)
+      charges: await this.chargesOf(t, appId),
       canEnroll: !!options && p.includes("admissions.enrollments.manage"),
       canOverride: p.includes("admissions.enrollments.override"),
     };
@@ -132,7 +139,7 @@ export class StaffApplicationsController {
   async enrollment(@CurrentTenant() t: TenantContext, @Param("id", id) appId: string) {
     const e = await this.enrollments.byApplication(enrollmentsRepo(t), appId);
     if (!e) return unwrap(fail(admissionError("ENROLLMENT_NOT_FOUND", "Esta inscrição ainda não tem matrícula.")), APPLICATIONS_HTTP);
-    return e;
+    return { ...e, charges: await this.chargesOf(t, appId) };
   }
 
   @Get(":id/files/:fileId")
@@ -239,10 +246,13 @@ export class FamilyApplicationsController {
   @ApiOperation({ summary: "Uma inscrição: dados, formulário da versão, ficheiros, opções e o que falta por passo" })
   async get(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
     const view = unwrap(await this.applications.get(this.repo(t), this.forms(t), f.account, appId), APPLICATIONS_HTTP);
-    if (view.status !== "APPROVED") return { ...view, enrollment: null, enrollMode: null, canEnroll: false };
     const er = enrollmentsRepo(t);
+    // o que se paga na inscrição e na matrícula (a conta já foi confirmada acima)
+    const app = await this.repo(t).byId(appId);
+    const charges = app ? await this.enrollments.charges(er, app.classId, app.processType) : null;
+    if (view.status !== "APPROVED") return { ...view, enrollment: null, enrollMode: null, canEnroll: false, charges };
     const [enrollment, cfg] = await Promise.all([this.enrollments.byApplication(er, appId), er.config()]);
-    return { ...view, enrollment, enrollMode: cfg.enrollmentMode, canEnroll: !enrollment && cfg.enrollmentMode === "FAMILY" };
+    return { ...view, enrollment, enrollMode: cfg.enrollmentMode, canEnroll: !enrollment && cfg.enrollmentMode === "FAMILY", charges };
   }
 
   @Post(":id/enroll")
@@ -257,7 +267,9 @@ export class FamilyApplicationsController {
   @Get(":id/enrollment")
   @ApiOperation({ summary: "A matrícula desta inscrição (para o comprovativo)" })
   async enrollment(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
-    return unwrap(await this.enrollments.familyReceipt(enrollmentsRepo(t), this.repo(t), f.account, appId), APPLICATIONS_HTTP);
+    const receipt = unwrap(await this.enrollments.familyReceipt(enrollmentsRepo(t), this.repo(t), f.account, appId), APPLICATIONS_HTTP);
+    const app = await this.repo(t).byId(appId);
+    return { ...receipt, charges: app ? await this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType) : null };
   }
 
   @Put(":id")

@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
-import { type AppliesTo, type Billing, type FeeItemInput, type FeePlanInput, type LateFeeKind, MAX_FEE_ITEMS, type PriceInput } from "../domain/pricing";
+import { type AppliesTo, type Billing, type ChargedAt, type FeeItemInput, type FeePlanInput, type LateFeeKind, MAX_FEE_ITEMS, type PriceInput } from "../domain/pricing";
 import type { FeeItemOutcome, FeeItemRow, FeePlanRow, PriceOutcome, PricingClass, PricingRepository, PricingYear, YearStatus } from "../application/ports";
 
 type Tx = Prisma.TransactionClient;
 const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 
 const WITH_COUNT = { _count: { select: { prices: true } } } as const;
-const toFeeItem = (f: { id: string; name: string; billing: string; appliesTo: string; position: number; archivedAt: Date | null; _count?: { prices: number } }): FeeItemRow => ({
+const toFeeItem = (f: { id: string; name: string; billing: string; appliesTo: string; chargedAt: string; position: number; archivedAt: Date | null; _count?: { prices: number } }): FeeItemRow => ({
   id: f.id,
   name: f.name,
   billing: f.billing as Billing,
   appliesTo: f.appliesTo as AppliesTo,
+  chargedAt: f.chargedAt as ChargedAt,
   position: f.position,
   archivedAt: f.archivedAt,
   priceCount: f._count?.prices ?? 0,
@@ -49,7 +50,7 @@ export class PrismaPricingRepository implements PricingRepository {
         const all = await tx.feeItem.aggregate({ _count: { _all: true }, _max: { position: true } });
         if (all._count._all >= MAX_FEE_ITEMS) return { ok: false, reason: "limit" } as const;
         const f = await tx.feeItem.create({
-          data: { id: input.id, name: input.name, billing: input.billing, appliesTo: input.appliesTo, position: (all._max.position ?? 0) + 1, createdAt: input.now, updatedAt: input.now },
+          data: { id: input.id, name: input.name, billing: input.billing, appliesTo: input.appliesTo, chargedAt: input.chargedAt, position: (all._max.position ?? 0) + 1, createdAt: input.now, updatedAt: input.now },
           include: WITH_COUNT,
         });
         return { ok: true, value: toFeeItem(f) } as const;
@@ -65,7 +66,7 @@ export class PrismaPricingRepository implements PricingRepository {
       return await this.db.$transaction(async (tx) => {
         if (!(await tx.feeItem.findUnique({ where: { id }, select: { id: true } }))) return { ok: false, reason: "not_found" } as const;
         if (await this.nameTaken(tx, input.name, id)) return { ok: false, reason: "name_taken" } as const;
-        const f = await tx.feeItem.update({ where: { id }, data: { name: input.name, billing: input.billing, appliesTo: input.appliesTo, updatedAt: input.now }, include: WITH_COUNT });
+        const f = await tx.feeItem.update({ where: { id }, data: { name: input.name, billing: input.billing, appliesTo: input.appliesTo, chargedAt: input.chargedAt, updatedAt: input.now }, include: WITH_COUNT });
         return { ok: true, value: toFeeItem(f) } as const;
       });
     } catch (e) {
