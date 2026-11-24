@@ -72,6 +72,8 @@ export class PortalAccess {
     // já existe uma conta com este email (ex.: era utilizador antes): liga-se a ela
     const existing = await repo.userByEmail(e.email);
     if (existing) {
+      // ligar (e reativar) uma conta de RH, secretaria ou direção é dar esse acesso: só o responsável
+      if (existing.role !== "PROFESSOR" && !actor.isOwner) return fail(hrError("FORBIDDEN", "Já existe uma conta com este email que não é de professor: só o responsável do colégio a pode ligar."));
       if (existing.employeeId) return fail(hrError("INVALID_STATE", "A conta com este email já está ligada a outro funcionário."));
       const linked = await repo.link(e.id, existing.id);
       if (!linked.ok) return fail(hrError("INVALID_STATE", "A conta com este email já está ligada a outro funcionário."));
