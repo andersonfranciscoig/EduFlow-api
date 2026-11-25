@@ -40,8 +40,10 @@ export const PERMISSIONS = {
   "attendance.students.view": { group: "attendance", label: "Consultar as presenças dos alunos", hint: "Ver as aulas registadas de cada turma e a assiduidade de cada aluno." },
   "attendance.students.edit": { group: "attendance", label: "Corrigir as presenças dos alunos", hint: "Alterar presenças já registadas (depois do prazo do professor), sempre com motivo." },
   "attendance.teachers.manage": { group: "attendance", label: "Gerir as faltas dos professores", hint: "Marcar faltas e atrasos, justificar, alterar, anular e reabrir — sempre com o motivo." },
+  "attendance.reports.view": { group: "attendance", label: "Consultar os relatórios de assiduidade", hint: "O painel da pedagogia: presença por turma e disciplina, alunos com mais faltas, aulas sem registo e provas." },
   "attendance.exams.view": { group: "attendance", label: "Consultar o calendário de provas", hint: "Ver as provas de cada período, mesmo em preparação, e o histórico." },
   "attendance.exams.manage": { group: "attendance", label: "Gerir o calendário de provas", hint: "Definir as provas de cada período, as turmas e disciplinas, e marcar, alterar ou retirar provas." },
+  "attendance.exams.generate": { group: "attendance", label: "Gerar o calendário automaticamente", hint: "Pedir ao sistema uma proposta de calendário e usá-la (fica em preparação, para rever e publicar)." },
   "attendance.exams.publish": { group: "attendance", label: "Publicar o calendário de provas", hint: "Publicar para professores e famílias; com a gestão, também alterar ou cancelar o que já está publicado." },
 } as const;
 
@@ -87,8 +89,8 @@ export function normalizePermissions(list: string[]): Result<Permission[], { cod
   const unknown = list.find((p) => !isPermission(p));
   if (unknown) return fail({ code: "INVALID_PERMISSION", message: `Permissão desconhecida: ${unknown}.` });
   const set = new Set(list as Permission[]);
-  // gerir ou publicar provas não serve de nada sem as ver
-  if (set.has("attendance.exams.manage") || set.has("attendance.exams.publish")) set.add("attendance.exams.view");
+  // gerir, gerar ou publicar provas não serve de nada sem as ver
+  if (set.has("attendance.exams.manage") || set.has("attendance.exams.generate") || set.has("attendance.exams.publish")) set.add("attendance.exams.view");
   for (const p of [...set]) set.add(accessOf(p));
   return ok(ALL_PERMISSIONS.filter((p) => set.has(p)));
 }

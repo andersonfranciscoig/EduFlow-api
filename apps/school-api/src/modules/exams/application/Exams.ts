@@ -25,6 +25,7 @@ import {
   tidy,
   type YearCtx,
 } from "../domain/exams";
+import { checkOptions, examDays, generate, type GenerateOptions, MODE_LABELS, placedText, type Proposal } from "../domain/generator";
 import type { NewExam, PrismaExamsRepository, PublicExam, YearRow } from "../infrastructure/prisma-exams";
 
 type R<T> = Promise<Result<T, ExamError>>;
@@ -32,6 +33,7 @@ export interface ExamActor {
   id: string | null;
   canManage: boolean;
   canPublish: boolean;
+  canGenerate: boolean;
 }
 export interface ExamInput {
   teacherId?: string | null;
@@ -66,6 +68,7 @@ const examDto = (e: ExamCtx, groups: YearCtx["groups"]) => {
     notes: e.notes,
     status: e.status,
     statusLabel: EXAM_LABELS[e.status],
+    source: e.source,
     cancelReason: e.cancelReason,
   };
 };
@@ -102,6 +105,7 @@ const HISTORY: Record<string, string> = {
   EXAM_SEASON_EXTENDED: "Fim da época adiado",
   EXAM_SEASON_PUBLISHED: "Calendário publicado",
   EXAM_SEASON_UNPUBLISHED: "Voltou a preparação",
+  EXAM_GENERATED: "Proposta automática aplicada",
   EXAM_CREATED: "Prova marcada",
   EXAM_UPDATED: "Prova alterada",
   EXAM_REMOVED: "Prova retirada",
@@ -244,6 +248,7 @@ export class Exams {
         configure: open && actor.canManage && !published,
         /** marcar e alterar provas: a preparar, quem gere; publicada, quem publica (e só o que ainda não passou) */
         edit: open && !!s.startsOn && (published ? actor.canManage && actor.canPublish && !ended : actor.canManage),
+        generate: open && actor.canGenerate && !published && !!s.startsOn && !ended,
         publish: open && actor.canPublish && !published && !!s.startsOn && !ended,
         /** só antes de começar: depois, voltar atrás poria como "em falta" aulas que não houve */
         unpublish: open && actor.canPublish && published && !!s.startsOn && today < s.startsOn,
@@ -257,6 +262,8 @@ export class Exams {
       slots: choices.slots,
       lessons: ctx.lessons.filter((l) => s.groupIds.includes(l.groupId)),
       closures: ctx.closures,
+      /** dias da época em que se pode fazer provas (de hoje em diante, sem domingos nem dias sem aulas) */
+      availableDays: this.availableDays(ctx, s, today),
       exams: ctx.exams.filter((e) => e.seasonId === id).map((e) => examDto(e, ctx.groups)),
       missing: this.missing(ctx, s).map((m) => ({ ...m, subjectName: names.get(m.subjectId) ?? "—" })),
       problems: this.problems(ctx, s, today),
@@ -394,7 +401,7 @@ export class Exams {
       const teacherId = auto ? (choices.groupTeachers.find((t) => t.groupId === groupId && t.subjectId === input.subjectId)?.employeeId ?? null) : (input.teacherId ?? null);
       const teacherName = choices.teachers.find((t) => t.id === teacherId)?.fullName ?? null;
       const e: NewExam = { id: this.ids.next(), seasonId: s.id, groupId, subjectId: input.subjectId, teacherId, ...data.value };
-      const full: ExamCtx = { ...e, subjectName: subject.name, subjectColor: subject.color, teacherName, status: "SCHEDULED", cancelReason: null, updatedAt: "" };
+      const full: ExamCtx = { ...e, subjectName: subject.name, subjectColor: subject.color, teacherName, status: "SCHEDULED", source: "MANUAL", cancelReason: null, updatedAt: "" };
       const dup = ctx.exams.find((o) => o.seasonId === s.id && o.status === "SCHEDULED" && o.groupId === groupId && o.subjectId === input.subjectId && o.format === e.format);
       const label = ctx.groups.find((g) => g.id === groupId)?.label ?? "";
       if (dup) conflicts.push({ level: "BLOCK", code: "EXAM_EXISTS", message: `A turma ${label} já tem a prova ${FORMAT_LABELS[e.format].toLowerCase()} de ${subject.name} nesta época (${dmy(dup.day)} às ${dup.startsAt}).` });
@@ -543,6 +550,85 @@ export class Exams {
         );
       return ok({ cancelled: true as const });
     });
+  }
+
+  // ============================================================ gerar automaticamente
+
+  private propose(ctx: YearCtx, s: SeasonCtx, choices: Awaited<ReturnType<PrismaExamsRepository["choices"]>>, opts: GenerateOptions, today: string): Result<Proposal, ExamError> {
+    if (ctx.year.status === "CLOSED") return fail(examError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
+    if (s.status === "PUBLISHED") return fail(examError("INVALID_STATE", "O calendário está publicado: a proposta automática só se usa em preparação."));
+    if (!s.startsOn || !s.endsOn) return fail(examError("INVALID_STATE", "Configure primeiro a época: datas, turmas e disciplinas."));
+    if (today > s.endsOn) return fail(examError("INVALID_STATE", "As datas desta época já passaram."));
+    return ok(generate(ctx, s, choices.plan, { groupTeachers: choices.groupTeachers, names: new Map(choices.teachers.map((t) => [t.id, t.fullName])) }, opts, today));
+  }
+
+  /** A proposta (sem gravar nada): o que põe, o que não cabe, o que mantém e o que substitui. */
+  async preview(repo: PrismaExamsRepository, actor: ExamActor, timeZone: string, seasonId: string, input: GenerateOptions) {
+    if (!actor.canGenerate) return fail(examError("FORBIDDEN", "Não tem permissão para gerar o calendário de provas."));
+    const opts = checkOptions(input);
+    if (!opts.ok) return opts;
+    const yearId = await repo.yearOfSeason(seasonId);
+    const [ctx, choices] = yearId ? await Promise.all([repo.context(yearId), repo.choices(yearId)]) : [null, null];
+    const s = ctx?.seasons.find((x) => x.id === seasonId);
+    if (!ctx || !s || !choices) return fail(examError("NOT_FOUND", "Época de provas não encontrada."));
+    const p = this.propose(ctx, s, choices, opts.value, this.today(timeZone));
+    if (!p.ok) return p;
+    const label = new Map(ctx.groups.map((g) => [g.id, g.label]));
+    return ok({
+      options: opts.value,
+      fingerprint: p.value.fingerprint,
+      days: p.value.days,
+      placed: p.value.placed.map((x) => ({ groupId: x.groupId, label: label.get(x.groupId) ?? "", subject: { id: x.subjectId, name: x.subjectName, color: x.subjectColor }, teacherName: x.teacherName, day: x.day, startsAt: x.startsAt, endsAt: x.endsAt, warnings: x.warnings })),
+      unplaced: p.value.unplaced.map((x) => ({ groupId: x.groupId, label: label.get(x.groupId) ?? "", subjectName: x.subjectName, reason: x.reason })),
+      kept: p.value.kept.map((e) => examDto(e, ctx.groups)),
+      removed: p.value.removed.length,
+    });
+  }
+
+  /** Aplica a proposta que se viu (se os dados mudaram entretanto, não grava: mostra-se a nova). Fica em preparação. */
+  async applyProposal(repo: PrismaExamsRepository, actor: ExamActor, timeZone: string, seasonId: string, input: GenerateOptions, fingerprint: string): R<{ created: number; removed: number; unplaced: number }> {
+    if (!actor.canGenerate) return fail(examError("FORBIDDEN", "Não tem permissão para gerar o calendário de provas."));
+    const opts = checkOptions(input);
+    if (!opts.ok) return opts;
+    const today = this.today(timeZone);
+    const r = await repo.uniqueOr(() =>
+      this.within(repo, seasonId, async (tx, ctx, s): R<{ created: number; removed: number; unplaced: number }> => {
+        const choices = await tx.choices(ctx.year.id);
+        const p = this.propose(ctx, s, choices, opts.value, today);
+        if (!p.ok) return p;
+        const { placed, removed, unplaced } = p.value;
+        if (p.value.fingerprint !== fingerprint) return fail(examError("PROPOSAL_CHANGED", "O horário, as provas ou a configuração mudaram entretanto. Veja a nova proposta antes de a usar."));
+        if (!placed.length) return fail(examError("INVALID_STATE", "A proposta não tem provas para marcar."));
+        const now = this.clock.now();
+        if (removed.length) await tx.removeMany(removed.map((e) => e.id));
+        await tx.insert(
+          placed.map((x) => ({ id: this.ids.next(), seasonId, groupId: x.groupId, subjectId: x.subjectId, teacherId: x.teacherId, day: x.day, startsAt: x.startsAt, endsAt: x.endsAt, room: null, format: s.format, notes: null, source: "AUTOMATIC" as const })),
+          actor.id,
+          now,
+        );
+        const label = new Map(ctx.groups.map((g) => [g.id, g.label]));
+        await tx.record(
+          "EXAM_GENERATED",
+          seasonId,
+          actor.id,
+          {
+            after: { marcadas: placed.length, substituídas: removed.length, "por marcar": unplaced.length, modo: MODE_LABELS[opts.value.mode] },
+            options: opts.value,
+            // o que havia e o que ficou: para se poder consultar mais tarde
+            removedExams: removed.map((e) => placedText(e, label.get(e.groupId) ?? "")),
+            createdExams: placed.map((x) => placedText(x, label.get(x.groupId) ?? "")),
+          },
+          now,
+        );
+        return ok({ created: placed.length, removed: removed.length, unplaced: unplaced.length });
+      }),
+    );
+    return r ?? fail(examError("PROPOSAL_CHANGED", "Entretanto foram marcadas outras provas. Veja a nova proposta."));
+  }
+
+  /** Quantos dias há para provas com estes dias da semana (para ajudar a escolher as regras). */
+  availableDays(ctx: YearCtx, s: SeasonCtx, today: string) {
+    return examDays(ctx, s, [1, 2, 3, 4, 5, 6], today);
   }
 
   // ============================================================ publicar

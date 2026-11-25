@@ -25,6 +25,7 @@ export const EXAMS_HTTP: Partial<Record<ExamErrorCode, HttpStatus>> = {
   CONFLICTS: HttpStatus.CONFLICT,
   NEEDS_CONFIRMATION: HttpStatus.CONFLICT,
   EXAM_EXISTS: HttpStatus.CONFLICT,
+  PROPOSAL_CHANGED: HttpStatus.CONFLICT,
 };
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
@@ -53,6 +54,17 @@ const checkBody = newExamBody.extend({ examId: z.uuid().nullish() }).meta({ titl
 const examBody = z.object(examFields).meta({ title: "ExamUpdate" });
 const reasonBody = z.object({ reason: z.string().max(300) }).meta({ title: "ExamReason" });
 const publishBody = z.object({ confirm: z.boolean().optional() }).meta({ title: "ExamPublish" });
+const generateFields = {
+  mode: z.enum(["FILL", "REGENERATE", "REPLACE"], { error: "Escolha o que fazer com as provas já marcadas." }),
+  duration: z.number().int(),
+  interval: z.number().int(),
+  maxPerDay: z.number().int(),
+  weekdays: z.array(z.number().int()).max(7),
+  common: z.boolean(),
+  seed: z.number().int().min(0).max(9999).default(0),
+};
+const generateBody = z.object(generateFields).meta({ title: "ExamProposalOptions", description: "Regras da proposta automática. seed = variante (outra proposta com as mesmas regras)." });
+const applyBody = z.object({ ...generateFields, fingerprint: z.string().regex(/^[0-9a-f]{24}$/, "Proposta inválida.") }).meta({ title: "ExamProposalApply", description: "Usar a proposta que se viu (a impressão digital confirma que é a mesma)." });
 const extendBody = z.object({ endsOn: day, reason: z.string().max(300) }).meta({ title: "ExamExtend" });
 
 /**
@@ -82,7 +94,7 @@ export class ExamsController {
   }
   private async actor(t: TenantContext, u: SchoolAccess): Promise<ExamActor> {
     const p = await permissionsOf(t.db, u);
-    return { id: u.support ? null : u.id, canManage: p.includes("attendance.exams.manage"), canPublish: p.includes("attendance.exams.publish") };
+    return { id: u.support ? null : u.id, canManage: p.includes("attendance.exams.manage"), canPublish: p.includes("attendance.exams.publish"), canGenerate: p.includes("attendance.exams.generate") };
   }
   /** Os avisos já estão gravados: entregam-se a seguir, sem prender o pedido (o ciclo automático retoma o que falhar). */
   private deliver(t: TenantContext, zone: string) {
@@ -184,6 +196,29 @@ export class ExamsController {
     const r = unwrap(await this.exams.cancel(this.repo(t), actor, zone, examId, body.reason), EXAMS_HTTP);
     this.deliver(t, zone);
     return r;
+  }
+
+  // ---------------------------------------------------------------- gerar automaticamente
+
+  @Post("seasons/:id/proposal")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("attendance.exams.view", "attendance.exams.generate")
+  @ApiOperation({ summary: "Proposta automática de calendário (não grava nada)" })
+  @ApiBody({ schema: openApi(generateBody) })
+  async proposal(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) seasonId: string, @Body(new ZodValidationPipe(generateBody)) body: z.infer<typeof generateBody>) {
+    const [actor, zone] = await Promise.all([this.actor(t, u), this.zone(t)]);
+    return unwrap(await this.exams.preview(this.repo(t), actor, zone, seasonId, body), EXAMS_HTTP);
+  }
+
+  @Post("seasons/:id/proposal/apply")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("attendance.exams.view", "attendance.exams.generate")
+  @ApiOperation({ summary: "Usar a proposta vista (fica em preparação, para rever e publicar)" })
+  @ApiBody({ schema: openApi(applyBody) })
+  async applyProposal(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) seasonId: string, @Body(new ZodValidationPipe(applyBody)) body: z.infer<typeof applyBody>) {
+    const [actor, zone] = await Promise.all([this.actor(t, u), this.zone(t)]);
+    const { fingerprint, ...opts } = body;
+    return unwrap(await this.exams.applyProposal(this.repo(t), actor, zone, seasonId, opts, fingerprint), EXAMS_HTTP);
   }
 
   // ---------------------------------------------------------------- publicar
