@@ -29,8 +29,8 @@ const MAX_ENTRIES = 2_000;
 
 /**
  * Diretório de colégios. Liga-se à BD da plataforma com um utilizador que SÓ
- * pode ler a tabela tenant_databases — mesmo comprometido, não vê equipa,
- * faturação nem dados dos colégios.
+ * pode ler a tabela tenant_databases (e inserir pedidos na lista de espera dos
+ * pagamentos) — mesmo comprometido, não vê equipa, faturação nem dados dos colégios.
  */
 @Injectable()
 export class TenantDirectory implements OnModuleDestroy {
@@ -45,6 +45,11 @@ export class TenantDirectory implements OnModuleDestroy {
       datasources: { db: { url: config.get("DIRECTORY_DATABASE_URL", { infer: true }) } },
       log: ["warn", "error"],
     });
+  }
+
+  /** A BD da plataforma, com o utilizador do diretório (só o que infra/db/grants.sql permite). */
+  get platform() {
+    return this.db;
   }
 
   async findBySlug(slug: string): Promise<TenantEntry | null> {

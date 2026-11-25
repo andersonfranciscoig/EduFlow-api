@@ -38,3 +38,7 @@ GRANT SELECT ON public.tenant_databases TO eduflow_school_directory;
 GRANT SELECT (id, logo_url) ON public.schools TO eduflow_school_directory;
 -- …e a app do UploadThing do colégio: só o token SELADO (abre-o com a chave privada dele)
 GRANT SELECT (school_id, app_id, token_sealed) ON public.school_storage TO eduflow_school_directory;
+-- …e a lista de espera dos pagamentos (referência, Express): pedir, retirar e ver o estado (sem as notas da equipa;
+-- ler note/requested_by_name é exigido pelo ON CONFLICT … EXCLUDED)
+GRANT SELECT (school_id, method, status, note, requested_by_name, requested_at), INSERT (school_id, method, note, requested_by_name),
+      UPDATE (status, note, requested_by_name, requested_at, updated_at) ON public.payment_integration_requests TO eduflow_school_directory;

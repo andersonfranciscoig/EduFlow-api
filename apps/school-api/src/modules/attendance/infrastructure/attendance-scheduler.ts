@@ -5,6 +5,8 @@ import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
 import { ExamNotices } from "../../exams/application/ExamNotices";
 import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
+import { Payments } from "../../finance/application/Payments";
+import { PrismaPaymentsRepository } from "../../finance/infrastructure/prisma-payments";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { DeadlineJob } from "../application/DeadlineJob";
 import { DigestJob } from "../application/DigestJob";
@@ -29,6 +31,8 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
   /** colégios cuja BD ainda não tem as tabelas da assiduidade (já avisados) */
   private readonly missing = new Set<string>();
   private readonly missingDigests = new Set<string>();
+  /** dia em que as cobranças de cada colégio já foram postas em dia (é idempotente: repetir não faz mal) */
+  private readonly chargesDay = new Map<string, string>();
 
   constructor(
     private readonly config: ConfigService<Env, true>,
@@ -39,6 +43,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     private readonly notifier: Notifier,
     private readonly examNotices: ExamNotices,
     private readonly settings: AttendanceSettings,
+    private readonly payments: Payments,
   ) {}
 
   onApplicationBootstrap() {
@@ -89,11 +94,32 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
         }
         await this.runDigests(slug);
         await this.runExamNotices(slug);
+        await this.runPayments(slug);
       }
     } catch (e) {
       this.logger.warn(`não foi possível ler os colégios: ${(e as Error).message}`);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Pagamentos: as cobranças do dia (uma vez por dia) e os pagamentos por validar fora do prazo. */
+  private async runPayments(slug: string) {
+    try {
+      const entry = await this.directory.findBySlug(slug);
+      if (!entry) return;
+      const db = this.connections.get(entry);
+      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('payments') IS NOT NULL AS ok`;
+      if (!ready?.ok) return;
+      const repo = new PrismaPaymentsRepository(db);
+      const day = localNow("Africa/Luanda", new Date()).slice(0, 10);
+      if (this.chargesDay.get(slug) !== day) {
+        await this.payments.dailySync(repo);
+        this.chargesDay.set(slug, day);
+      }
+      await this.payments.overdue(repo, this.notifier.for(db, { slug: entry.slug, name: entry.schoolName }));
+    } catch (e) {
+      this.logger.warn(`pagamentos falharam em ${slug}: ${(e as Error).message}`);
     }
   }
 
