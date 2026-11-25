@@ -22,6 +22,7 @@ export interface NewExam {
   room: string | null;
   format: ExamFormat;
   notes: string | null;
+  source?: "MANUAL" | "AUTOMATIC";
 }
 export interface NewNotice {
   seasonId: string;
@@ -53,7 +54,7 @@ export interface PublicExam extends ExamCtx {
 type Db = PrismaClient | Prisma.TransactionClient;
 const EXAM = Prisma.raw(`
   e.id, e.season_id AS "seasonId", e.group_id AS "groupId", e.subject_id AS "subjectId", su.name AS "subjectName", su.color AS "subjectColor", e.teacher_id AS "teacherId", t.full_name AS "teacherName",
-  to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt", e.room, e.format, e.notes, e.status, e.cancel_reason AS "cancelReason", e.updated_at AS "updatedAt"`);
+  to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt", e.room, e.format, e.notes, e.status, e.source, e.cancel_reason AS "cancelReason", e.updated_at AS "updatedAt"`);
 const isUnique = (e: unknown) => {
   if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false;
   return e.code === "P2002" || (e.meta as { code?: string } | undefined)?.code === "23505";
@@ -145,7 +146,7 @@ export class PrismaExamsRepository {
     const r = await this.db.$queryRaw<
       {
         data: {
-          plan: { classId: string; subjectId: string; name: string; code: string; color: string }[];
+          plan: { classId: string; subjectId: string; name: string; code: string; color: string; weekly: number }[];
           groupTeachers: { groupId: string; subjectId: string; employeeId: string }[];
           teachers: { id: string; fullName: string }[];
           slots: { shift: string; startsAt: string; endsAt: string }[];
@@ -153,7 +154,7 @@ export class PrismaExamsRepository {
       }[]
     >`
       SELECT json_build_object(
-        'plan', (SELECT coalesce(json_agg(json_build_object('classId', cs.class_id, 'subjectId', s.id, 'name', s.name, 'code', s.code, 'color', s.color) ORDER BY cs.position, s.name), '[]'::json)
+        'plan', (SELECT coalesce(json_agg(json_build_object('classId', cs.class_id, 'subjectId', s.id, 'name', s.name, 'code', s.code, 'color', s.color, 'weekly', cs.weekly_periods) ORDER BY cs.position, s.name), '[]'::json)
                    FROM class_subjects cs JOIN subjects s ON s.id = cs.subject_id WHERE cs.academic_year_id = ${yearId}::uuid),
         'groupTeachers', (SELECT coalesce(json_agg(json_build_object('groupId', gt.group_id, 'subjectId', gt.subject_id, 'employeeId', gt.employee_id)), '[]'::json)
                    FROM group_teachers gt JOIN class_groups g ON g.id = gt.group_id JOIN employees e ON e.id = gt.employee_id AND e.status IN ('APPROVED', 'ACTIVE') WHERE g.academic_year_id = ${yearId}::uuid),
@@ -203,19 +204,23 @@ export class PrismaExamsRepository {
 
   async insert(list: NewExam[], actorId: string | null, now: Date) {
     await this.db.$executeRaw`
-      INSERT INTO exams (id, season_id, group_id, subject_id, teacher_id, day, starts_at, ends_at, room, format, notes, status, created_by_id, created_at, updated_by_id, updated_at)
-      SELECT x.id, x."seasonId", x."groupId", x."subjectId", x."teacherId", x.day, x."startsAt", x."endsAt", x.room, x.format, x.notes, 'SCHEDULED', ${actorId}::uuid, ${now}::timestamp, ${actorId}::uuid, ${now}::timestamp
-        FROM json_to_recordset(${JSON.stringify(list)}::json) AS x(id uuid, "seasonId" uuid, "groupId" uuid, "subjectId" uuid, "teacherId" uuid, day date, "startsAt" time, "endsAt" time, room text, format text, notes text)`;
+      INSERT INTO exams (id, season_id, group_id, subject_id, teacher_id, day, starts_at, ends_at, room, format, notes, source, status, created_by_id, created_at, updated_by_id, updated_at)
+      SELECT x.id, x."seasonId", x."groupId", x."subjectId", x."teacherId", x.day, x."startsAt", x."endsAt", x.room, x.format, x.notes, coalesce(x.source, 'MANUAL'), 'SCHEDULED', ${actorId}::uuid, ${now}::timestamp, ${actorId}::uuid, ${now}::timestamp
+        FROM json_to_recordset(${JSON.stringify(list)}::json) AS x(id uuid, "seasonId" uuid, "groupId" uuid, "subjectId" uuid, "teacherId" uuid, day date, "startsAt" time, "endsAt" time, room text, format text, notes text, source text)`;
   }
 
   async update(id: string, e: Omit<NewExam, "id" | "seasonId" | "groupId" | "subjectId">, actorId: string | null, now: Date) {
     await this.db.$executeRaw`
-      UPDATE exams SET teacher_id = ${e.teacherId}::uuid, day = ${e.day}::date, starts_at = ${e.startsAt}::time, ends_at = ${e.endsAt}::time, room = ${e.room}, format = ${e.format}, notes = ${e.notes},
+      UPDATE exams SET teacher_id = ${e.teacherId}::uuid, day = ${e.day}::date, starts_at = ${e.startsAt}::time, ends_at = ${e.endsAt}::time, room = ${e.room}, format = ${e.format}, notes = ${e.notes}, source = 'MANUAL',
              updated_by_id = ${actorId}::uuid, updated_at = ${now} WHERE id = ${id}::uuid`;
   }
 
   async remove(id: string) {
     await this.db.$executeRaw`DELETE FROM exams WHERE id = ${id}::uuid`;
+  }
+
+  async removeMany(ids: string[]) {
+    await this.db.$executeRaw`DELETE FROM exams WHERE id = ANY(${ids}::uuid[])`;
   }
 
   async cancel(id: string, reason: string, actorId: string | null, now: Date) {

@@ -25,7 +25,7 @@ export const MAX_PER_PERIOD = 6;
 /** Mais do que isto no mesmo dia, para uma turma, dá aviso. */
 export const MAX_PER_DAY = 2;
 
-export type ExamErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "YEAR_CLOSED" | "CONFLICTS" | "NEEDS_CONFIRMATION" | "EXAM_EXISTS";
+export type ExamErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "YEAR_CLOSED" | "CONFLICTS" | "NEEDS_CONFIRMATION" | "EXAM_EXISTS" | "PROPOSAL_CHANGED";
 export type ExamError = DomainError<ExamErrorCode>;
 export const examError = (code: ExamErrorCode, message: string, meta?: Record<string, unknown>): ExamError => new DomainError(code, message, meta);
 
@@ -120,6 +120,8 @@ export interface ExamCtx {
   format: ExamFormat;
   notes: string | null;
   status: ExamStatus;
+  /** AUTOMATIC = da proposta automática, ainda não ajustada à mão */
+  source: "MANUAL" | "AUTOMATIC";
   cancelReason: string | null;
   updatedAt: string;
 }

@@ -555,6 +555,8 @@ model Exam {
   /// SCHEDULED | CANCELLED
   status       String   @default("SCHEDULED")
   cancelReason String?  @map("cancel_reason")
+  /// MANUAL | AUTOMATIC (da proposta automática, ainda não ajustada)
+  source       String   @default("MANUAL")
   createdById  String?  @map("created_by_id") @db.Uuid
   createdAt    DateTime @map("created_at")
   updatedById  String?  @map("updated_by_id") @db.Uuid
