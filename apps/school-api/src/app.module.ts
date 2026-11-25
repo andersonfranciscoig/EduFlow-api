@@ -9,6 +9,7 @@ import { AttendanceModule } from "./modules/attendance/attendance.module";
 import { ExamsModule } from "./modules/exams/exams.module";
 import { FamilyModule } from "./modules/family/family.module";
 import { FinanceModule } from "./modules/finance/finance.module";
+import { GradingModule } from "./modules/grading/grading.module";
 import { HrModule } from "./modules/hr/hr.module";
 import { IdentityModule } from "./modules/identity/identity.module";
 import { NotificationsModule } from "./modules/notifications/notifications.module";
@@ -50,6 +51,7 @@ class HealthController {
     FamilyModule,
     AttendanceModule,
     ExamsModule,
+    GradingModule,
     NotificationsModule,
   ],
   controllers: [HealthController],
