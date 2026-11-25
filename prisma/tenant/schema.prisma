@@ -567,6 +567,18 @@ model Exam {
   @@map("exams")
 }
 
+/// Professor escalado para vigiar uma prova.
+model ExamInvigilator {
+  examId       String   @map("exam_id") @db.Uuid
+  employeeId   String   @map("employee_id") @db.Uuid
+  assignedById String?  @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime @map("assigned_at")
+
+  @@id([examId, employeeId])
+  @@index([employeeId], map: "exam_invigilators_employee_idx")
+  @@map("exam_invigilators")
+}
+
 /// Avisos das provas por entregar (gravados com a alteração; entregues a seguir, retomados pelo ciclo automático).
 model ExamNotice {
   id           String    @id @db.Uuid
@@ -574,6 +586,8 @@ model ExamNotice {
   groupIds     String[]  @map("group_ids") @db.Uuid
   subjectId    String?   @map("subject_id") @db.Uuid
   teacherIds   String[]  @default([]) @map("teacher_ids") @db.Uuid
+  /// GENERAL | PUBLISHED | INVIGILATION
+  kind         String    @default("GENERAL")
   title        String
   body         String
   createdAt    DateTime  @map("created_at")

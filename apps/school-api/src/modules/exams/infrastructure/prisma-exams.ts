@@ -31,8 +31,22 @@ export interface NewNotice {
   teacherIds: string[];
   title: string;
   body: string;
+  kind?: NoticeKind;
+}
+export type NoticeKind = "GENERAL" | "PUBLISHED" | "INVIGILATION";
+/** Uma prova de que um professor precisa de saber: da sua disciplina (ou a cargo dele), ou que vai vigiar. */
+export interface DutyRow {
+  employeeId: string;
+  duty: "SUBJECT" | "INVIGILATION";
+  subjectName: string;
+  groupLabel: string;
+  day: string;
+  startsAt: string;
+  endsAt: string;
+  room: string | null;
 }
 export interface NoticeRow {
+  kind: NoticeKind;
   id: string;
   season_id: string;
   group_ids: string[];
@@ -49,12 +63,16 @@ export interface PublicExam extends ExamCtx {
   groupLabel: string;
   groupRoom: string | null;
   interrupts: boolean;
+  /** só nas consultas do professor */
+  mySubject?: boolean;
+  teaches?: boolean;
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;
 const EXAM = Prisma.raw(`
   e.id, e.season_id AS "seasonId", e.group_id AS "groupId", e.subject_id AS "subjectId", su.name AS "subjectName", su.color AS "subjectColor", e.teacher_id AS "teacherId", t.full_name AS "teacherName",
-  to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt", e.room, e.format, e.notes, e.status, e.source, e.cancel_reason AS "cancelReason", e.updated_at AS "updatedAt"`);
+  to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt", e.room, e.format, e.notes, e.status, e.source, e.cancel_reason AS "cancelReason", e.updated_at AS "updatedAt",
+  (SELECT coalesce(json_agg(json_build_object('id', iv.employee_id, 'name', ie.full_name) ORDER BY ie.full_name), '[]'::json) FROM exam_invigilators iv JOIN employees ie ON ie.id = iv.employee_id WHERE iv.exam_id = e.id) AS invigilators`);
 const isUnique = (e: unknown) => {
   if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false;
   return e.code === "P2002" || (e.meta as { code?: string } | undefined)?.code === "23505";
@@ -227,6 +245,32 @@ export class PrismaExamsRepository {
     await this.db.$executeRaw`UPDATE exams SET status = 'CANCELLED', cancel_reason = ${reason}, updated_by_id = ${actorId}::uuid, updated_at = ${now} WHERE id = ${id}::uuid`;
   }
 
+  // ------------------------------------------------------------------ vigilantes
+
+  /** Os vigilantes de uma prova passam a ser estes (a prova fica como ajustada à mão). */
+  async setInvigilators(examId: string, ids: string[], actorId: string | null, now: Date) {
+    await this.db.$executeRaw`DELETE FROM exam_invigilators WHERE exam_id = ${examId}::uuid AND NOT (employee_id = ANY(${ids}::uuid[]))`;
+    if (ids.length)
+      await this.db.$executeRaw`
+        INSERT INTO exam_invigilators (exam_id, employee_id, assigned_by_id, assigned_at) SELECT ${examId}::uuid, i, ${actorId}::uuid, ${now}::timestamp FROM unnest(${ids}::uuid[]) i ON CONFLICT DO NOTHING`;
+    await this.db.$executeRaw`UPDATE exams SET source = 'MANUAL', updated_by_id = ${actorId}::uuid, updated_at = ${now} WHERE id = ${examId}::uuid`;
+  }
+
+  /** O que diz respeito a cada professor numa época (turmas indicadas): as suas provas e as que vigia. */
+  async duties(seasonId: string, groupIds: string[]): Promise<DutyRow[]> {
+    const r = await this.db.$queryRaw<(Omit<DutyRow, "groupLabel"> & { groupName: string; grade: number; courseCode: string | null })[]>`
+      WITH d AS (
+        SELECT e.id, gt.employee_id, 'SUBJECT' AS duty FROM exams e JOIN group_teachers gt ON gt.group_id = e.group_id AND gt.subject_id = e.subject_id WHERE e.season_id = ${seasonId}::uuid
+        UNION SELECT id, teacher_id, 'SUBJECT' FROM exams WHERE season_id = ${seasonId}::uuid AND teacher_id IS NOT NULL
+        UNION SELECT iv.exam_id, iv.employee_id, 'INVIGILATION' FROM exam_invigilators iv JOIN exams e ON e.id = iv.exam_id WHERE e.season_id = ${seasonId}::uuid
+      )
+      SELECT d.employee_id AS "employeeId", d.duty, su.name AS "subjectName", to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt",
+             coalesce(e.room, g.room) AS room, g.name AS "groupName", c.grade, co.code AS "courseCode"
+        FROM d JOIN exams e ON e.id = d.id JOIN subjects su ON su.id = e.subject_id JOIN class_groups g ON g.id = e.group_id JOIN school_classes c ON c.id = g.class_id LEFT JOIN courses co ON co.id = c.course_id
+       WHERE e.status = 'SCHEDULED' AND e.group_id = ANY(${groupIds}::uuid[]) ORDER BY e.day, e.starts_at, su.name, g.name`;
+    return r.map(({ groupName, grade, courseCode, ...x }) => ({ ...x, groupLabel: groupLabel({ name: groupName, grade, courseCode }) }));
+  }
+
   // ------------------------------------------------------------------ histórico e avisos
 
   async record(type: string, seasonId: string, actorId: string | null, details: Record<string, unknown>, now: Date) {
@@ -241,8 +285,8 @@ export class PrismaExamsRepository {
 
   async addNotice(n: NewNotice, now: Date) {
     await this.db.$executeRaw`
-      INSERT INTO exam_notices (id, season_id, group_ids, subject_id, teacher_ids, title, body, created_at)
-      VALUES (${randomUUID()}::uuid, ${n.seasonId}::uuid, ${n.groupIds}::uuid[], ${n.subjectId}::uuid, ${n.teacherIds}::uuid[], ${n.title.slice(0, 180)}, ${n.body.slice(0, 900)}, ${now})`;
+      INSERT INTO exam_notices (id, season_id, group_ids, subject_id, teacher_ids, kind, title, body, created_at)
+      VALUES (${randomUUID()}::uuid, ${n.seasonId}::uuid, ${n.groupIds}::uuid[], ${n.subjectId}::uuid, ${n.teacherIds}::uuid[], ${n.kind ?? "GENERAL"}, ${n.title.slice(0, 180)}, ${n.body.slice(0, 900)}, ${now})`;
   }
 
   /** Reserva os avisos por entregar (outra instância não pega nos mesmos; um que fique a meio volta 5 min depois). */
@@ -253,7 +297,7 @@ export class PrismaExamsRepository {
          WHERE (family_sent_at IS NULL OR staff_sent_at IS NULL) AND attempts < 5 AND (claimed_at IS NULL OR claimed_at < ${now}::timestamp - interval '5 minutes')
          ORDER BY created_at LIMIT 20 FOR UPDATE SKIP LOCKED),
       up AS (UPDATE exam_notices n SET claimed_at = ${now}::timestamp, attempts = n.attempts + 1 FROM pick WHERE n.id = pick.id RETURNING n.*)
-      SELECT id, season_id, group_ids, subject_id, teacher_ids, title, body, family_sent_at IS NOT NULL AS family_sent, staff_sent_at IS NOT NULL AS staff_sent FROM up ORDER BY created_at`;
+      SELECT id, season_id, group_ids, subject_id, teacher_ids, kind, title, body, family_sent_at IS NOT NULL AS family_sent, staff_sent_at IS NOT NULL AS staff_sent FROM up ORDER BY created_at`;
     return r;
   }
 
@@ -271,12 +315,16 @@ export class PrismaExamsRepository {
     await this.db.$executeRaw`UPDATE exam_notices SET staff_sent_at = ${now} WHERE id = ${id}::uuid`;
   }
 
-  /** Professores a avisar: das disciplinas nas turmas, os responsáveis pelas provas e os diretores de turma. */
-  async noticeEmployees(n: Pick<NoticeRow, "season_id" | "group_ids" | "subject_id" | "teacher_ids">) {
+  /**
+   * Professores a avisar: os que dão aulas às turmas (ou só os da disciplina), os responsáveis pelas provas e
+   * os diretores de turma. Os vigilantes entram nos avisos gerais (na publicação têm o seu próprio aviso).
+   */
+  async noticeEmployees(n: Pick<NoticeRow, "season_id" | "group_ids" | "subject_id" | "teacher_ids" | "kind">) {
     const r = await this.db.$queryRaw<{ id: string }[]>`
-      SELECT employee_id AS id FROM group_teachers gt JOIN class_groups g ON g.id = gt.group_id
+      SELECT employee_id AS id FROM group_teachers gt
        WHERE gt.group_id = ANY(${n.group_ids}::uuid[]) AND (${n.subject_id}::uuid IS NULL OR gt.subject_id = ${n.subject_id}::uuid)
-         AND EXISTS (SELECT 1 FROM exam_season_subjects ss WHERE ss.season_id = ${n.season_id}::uuid AND ss.class_id = g.class_id AND ss.subject_id = gt.subject_id)
+      UNION SELECT iv.employee_id FROM exam_invigilators iv JOIN exams e ON e.id = iv.exam_id
+       WHERE e.season_id = ${n.season_id}::uuid AND e.group_id = ANY(${n.group_ids}::uuid[]) AND e.status = 'SCHEDULED' AND ${n.subject_id}::uuid IS NULL AND ${n.kind} = 'GENERAL'
       UNION SELECT coordinator_id FROM class_groups WHERE id = ANY(${n.group_ids}::uuid[]) AND coordinator_id IS NOT NULL
       UNION SELECT teacher_id FROM exams WHERE season_id = ${n.season_id}::uuid AND group_id = ANY(${n.group_ids}::uuid[]) AND teacher_id IS NOT NULL AND status = 'SCHEDULED' AND ${n.subject_id}::uuid IS NULL
       UNION SELECT unnest(${n.teacher_ids}::uuid[])`;
@@ -323,20 +371,24 @@ export class PrismaExamsRepository {
     return r[0]?.id ?? null;
   }
 
-  private async published(where: Prisma.Sql): Promise<PublicExam[]> {
+  private async published(where: Prisma.Sql, extra: Prisma.Sql = Prisma.empty): Promise<PublicExam[]> {
     const r = await this.db.$queryRaw<(Omit<PublicExam, "groupLabel"> & { groupName: string; grade: number; courseCode: string | null })[]>`
-      SELECT ${EXAM}, s.name AS "seasonName", s.interrupts, g.name AS "groupName", g.room AS "groupRoom", c.grade, co.code AS "courseCode"
+      SELECT ${EXAM}, s.name AS "seasonName", s.interrupts ${extra}, g.name AS "groupName", g.room AS "groupRoom", c.grade, co.code AS "courseCode"
         FROM exams e JOIN exam_seasons s ON s.id = e.season_id AND s.status = 'PUBLISHED' JOIN subjects su ON su.id = e.subject_id LEFT JOIN employees t ON t.id = e.teacher_id
         JOIN class_groups g ON g.id = e.group_id JOIN school_classes c ON c.id = g.class_id LEFT JOIN courses co ON co.id = c.course_id
        WHERE ${where} ORDER BY e.day, e.starts_at, su.name`;
     return r.map(({ groupName, grade, courseCode, ...x }) => ({ ...x, groupLabel: groupLabel({ name: groupName, grade, courseCode }) }));
   }
 
-  /** As provas que dizem respeito ao professor: as que tem a cargo, as das suas disciplinas e as das turmas que coordena. */
+  /** O calendário de um professor: as turmas onde dá aulas ou que coordena (todas as provas), as que tem a cargo e as que vigia. */
   teacherExams(employeeId: string) {
     return this.published(Prisma.sql`(e.teacher_id = ${employeeId}::uuid OR g.coordinator_id = ${employeeId}::uuid
-      OR EXISTS (SELECT 1 FROM group_teachers gt WHERE gt.group_id = e.group_id AND gt.subject_id = e.subject_id AND gt.employee_id = ${employeeId}::uuid))
-      AND e.day >= (SELECT coalesce(min(starts_on), '1900-01-01') FROM academic_years WHERE status <> 'CLOSED')`);
+      OR EXISTS (SELECT 1 FROM group_teachers gt WHERE gt.group_id = e.group_id AND gt.employee_id = ${employeeId}::uuid)
+      OR EXISTS (SELECT 1 FROM exam_invigilators iv WHERE iv.exam_id = e.id AND iv.employee_id = ${employeeId}::uuid))
+      AND e.day >= (SELECT coalesce(min(starts_on), '1900-01-01') FROM academic_years WHERE status <> 'CLOSED')`,
+      Prisma.sql`, EXISTS (SELECT 1 FROM group_teachers gt WHERE gt.group_id = e.group_id AND gt.subject_id = e.subject_id AND gt.employee_id = ${employeeId}::uuid) AS "mySubject",
+        EXISTS (SELECT 1 FROM group_teachers gt WHERE gt.group_id = e.group_id AND gt.employee_id = ${employeeId}::uuid) AS teaches`,
+    );
   }
 
   async coordinatedGroupIds(employeeId: string) {

@@ -52,6 +52,9 @@ const newExamBody = z
   .meta({ title: "NewExam", description: 'A prova de uma disciplina numa ou em várias turmas. teacherId: um professor, "AUTO" (o da disciplina em cada turma) ou null.' });
 const checkBody = newExamBody.extend({ examId: z.uuid().nullish() }).meta({ title: "ExamCheck", description: "Verificar conflitos sem gravar." });
 const examBody = z.object(examFields).meta({ title: "ExamUpdate" });
+const invigilatorsBody = z
+  .object({ employeeIds: z.array(z.uuid()).max(20), confirm: z.boolean().optional(), reason: z.string().max(300).nullish() })
+  .meta({ title: "ExamInvigilators", description: "Os vigilantes da prova (substitui os atuais); com avisos, pede confirm." });
 const reasonBody = z.object({ reason: z.string().max(300) }).meta({ title: "ExamReason" });
 const publishBody = z.object({ confirm: z.boolean().optional() }).meta({ title: "ExamPublish" });
 const generateFields = {
@@ -106,7 +109,7 @@ export class ExamsController {
 
   @Get("me")
   @TeacherMay()
-  @ApiOperation({ summary: "Professor: as provas publicadas que lhe dizem respeito (a cargo, das suas disciplinas, das turmas que coordena)" })
+  @ApiOperation({ summary: "Professor: o calendário publicado das suas turmas, as provas das suas disciplinas ou a cargo, e as que vigia" })
   async mine(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
     return unwrap(await this.exams.mine(this.repo(t), await this.zone(t), u.id), EXAMS_HTTP);
   }
@@ -194,6 +197,26 @@ export class ExamsController {
   async cancel(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) examId: string, @Body(new ZodValidationPipe(reasonBody)) body: z.infer<typeof reasonBody>) {
     const [actor, zone] = await Promise.all([this.actor(t, u), this.zone(t)]);
     const r = unwrap(await this.exams.cancel(this.repo(t), actor, zone, examId, body.reason), EXAMS_HTTP);
+    this.deliver(t, zone);
+    return r;
+  }
+
+  // ---------------------------------------------------------------- vigilância
+
+  @Get("items/:id/invigilators")
+  @RequirePermission("attendance.exams.view", "attendance.exams.manage")
+  @ApiOperation({ summary: "Quem pode vigiar a prova (ocupado, com aula, quantas já vigia)" })
+  async invigilatorCandidates(@CurrentTenant() t: TenantContext, @Param("id", id) examId: string) {
+    return unwrap(await this.exams.invigilatorCandidates(this.repo(t), await this.zone(t), examId), EXAMS_HTTP);
+  }
+
+  @Put("items/:id/invigilators")
+  @RequirePermission("attendance.exams.view", "attendance.exams.manage")
+  @ApiOperation({ summary: "Escalar os vigilantes (publicado: quem publica; avisa quem entra e quem sai)" })
+  @ApiBody({ schema: openApi(invigilatorsBody) })
+  async setInvigilators(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) examId: string, @Body(new ZodValidationPipe(invigilatorsBody)) body: z.infer<typeof invigilatorsBody>) {
+    const [actor, zone] = await Promise.all([this.actor(t, u), this.zone(t)]);
+    const r = unwrap(await this.exams.setInvigilators(this.repo(t), actor, zone, examId, body), EXAMS_HTTP);
     this.deliver(t, zone);
     return r;
   }
