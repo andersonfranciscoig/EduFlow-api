@@ -11,6 +11,7 @@ import { DigestJob } from "./application/DigestJob";
 import { Justifications } from "./application/Justifications";
 import { Pendings } from "./application/Pendings";
 import { Presence } from "./application/Presence";
+import { Reports } from "./application/Reports";
 import { StudentAlerts } from "./application/StudentAlerts";
 import { TeacherOccurrences } from "./application/TeacherOccurrences";
 import { AttendanceScheduler } from "./infrastructure/attendance-scheduler";
@@ -19,6 +20,7 @@ import { DigestsController, FamilyDigestsController } from "./presentation/diges
 import { JustificationsController } from "./presentation/justifications.controller";
 import { PendingsController } from "./presentation/pendings.controller";
 import { MyPresenceController, StudentPresenceController } from "./presentation/presence.controller";
+import { ReportsController } from "./presentation/reports.controller";
 import { TeacherOccurrencesController } from "./presentation/teacher-occurrences.controller";
 
 /**
@@ -29,7 +31,7 @@ import { TeacherOccurrencesController } from "./presentation/teacher-occurrences
  */
 @Module({
   imports: [IdentityModule, NotificationsModule, HrModule, FamilyModule],
-  controllers: [AttendanceSettingsController, TeacherOccurrencesController, MyPresenceController, StudentPresenceController, PendingsController, JustificationsController, DigestsController, FamilyDigestsController],
+  controllers: [AttendanceSettingsController, TeacherOccurrencesController, MyPresenceController, StudentPresenceController, PendingsController, JustificationsController, DigestsController, FamilyDigestsController, ReportsController],
   providers: [
     { provide: AttendanceSettings, useFactory: () => new AttendanceSettings(systemClock) },
     { provide: TeacherOccurrences, useFactory: () => new TeacherOccurrences(uuidGenerator, systemClock) },
@@ -39,6 +41,7 @@ import { TeacherOccurrencesController } from "./presentation/teacher-occurrences
     { provide: Pendings, useFactory: () => new Pendings(uuidGenerator, systemClock) },
     { provide: DeadlineJob, inject: [AttendanceSettings], useFactory: (s: AttendanceSettings) => new DeadlineJob(s) },
     { provide: DigestJob, inject: [AttendanceSettings], useFactory: (s: AttendanceSettings) => new DigestJob(s) },
+    { provide: Reports, useFactory: () => new Reports(systemClock) },
     { provide: ExamNotices, useFactory: () => new ExamNotices() },
     AttendanceScheduler,
   ],
