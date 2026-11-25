@@ -88,7 +88,7 @@ export class Enrollments {
    * Depois de aprovar: guarda uma vaga até ao fim do período de matrículas (ou N dias) e, no modo
    * automático, matricula logo. Sem vaga, a inscrição fica aprovada sem vaga guardada.
    */
-  async afterApproval(repo: EnrollmentsRepository, apps: ApplicationsRepository, school: School, applicationId: string, actor: { id: string; name: string }) {
+  async afterApproval(repo: EnrollmentsRepository, apps: ApplicationsRepository, school: School, applicationId: string, actor: { id: string; name: string }, unpaid: boolean = false) {
     const app = await apps.byId(applicationId);
     if (!app?.classId || !app.academicYearId || !app.number) return { held: false, enrolled: null };
     const cfg = await repo.config();
@@ -97,7 +97,8 @@ export class Enrollments {
     const endAt = end ? new Date(`${end}T23:59:59+01:00`) : null;
     const expiresAt = endAt && endAt > now ? endAt : new Date(now.getTime() + cfg.holdDays * DAY);
     const hold = await repo.holdForApplication({ applicationId, classId: app.classId, reference: app.number, expiresAt, now });
-    if (cfg.enrollmentMode !== "AUTO") return { held: hold.ok, enrolled: null };
+    // no modo automático, com pagamentos por validar, espera pela validação (matricula-se nessa altura)
+    if (cfg.enrollmentMode !== "AUTO" || unpaid) return { held: hold.ok, enrolled: null };
     const r = await repo.enroll({ applicationId, groupId: null, exceptionReason: null, by: { kind: "AUTO", id: actor.id, name: actor.name }, cfg, now });
     if (!r.ok) return { held: hold.ok, enrolled: null };
     this.later(() => this.notify(repo, apps, school, r.enrollment));
@@ -108,10 +109,10 @@ export class Enrollments {
 
   /**
    * O que se paga na inscrição e no ato da matrícula (ou da renovação), para este aluno nesta classe,
-   * pelo preçário do colégio. Ainda não há pagamento no sistema: só se informa (paga-se na secretaria).
+   * pelo preçário do colégio, e (se o colégio recebe por aqui) o estado de cada cobrança.
    * Renovação = aluno que continua; as outras inscrições = aluno novo.
    */
-  async charges(repo: EnrollmentsRepository, classId: string | null, processType: string) {
+  async charges(repo: EnrollmentsRepository, classId: string | null, processType: string, payments?: { online: boolean; charges: unknown[] }) {
     const student = processType === "RENOVACAO" ? "CONTINUANTES" : "NOVOS";
     const fees = classId ? await repo.fees(classId) : [];
     const application = chargesAt(fees, "INSCRICAO", student);
@@ -125,9 +126,22 @@ export class Enrollments {
       enrollment,
       /** nada a pagar nem na inscrição nem na matrícula (colégio gratuito, ou tudo a 0 Kz) */
       free: application.free && enrollment.free,
-      online: false,
-      notice: "O pagamento pela plataforma chega em breve. Por agora, os pagamentos fazem-se na secretaria do colégio (indique o n.º da inscrição).",
+      online: payments?.online ?? false,
+      /** o que já está lançado para pagar, com o estado de cada cobrança */
+      items: payments?.charges ?? [],
+      notice: payments?.online
+        ? "Pague por transferência ou depósito numa das contas do colégio e envie o comprovativo: é validado pelas Finanças em 48 horas ou menos."
+        : "O pagamento pela plataforma chega em breve. Por agora, os pagamentos fazem-se na secretaria do colégio (indique o n.º da inscrição).",
     };
+  }
+
+  /** Modo automático: os pagamentos da matrícula ficaram validados → matricula. */
+  async afterPayment(repo: EnrollmentsRepository, apps: ApplicationsRepository, school: School, applicationId: string) {
+    const [app, cfg] = await Promise.all([apps.byId(applicationId), repo.config()]);
+    if (cfg.enrollmentMode !== "AUTO" || app?.status !== "APPROVED" || (await repo.byApplication(applicationId))) return null;
+    const r = await repo.enroll({ applicationId, groupId: null, exceptionReason: null, by: { kind: "AUTO", id: app.accountId, name: "Pagamento validado" }, cfg, now: this.clock.now() });
+    if (r.ok) this.later(() => this.notify(repo, apps, school, r.enrollment));
+    return r.ok ? r.enrollment.number : null;
   }
 
   /** O que a secretaria vê para confirmar: vagas, turmas com lugares, a vaga guardada, o preçário. */
@@ -190,12 +204,15 @@ export class Enrollments {
     by: { kind: "STAFF" | "FAMILY"; id: string; name: string },
     input: { groupId?: string | null; exceptionReason?: string | null },
     canOverride: boolean,
+    /** o que falta pagar (validado): impede, salvo exceção autorizada com motivo */
+    unpaid: { message: string } | null = null,
   ) {
     const cfg = await repo.config();
     if (by.kind === "FAMILY" && cfg.enrollmentMode !== "FAMILY") return fail(admissionError("FORBIDDEN", "Neste colégio a matrícula é confirmada pela secretaria."));
     const reason = input.exceptionReason?.replace(/\s+/g, " ").trim() || null;
     if (reason && !canOverride) return fail(admissionError("FORBIDDEN", "Matricular sem vaga exige a permissão de exceções."));
     if (reason && (reason.length < 5 || reason.length > 500)) return fail(admissionError("INVALID_INPUT", "Explique a exceção (5 a 500 caracteres)."));
+    if (unpaid && !(by.kind === "STAFF" && reason)) return fail(admissionError("PAYMENT_PENDING", `${unpaid.message}${by.kind === "STAFF" && canOverride ? " Só com uma exceção autorizada (e um motivo)." : ""}`));
     const r = await repo.enroll({ applicationId, groupId: by.kind === "FAMILY" ? null : (input.groupId ?? null), exceptionReason: by.kind === "FAMILY" ? null : reason, by, cfg, now: this.clock.now() });
     if (!r.ok) return fail(admissionError(ERRORS[r.reason].code, ERRORS[r.reason].message));
     // o registo e o email não atrasam a resposta (com a BD e o Brevo remotos, contam segundos)

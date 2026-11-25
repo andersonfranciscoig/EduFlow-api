@@ -28,6 +28,7 @@ export interface PlanCatalog {
     referenceValidityDays: number;
     transferInstructions: string | null;
   }>;
+  listBankAccounts(onlyActive?: boolean): Promise<{ id: string; bankName: string; holder: string; iban: string; active: boolean }[]>;
   findBankAccount(id: string): Promise<{ id: string; bankName: string; holder: string; iban: string; active: boolean } | null>;
 }
 
@@ -57,12 +58,25 @@ export interface SchoolSettings {
   defaultPhoneCountryCode: string;
   /** Endereço do portal de cada colégio ({slug}). */
   portalUrlTemplate: string;
+  /** Pagamento por referência ligado (ainda não: chega em breve). */
+  referencePayments: boolean;
 }
 
 /** Avisos por email ao responsável (melhor esforço: nunca falha a operação). */
 export interface SchoolNotifier {
   schoolActivated(input: { to: { email: string; name: string }; schoolName: string; portalUrl: string; subscriptionEndsAt: Date | null }): Promise<void>;
   schoolSuspended(input: { to: { email: string; name: string }; schoolName: string; reason: string }): Promise<void>;
+  /** Estado do pagamento da subscrição (ao responsável do colégio). */
+  paymentUpdate(input: { to: { email: string; name: string }; schoolName: string; state: "OPEN" | "SUBMITTED" | "REJECTED" | "CONFIRMED"; orderNumber: string; total: number; reason?: string }): Promise<void>;
+  /** À equipa EduFlow que gere a faturação: há um pagamento para validar, ou mudou de estado. */
+  teamPaymentUpdate(input: { to: { email: string; name: string }[]; schoolId: string; schoolName: string; state: "SUBMITTED" | "REJECTED" | "CONFIRMED"; orderNumber: string; total: number; detail: string }): Promise<void>;
+  /** A resposta da EduFlow a um pedido de pagamento por referência/Express. */
+  integrationUpdate(input: { to: { email: string; name: string }; schoolName: string; methodLabel: string; status: "CONTACTED" | "DONE" | "DECLINED"; note: string | null }): Promise<void>;
+}
+
+/** Quem da equipa EduFlow trata dos pagamentos (contas ativas com billing.manage). */
+export interface BillingTeam {
+  emails(): Promise<{ email: string; name: string }[]>;
 }
 
 /** Bilhetes de suporte (assinados com a chave privada que só a plataforma tem). */
@@ -95,6 +109,7 @@ export const SCHOOL_TOKENS = {
   SchoolSettings: Symbol("SchoolSettings"),
   SchoolDatabases: Symbol("SchoolDatabases"),
   SchoolNotifier: Symbol("SchoolNotifier"),
+  BillingTeam: Symbol("BillingTeam"),
   LogoStorage: Symbol("LogoStorage"),
   SupportTicketIssuer: Symbol("SupportTicketIssuer"),
 } as const;

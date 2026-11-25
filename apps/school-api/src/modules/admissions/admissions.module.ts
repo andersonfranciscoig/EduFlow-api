@@ -1,4 +1,7 @@
 import { Module } from "@nestjs/common";
+import type { TenantContext } from "../../tenancy/tenant-context";
+import { PrismaApplicationsRepository } from "./infrastructure/prisma-applications";
+import { PrismaEnrollmentsRepository } from "./infrastructure/prisma-enrollments";
 import { ConfigService } from "@nestjs/config";
 import { readKeyFile } from "../../../../../libs/kernel/src/infrastructure/keys";
 import { BrevoMailer, ConsoleMailer } from "../../../../../libs/kernel/src/infrastructure/mail";
@@ -6,6 +9,9 @@ import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infra
 import type { Env } from "../../config/env";
 import { AttendanceModule } from "../attendance/attendance.module";
 import { ExamsModule } from "../exams/exams.module";
+import { FinanceModule } from "../finance/finance.module";
+import { Payments } from "../finance/application/Payments";
+import { PrismaPaymentsRepository } from "../finance/infrastructure/prisma-payments";
 import { FamilyModule } from "../family/family.module";
 import { HrModule } from "../hr/hr.module";
 import { IdentityModule } from "../identity/identity.module";
@@ -35,7 +41,7 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
   // IdentityModule: SchoolAuthGuard + permissões · FamilyModule: FamilyAuthGuard · HrModule: ficheiros cifrados do colégio
   // PedagogyModule: o horário da turma (família) e o acesso do professor às suas turmas
   // AttendanceModule: a assiduidade do aluno na área da família · ExamsModule: as provas do aluno
-  imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule, AttendanceModule, ExamsModule],
+  imports: [IdentityModule, FamilyModule, HrModule, PedagogyModule, AttendanceModule, ExamsModule, FinanceModule],
   controllers: [AdmissionSettingsController, PublicAdmissionsController, FamilyApplicationsController, StaffApplicationsController, EnrollmentConfigController, StaffStudentsController, FamilyStudentsController, TeacherStudentsController, FamilyRenewalsController, StaffRenewalsController, RegistryController],
   providers: [
     { provide: AdmissionSettings, useFactory: () => new AdmissionSettings(uuidGenerator, systemClock) },
@@ -75,4 +81,15 @@ import { EnrollmentConfigController, FamilyApplicationsController, PublicAdmissi
     },
   ],
 })
-export class AdmissionsModule {}
+export class AdmissionsModule {
+  constructor(payments: Payments, enrollments: Enrollments) {
+    // modo automático: com os pagamentos da matrícula validados (ou isentos), matricula logo
+    payments.onSettled(async (ctx, ids) => {
+      const t = ctx as TenantContext;
+      for (const id of ids) {
+        if (await payments.pending(new PrismaPaymentsRepository(t.db), id, "MATRICULA")) continue;
+        await enrollments.afterPayment(new PrismaEnrollmentsRepository(t.db), new PrismaApplicationsRepository(t.db), { name: t.entry.schoolName, slug: t.entry.slug }, id);
+      }
+    });
+  }
+}

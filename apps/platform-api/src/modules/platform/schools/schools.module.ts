@@ -18,6 +18,7 @@ import { IdentityModule } from "../identity/identity.module";
 import { PlatformDatabaseModule } from "../infrastructure/platform-database.module";
 import { PlatformPrismaService } from "../infrastructure/platform-prisma.service";
 import {
+  type BillingTeam,
   type CodeGenerator,
   type LogoStorage,
   type PlanCatalog,
@@ -34,7 +35,7 @@ import { SchoolBranding } from "./application/SchoolBranding";
 import { SchoolOnboarding } from "./application/SchoolOnboarding";
 import { SchoolPayments } from "./application/SchoolPayments";
 import type { SchoolRepository } from "./domain/SchoolRepository";
-import { EmailSchoolNotifier, JwtSchoolTokenService, randomCodes } from "./infrastructure/adapters";
+import { EmailSchoolNotifier, JwtSchoolTokenService, PrismaBillingTeam, randomCodes } from "./infrastructure/adapters";
 import type { Mailer } from "../../../../../../libs/kernel/src/infrastructure/mail";
 import { EmailVerificationService } from "../verification/application/EmailVerificationService";
 import { PLATFORM_MAILER, VerificationModule } from "../verification/verification.module";
@@ -46,6 +47,7 @@ import { PrismaSchoolRepository } from "./infrastructure/PrismaSchoolRepository"
 import { SchoolStorage } from "./application/SchoolStorage";
 import { PrismaStorageRepository, StorageTokenVault, UploadThingUsageProbe } from "./infrastructure/school-storage";
 import { SchoolStorageController } from "./presentation/http/school-storage.controller";
+import { PaymentRequestsController } from "./presentation/http/payment-requests.controller";
 import { SchoolOwnerGuard } from "./presentation/http/school-auth";
 import {
   SchoolLogoFilesController,
@@ -76,7 +78,7 @@ import {
       }),
     }),
   ],
-  controllers: [SchoolOnboardingController, SchoolLogoFilesController, SchoolPortalController, SchoolsAdminController, SchoolStorageController],
+  controllers: [SchoolOnboardingController, SchoolLogoFilesController, SchoolPortalController, SchoolsAdminController, SchoolStorageController, PaymentRequestsController],
   providers: [
     { provide: SHARED_TOKENS.Clock, useValue: systemClock },
     { provide: SHARED_TOKENS.IdGenerator, useValue: uuidGenerator },
@@ -105,9 +107,16 @@ import {
       useFactory: (config: ConfigService<Env, true>): SchoolSettings => ({
         defaultPhoneCountryCode: config.get("DEFAULT_PHONE_COUNTRY_CODE", { infer: true }),
         portalUrlTemplate: config.get("PORTAL_URL_TEMPLATE", { infer: true }),
+        // em breve: quando houver integração, passa a depender da configuração
+        referencePayments: false,
       }),
     },
-    { provide: T.SchoolNotifier, inject: [PLATFORM_MAILER], useFactory: (mailer: Mailer) => new EmailSchoolNotifier(mailer) },
+    {
+      provide: T.SchoolNotifier,
+      inject: [PLATFORM_MAILER, ConfigService],
+      useFactory: (mailer: Mailer, config: ConfigService<Env, true>) => new EmailSchoolNotifier(mailer, config.get("FRONTEND_URL", { infer: true })),
+    },
+    { provide: T.BillingTeam, inject: [PlatformPrismaService], useFactory: (prisma: PlatformPrismaService) => new PrismaBillingTeam(prisma) },
     {
       provide: T.SchoolRepository,
       inject: [PlatformPrismaService, ACTIVATION_PLACEMENT],
@@ -156,6 +165,7 @@ import {
         T.SchoolDatabases,
         T.SchoolNotifier,
         T.SchoolSettings,
+        T.BillingTeam,
       ],
       useFactory: (
         repo: SchoolRepository,
@@ -166,7 +176,8 @@ import {
         databases: SchoolDatabasePort,
         notifier: SchoolNotifier,
         settings: SchoolSettings,
-      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings),
+        team: BillingTeam,
+      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings, team),
     },
     {
       provide: T.LogoStorage,

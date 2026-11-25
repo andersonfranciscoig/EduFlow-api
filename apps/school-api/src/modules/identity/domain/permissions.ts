@@ -33,6 +33,12 @@ export const PERMISSIONS = {
   "admissions.students.view": { group: "admissions", label: "Consultar os alunos", hint: "A lista e a ficha dos alunos: dados pessoais, encarregados, matrículas, inscrições e documentos." },
   "admissions.students.edit": { group: "admissions", label: "Alterar os dados dos alunos", hint: "Corrigir os dados pessoais do aluno (fica no histórico o que mudou)." },
   "admissions.enrollments.override": { group: "admissions", label: "Matricular sem vaga (exceção)", hint: "Matricular mesmo sem vaga ou com a turma cheia, com um motivo registado." },
+  // ---- Finanças: pagamentos (o preçário continua a ser da direção)
+  "finance.access": { group: "finance", label: "Aceder às finanças", hint: "Sem esta, nenhuma das outras das finanças funciona." },
+  "finance.settings.manage": { group: "finance", label: "Configurar os pagamentos", hint: "Formas de pagamento, coordenadas bancárias do colégio e pedidos à EduFlow." },
+  "finance.payments.view": { group: "finance", label: "Consultar pagamentos e cobranças", hint: "Ver o que cada aluno tem a pagar, os pagamentos e os comprovativos." },
+  "finance.payments.validate": { group: "finance", label: "Validar pagamentos", hint: "Validar ou recusar os pagamentos (e anular uma validação), com motivo." },
+  "finance.charges.manage": { group: "finance", label: "Isentar cobranças e registar pagamentos", hint: "Isentar uma cobrança, com motivo, e registar pagamentos entregues em mão." },
   // ---- Assiduidade e avaliação: presenças, ocorrências dos professores, provas (as restantes chegam com cada fase)
   "attendance.access": { group: "attendance", label: "Aceder à assiduidade e avaliação", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
   "attendance.settings.manage": { group: "attendance", label: "Configurar as regras de assiduidade", hint: "Modelo dos professores (por aula ou por dia), procedimento sem presenças, prazo, alertas e fuso horário." },
@@ -52,12 +58,13 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 type Group = (typeof PERMISSIONS)[Permission]["group"];
 
 /** Cada grupo tem uma permissão de acesso: sem ela, as outras do grupo não servem. */
-export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", attendance: "attendance.access" };
+export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access" };
 
 export const PERMISSION_GROUPS = (
   [
     { key: "hr", label: "Recursos Humanos" },
     { key: "admissions", label: "Inscrições e matrículas" },
+    { key: "finance", label: "Finanças" },
     { key: "attendance", label: "Assiduidade e avaliação" },
   ] as const
 ).map((g) => ({ ...g, permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === g.key) }));
@@ -69,7 +76,7 @@ export const accessOf = (p: Permission) => GROUP_ACCESS[PERMISSIONS[p].group];
  * Sessões de SUPORTE EduFlow: podem ajudar a configurar os formulários e os períodos
  * (sem dados pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
  */
-export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage"];
+export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage", "finance.access", "finance.settings.manage"];
 
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 
@@ -91,6 +98,7 @@ export function normalizePermissions(list: string[]): Result<Permission[], { cod
   const set = new Set(list as Permission[]);
   // gerir, gerar ou publicar provas não serve de nada sem as ver
   if (set.has("attendance.exams.manage") || set.has("attendance.exams.generate") || set.has("attendance.exams.publish")) set.add("attendance.exams.view");
+  if (set.has("finance.payments.validate") || set.has("finance.charges.manage")) set.add("finance.payments.view");
   for (const p of [...set]) set.add(accessOf(p));
   return ok(ALL_PERMISSIONS.filter((p) => set.has(p)));
 }

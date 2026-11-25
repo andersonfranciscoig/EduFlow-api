@@ -44,7 +44,13 @@ export interface TransferProof {
   fileName: string;
   mimeType: string;
   submittedAt: Date;
+  /** Transferência ou depósito (null nos comprovativos antigos). */
+  kind: "TRANSFERENCIA" | "DEPOSITO" | null;
+  paidOn: string | null;
 }
+
+/** Prazo da validação manual de um pagamento. */
+export const VALIDATION_HOURS = 48;
 
 export interface SubscriptionOrder {
   id: string;
@@ -337,8 +343,8 @@ export class School {
 
   // ================================================================ colégio / gateway
 
-  /** O colégio envia o nº da transação e o comprovativo (validação manual). */
-  submitTransferProof(proof: TransferProof, now: Date): Result<void, SchoolError> {
+  /** O colégio paga numa das contas da EduFlow e envia o nº da transação e o comprovativo (validação manual). */
+  submitTransferProof(proof: TransferProof, now: Date, account?: { bankName: string; holder: string; iban: string }): Result<void, SchoolError> {
     const allowed = this.ensureNotSuspended();
     if (!allowed.ok) return allowed;
     const order = this.currentOrder;
@@ -349,11 +355,13 @@ export class School {
     if (transactionNumber.length < 4) {
       return fail(schoolError("INVALID_PROOF", "Indique o número da transação."));
     }
+    if (proof.paidOn && proof.paidOn > now.toISOString().slice(0, 10)) return fail(schoolError("INVALID_PROOF", "A data do pagamento não pode ser no futuro."));
+    if (account) order.instructions = { method: "TRANSFER", bankName: account.bankName, holder: account.holder, iban: account.iban };
     order.proof = { ...proof, transactionNumber };
     order.proofRejectionReason = null;
     order.status = "PROOF_SUBMITTED";
     this.props.status = "PAYMENT_UNDER_REVIEW";
-    this.record("PROOF_SUBMITTED", null, now, { transactionNumber });
+    this.record("PROOF_SUBMITTED", null, now, { transactionNumber, ...(proof.kind && { kind: proof.kind }), bank: (order.instructions as { bankName: string }).bankName });
     return ok(undefined);
   }
 

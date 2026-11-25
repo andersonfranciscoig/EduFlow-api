@@ -109,6 +109,15 @@ export const KINDS = {
     defaultEmail: true,
     emailAvailable: true,
   },
+  PAYMENTS: {
+    audience: "STAFF",
+    label: "Pagamentos",
+    hint: "Um pagamento foi submetido, validado, recusado ou retirado, ou passou o prazo de validação.",
+    to: "As Finanças (quem consulta ou valida pagamentos) e a secretaria (quem consulta as inscrições)",
+    defaultEnabled: true,
+    defaultEmail: true,
+    emailAvailable: true,
+  },
   // ---- família (área da família)
   APPLICATION_CORRECTION: { audience: "FAMILY", label: "Correções pedidas", hint: "A secretaria pede correções numa inscrição.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
   APPLICATION_APPROVED: { audience: "FAMILY", label: "Inscrição aprovada", hint: "A inscrição foi aprovada.", to: "Quem fez a inscrição", defaultEnabled: true, defaultEmail: false, emailAvailable: false },
@@ -134,6 +143,15 @@ export const KINDS = {
     defaultEnabled: true,
     defaultEmail: false,
     emailAvailable: false,
+  },
+  PAYMENT: {
+    audience: "FAMILY",
+    label: "Pagamentos",
+    hint: "Há valores a pagar, ou um pagamento ficou em validação, foi validado ou não foi aceite.",
+    to: "Quem fez o pagamento",
+    defaultEnabled: true,
+    defaultEmail: true,
+    emailAvailable: true,
   },
   FAMILY_DAILY_DIGEST: {
     audience: "FAMILY",

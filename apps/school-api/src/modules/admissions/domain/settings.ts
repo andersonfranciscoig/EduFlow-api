@@ -32,6 +32,7 @@ export type AdmissionErrorCode =
   | "DUPLICATE_APPLICATION"
   | "FILE_NOT_FOUND"
   | "INVALID_FILE"
+  | "PAYMENT_PENDING"
   | "STORAGE_UNAVAILABLE"
   // matrículas
   | "ALREADY_ENROLLED"

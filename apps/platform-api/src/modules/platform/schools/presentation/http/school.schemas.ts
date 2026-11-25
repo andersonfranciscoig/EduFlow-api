@@ -14,6 +14,7 @@ export const SCHOOL_HTTP: Partial<Record<SchoolErrorCode, HttpStatus>> = {
   STORAGE_UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE,
   REFERENCE_NOT_FOUND: HttpStatus.NOT_FOUND,
   INVALID_STATE: HttpStatus.CONFLICT,
+  REQUEST_NOT_FOUND: HttpStatus.NOT_FOUND,
   REFERENCE_EXPIRED: HttpStatus.GONE,
   SUPPORT_FORBIDDEN: HttpStatus.FORBIDDEN,
 };
@@ -61,12 +62,15 @@ export const signInSchema = z
 
 export const proofSchema = z.object({
   transactionNumber: text("Indique o número da transação.", 60),
+  kind: z.enum(["TRANSFERENCIA", "DEPOSITO"], { error: "Diga se foi transferência ou depósito." }).optional(),
+  paidOn: z.iso.date({ error: "Indique a data do pagamento." }).optional(),
+  bankAccountId: z.uuid({ error: "Escolha a conta bancária." }).optional(),
 });
 
 export const paymentMethodSchema = z
   .object({
     method: z.enum(["REFERENCE", "TRANSFER"], { error: "Escolha a forma de pagamento." }),
-    bankAccountId: z.uuid().optional().meta({ description: "Obrigatório para TRANSFER" }),
+    bankAccountId: z.uuid().optional().meta({ description: "TRANSFER: conta por omissão (sem ela, a primeira ativa); o colégio escolhe ao pagar. REFERENCE: em breve" }),
   })
   .meta({ title: "PaymentMethodChoice" });
 
@@ -96,6 +100,7 @@ export const schoolStatusQuery = z.object({
   status: z.enum(["PENDING_REVIEW", "AWAITING_PAYMENT", "PAYMENT_UNDER_REVIEW", "ACTIVE", "REJECTED", "SUSPENDED"]).optional(),
 });
 
+export type ProofBody = z.infer<typeof proofSchema>;
 export type RegisterSchoolBody = z.infer<typeof registerSchoolSchema>;
 export type PaymentMethodBody = z.infer<typeof paymentMethodSchema>;
 export type ApproveBody = z.infer<typeof approveSchema>;

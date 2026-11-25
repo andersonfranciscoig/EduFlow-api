@@ -18,6 +18,8 @@ import { Applications } from "../application/Applications";
 import { type AdmissionErrorCode, admissionError } from "../domain/settings";
 import { PrismaAdmissionFormsRepository } from "../infrastructure/prisma-admission-forms";
 import { PrismaApplicationsRepository } from "../infrastructure/prisma-applications";
+import { Payments } from "../../finance/application/Payments";
+import { PrismaPaymentsRepository } from "../../finance/infrastructure/prisma-payments";
 import { PrismaEnrollmentsRepository } from "../infrastructure/prisma-enrollments";
 import { Enrollments } from "../application/Enrollments";
 import { fail } from "../../../../../../libs/kernel/src/domain/Result";
@@ -33,6 +35,7 @@ export const APPLICATIONS_HTTP: Partial<Record<AdmissionErrorCode, HttpStatus>> 
   DUPLICATE_APPLICATION: HttpStatus.CONFLICT,
   INCOMPLETE: HttpStatus.UNPROCESSABLE_ENTITY,
   INVALID_FILE: HttpStatus.UNPROCESSABLE_ENTITY,
+  PAYMENT_PENDING: HttpStatus.CONFLICT,
   STORAGE_UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE,
   ALREADY_ENROLLED: HttpStatus.CONFLICT,
   NO_VACANCY: HttpStatus.CONFLICT,
@@ -59,6 +62,7 @@ const submitBody = z.object({ version: z.number().int().min(1), acceptTerms: z.b
 const fileBody = z.object({ slot: z.enum(["PHOTO", "DOCUMENT", "FIELD"]), itemId: z.string().max(64).optional() });
 
 type Upload = { originalname: string; buffer: Buffer } | undefined;
+const paymentsRepo = (t: TenantContext) => new PrismaPaymentsRepository(t.db);
 const school = (t: TenantContext) => ({ name: t.entry.schoolName, slug: t.entry.slug });
 
 const listQuery = z.object({
@@ -87,13 +91,14 @@ export class StaffApplicationsController {
     private readonly review: ApplicationReview,
     private readonly enrollments: Enrollments,
     private readonly stores: HrFileStores,
+    private readonly payments: Payments,
   ) {}
 
   private repo = (t: TenantContext) => new PrismaApplicationsRepository(t.db);
 
   private async chargesOf(t: TenantContext, appId: string) {
     const app = await this.repo(t).byId(appId);
-    return app ? this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType) : null;
+    return app ? this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType, await this.payments.forApplication(paymentsRepo(t), appId)) : null;
   }
 
   @Get()
@@ -121,6 +126,8 @@ export class StaffApplicationsController {
       charges: await this.chargesOf(t, appId),
       canEnroll: !!options && p.includes("admissions.enrollments.manage"),
       canOverride: p.includes("admissions.enrollments.override"),
+      // o que falta validar para avançar (null = nada)
+      paymentBlock: view.status === "APPROVED" ? (enrollment ? null : await this.payments.pending(paymentsRepo(t), appId, "MATRICULA", true)) : await this.payments.pending(paymentsRepo(t), appId, "INSCRICAO", true),
     };
   }
 
@@ -130,7 +137,7 @@ export class StaffApplicationsController {
   @ApiBody({ schema: openApi(enrollBody) })
   async enroll(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) appId: string, @Body(new ZodValidationPipe(enrollBody)) body: z.infer<typeof enrollBody>) {
     const canOverride = (await permissionsOf(t.db, u)).includes("admissions.enrollments.override");
-    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "STAFF", id: u.id, name: u.fullName }, body, canOverride), APPLICATIONS_HTTP);
+    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "STAFF", id: u.id, name: u.fullName }, body, canOverride, await this.payments.pending(paymentsRepo(t), appId, "MATRICULA")), APPLICATIONS_HTTP);
   }
 
   @Get(":id/enrollment")
@@ -165,9 +172,18 @@ export class StaffApplicationsController {
     @Param("action", new ZodValidationPipe(z.enum(["review", "corrections", "approve", "reject"], { error: "Ação inválida." }))) action: "review" | "corrections" | "approve" | "reject",
     @Body(new ZodValidationPipe(decisionBody)) body: z.infer<typeof decisionBody>,
   ) {
+    if (action === "approve") {
+      const due = await this.payments.pending(paymentsRepo(t), appId, "INSCRICAO");
+      if (due) return unwrap(fail(admissionError("PAYMENT_PENDING", due.message)), APPLICATIONS_HTTP);
+    }
     const r = unwrap(await this.review.decide(this.repo(t), { id: u.id, name: u.fullName }, school(t), appId, action, body), APPLICATIONS_HTTP);
     // aprovada: guarda a vaga (e, no modo automático, matricula logo)
-    if (action === "approve") return { ...r, ...(await this.enrollments.afterApproval(enrollmentsRepo(t), this.repo(t), school(t), appId, { id: u.id, name: u.fullName })) };
+    if (action === "approve") {
+      const unpaid = await this.payments.pending(paymentsRepo(t), appId, "MATRICULA");
+      const after = await this.enrollments.afterApproval(enrollmentsRepo(t), this.repo(t), school(t), appId, { id: u.id, name: u.fullName }, !!unpaid);
+      void this.payments.tellDue(paymentsRepo(t), appId, "MATRICULA").catch(() => undefined);
+      return { ...r, ...after };
+    }
     return r;
   }
 }
@@ -224,6 +240,7 @@ export class FamilyApplicationsController {
     private readonly applications: Applications,
     private readonly enrollments: Enrollments,
     private readonly stores: HrFileStores,
+    private readonly payments: Payments,
   ) {}
 
   private repo = (t: TenantContext) => new PrismaApplicationsRepository(t.db);
@@ -249,10 +266,11 @@ export class FamilyApplicationsController {
     const er = enrollmentsRepo(t);
     // o que se paga na inscrição e na matrícula (a conta já foi confirmada acima)
     const app = await this.repo(t).byId(appId);
-    const charges = app ? await this.enrollments.charges(er, app.classId, app.processType) : null;
-    if (view.status !== "APPROVED") return { ...view, enrollment: null, enrollMode: null, canEnroll: false, charges };
+    const charges = app ? await this.enrollments.charges(er, app.classId, app.processType, app.status === "DRAFT" ? undefined : await this.payments.forApplication(paymentsRepo(t), appId)) : null;
+    if (view.status !== "APPROVED") return { ...view, enrollment: null, enrollMode: null, canEnroll: false, charges, paymentBlock: view.status === "DRAFT" ? null : await this.payments.pending(paymentsRepo(t), appId, "INSCRICAO", true) };
     const [enrollment, cfg] = await Promise.all([this.enrollments.byApplication(er, appId), er.config()]);
-    return { ...view, enrollment, enrollMode: cfg.enrollmentMode, canEnroll: !enrollment && cfg.enrollmentMode === "FAMILY", charges };
+    const paymentBlock = enrollment ? null : await this.payments.pending(paymentsRepo(t), appId, "MATRICULA", true);
+    return { ...view, enrollment, enrollMode: cfg.enrollmentMode, canEnroll: !enrollment && cfg.enrollmentMode === "FAMILY" && !paymentBlock, charges, paymentBlock };
   }
 
   @Post(":id/enroll")
@@ -261,7 +279,7 @@ export class FamilyApplicationsController {
   async enroll(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
     const app = await this.repo(t).byId(appId);
     if (!app || app.accountId !== f.account.id) return unwrap(fail(admissionError("APPLICATION_NOT_FOUND", "Inscrição não encontrada.")), APPLICATIONS_HTTP);
-    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "FAMILY", id: f.account.id, name: f.account.fullName }, {}, false), APPLICATIONS_HTTP);
+    return unwrap(await this.enrollments.enroll(enrollmentsRepo(t), this.repo(t), school(t), appId, { kind: "FAMILY", id: f.account.id, name: f.account.fullName }, {}, false, await this.payments.pending(paymentsRepo(t), appId, "MATRICULA")), APPLICATIONS_HTTP);
   }
 
   @Get(":id/enrollment")
@@ -269,7 +287,7 @@ export class FamilyApplicationsController {
   async enrollment(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string) {
     const receipt = unwrap(await this.enrollments.familyReceipt(enrollmentsRepo(t), this.repo(t), f.account, appId), APPLICATIONS_HTTP);
     const app = await this.repo(t).byId(appId);
-    return { ...receipt, charges: app ? await this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType) : null };
+    return { ...receipt, charges: app ? await this.enrollments.charges(enrollmentsRepo(t), app.classId, app.processType, await this.payments.forApplication(paymentsRepo(t), appId)) : null };
   }
 
   @Put(":id")
@@ -317,6 +335,8 @@ export class FamilyApplicationsController {
   @ApiOperation({ summary: "Submeter: valida tudo, cria o aluno (Candidato) e a relação com o encarregado, dá o n.º do processo e avisa por email" })
   @ApiBody({ schema: openApi(submitBody) })
   async submit(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) appId: string, @Body(new ZodValidationPipe(submitBody)) body: z.infer<typeof submitBody>) {
-    return unwrap(await this.applications.submit(this.repo(t), this.forms(t), f.account, school(t), appId, body), APPLICATIONS_HTTP);
+    const r = unwrap(await this.applications.submit(this.repo(t), this.forms(t), f.account, school(t), appId, body), APPLICATIONS_HTTP);
+    void this.payments.tellDue(paymentsRepo(t), appId, "INSCRICAO").catch(() => undefined);
+    return r;
   }
 }

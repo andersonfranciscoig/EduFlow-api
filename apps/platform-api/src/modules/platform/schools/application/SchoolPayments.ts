@@ -1,12 +1,14 @@
 import type { Clock, FileStorage } from "../../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/domain/Result";
 import { schoolError, type SchoolError } from "../domain/errors";
-import type { PaymentMethod, School } from "../domain/School";
+import { type PaymentMethod, type School, VALIDATION_HOURS } from "../domain/School";
 import type { SchoolRepository } from "../domain/SchoolRepository";
-import type { CodeGenerator, PlanCatalog, SchoolDatabasePort, SchoolNotifier, SchoolSettings } from "./ports";
+import type { BillingTeam, CodeGenerator, PlanCatalog, SchoolDatabasePort, SchoolNotifier, SchoolSettings } from "./ports";
 import { toPortalView, toSchoolDetail, toSchoolSummary } from "./school-dto";
 
 const ALLOWED_PROOF_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+/** O dia em Luanda (AAAA-MM-DD). */
+const luandaDay = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Africa/Luanda" });
 export const MAX_PROOF_BYTES = 5 * 1024 * 1024;
 
 /**
@@ -23,7 +25,20 @@ export class SchoolPayments {
     private readonly databases: SchoolDatabasePort,
     private readonly notifier: SchoolNotifier,
     private readonly settings: SchoolSettings,
+    private readonly team: BillingTeam,
   ) {}
+
+  /** Avisa o colégio e a equipa que gere a faturação (melhor esforço: nunca falha a operação). */
+  private announce(school: School, state: "OPEN" | "SUBMITTED" | "REJECTED" | "CONFIRMED", detail: string) {
+    const s = school.snapshot;
+    const order = school.currentOrder;
+    if (!order) return;
+    const base = { schoolName: s.name, orderNumber: order.number, total: order.total };
+    void (async () => {
+      await this.notifier.paymentUpdate({ ...base, to: { email: s.ownerEmail, name: s.ownerName }, state, reason: detail }).catch(() => undefined);
+      if (state !== "OPEN") await this.notifier.teamPaymentUpdate({ ...base, to: await this.team.emails(), schoolId: school.id, state, detail }).catch(() => undefined);
+    })().catch(() => undefined);
+  }
 
   private async load(id: string): Promise<Result<School, SchoolError>> {
     const school = await this.schools.findById(id);
@@ -64,13 +79,15 @@ export class SchoolPayments {
   async portalView(schoolId: string) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
-    const [settings, database] = await Promise.all([this.catalog.getSettings(), this.databases.status(schoolId)]);
+    const [settings, database, accounts] = await Promise.all([this.catalog.getSettings(), this.databases.status(schoolId), this.catalog.listBankAccounts(true)]);
     const ready = (database as { state?: string } | null)?.state === "READY";
     const url = this.portalUrl(school.value);
     return ok({
       ...toPortalView(school.value, await this.schools.activity(schoolId), {
         transferInstructions: settings.transferInstructions,
         referenceProvider: settings.referenceProvider,
+        bankAccounts: accounts.map(({ id, bankName, holder, iban }) => ({ id, bankName, holder, iban })),
+        validationHours: VALIDATION_HOURS,
       }),
       // o portal do colégio (Módulo 2): endereço e se já está pronto a usar
       portal: url && school.value.status === "ACTIVE" ? { url, ready } : null,
@@ -79,7 +96,7 @@ export class SchoolPayments {
 
   async submitTransferProof(
     schoolId: string,
-    input: { transactionNumber: string; file: { fileName: string; mimeType: string; content: Buffer } },
+    input: { transactionNumber: string; kind: "TRANSFERENCIA" | "DEPOSITO" | null; paidOn: string | null; bankAccountId?: string; file: { fileName: string; mimeType: string; content: Buffer } },
   ) {
     const school = await this.load(schoolId);
     if (!school.ok) return school;
@@ -95,14 +112,30 @@ export class SchoolPayments {
       return fail(schoolError("INVALID_STATE", "De momento não há nenhuma transferência por comprovar."));
     }
 
-    const stored = await this.storage.save(`proofs/${schoolId}`, input.file);
     const now = this.clock.now();
+    if (input.transactionNumber.trim().length < 4) return fail(schoolError("INVALID_PROOF", "Indique o número da transação."));
+    if (input.paidOn && input.paidOn > luandaDay(now)) return fail(schoolError("INVALID_PROOF", "A data do pagamento não pode ser no futuro."));
+    // a conta onde o colégio pagou (uma das contas ativas da EduFlow)
+    const account = input.bankAccountId ? await this.catalog.findBankAccount(input.bankAccountId) : null;
+    if (input.bankAccountId && !account?.active) return fail(schoolError("INVALID_PAYMENT_METHOD", "Escolha uma das contas bancárias da EduFlow."));
+    if (await this.schools.transactionUsed(account?.iban ?? order.instructions.iban, input.transactionNumber.trim(), order.id)) {
+      return fail(schoolError("INVALID_PROOF", "Este número de transação já foi usado noutro pagamento. Confirme-o no comprovativo."));
+    }
+
+    const stored = await this.storage.save(`proofs/${schoolId}`, input.file).catch((e: unknown) => {
+      console.error(`[comprovativos] não foi possível guardar: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+      return null;
+    });
+    if (!stored) return fail(schoolError("STORAGE_UNAVAILABLE", "Não foi possível guardar o comprovativo agora. Tente de novo dentro de instantes."));
     const result = school.value.submitTransferProof(
-      { transactionNumber: input.transactionNumber, fileKey: stored.key, fileName: stored.fileName, mimeType: stored.mimeType, submittedAt: now },
+      { transactionNumber: input.transactionNumber, fileKey: stored.key, fileName: stored.fileName, mimeType: stored.mimeType, submittedAt: now, kind: input.kind, paidOn: input.paidOn },
       now,
+      account ?? undefined,
     );
     if (!result.ok) return result;
     await this.schools.save(school.value);
+    const ins = school.value.currentOrder!.instructions as { bankName: string };
+    this.announce(school.value, "SUBMITTED", `${input.kind === "DEPOSITO" ? "Depósito" : "Transferência"} para ${ins.bankName}, transação ${input.transactionNumber.trim()}.`);
     return this.portalView(schoolId);
   }
 
@@ -137,6 +170,10 @@ export class SchoolPayments {
   // ================================================================ equipa
 
   private async instructions(method: PaymentMethod, bankAccountId?: string) {
+    // por agora só transferência ou depósito; a referência (e o Express) chegam em breve
+    if (method === "REFERENCE" && !this.settings.referencePayments) {
+      return fail(schoolError("INVALID_PAYMENT_METHOD", "O pagamento por referência ainda não está disponível. Use a transferência ou o depósito."));
+    }
     const settings = await this.catalog.getSettings();
     if (method === "REFERENCE") {
       let reference = this.codes.referenceNumber();
@@ -144,9 +181,10 @@ export class SchoolPayments {
       const expiresAt = new Date(this.clock.now().getTime() + settings.referenceValidityDays * 86_400_000);
       return ok({ method: "REFERENCE" as const, entity: settings.referenceEntity, reference, expiresAt });
     }
-    const account = bankAccountId ? await this.catalog.findBankAccount(bankAccountId) : null;
+    // sem conta indicada: a primeira ativa (o colégio escolhe a que usa quando paga)
+    const account = bankAccountId ? await this.catalog.findBankAccount(bankAccountId) : (await this.catalog.listBankAccounts(true))[0];
     if (!account || !account.active) {
-      return fail(schoolError("INVALID_PAYMENT_METHOD", "Escolha uma conta bancária ativa para a transferência."));
+      return fail(schoolError("INVALID_PAYMENT_METHOD", "Registe primeiro uma conta bancária ativa da EduFlow, em Faturação."));
     }
     return ok({ method: "TRANSFER" as const, bankName: account.bankName, holder: account.holder, iban: account.iban });
   }
@@ -168,7 +206,9 @@ export class SchoolPayments {
     if (!result.ok) return result;
     const reserved = await this.databases.reserveOnApproval(schoolId, input.databaseServerId === undefined ? "auto" : input.databaseServerId, staffId);
     if (!reserved.ok) return reserved;
-    return ok(await this.persist(school.value));
+    const view = await this.persist(school.value);
+    this.announce(school.value, "OPEN", "");
+    return ok(view);
   }
 
   async changePaymentMethod(schoolId: string, staffId: string, input: { method: PaymentMethod; bankAccountId?: string }) {
@@ -198,6 +238,8 @@ export class SchoolPayments {
     const result = school.value.confirmTransferPayment(staffId, this.clock.now());
     if (!result.ok) return result;
     await this.saveAndNotify(school.value, wasActive);
+    const order = school.value.currentOrder!;
+    this.announce(school.value, "CONFIRMED", `Transação ${order.proof?.transactionNumber ?? "—"} validada.`);
     return ok(await this.view(school.value));
   }
 
@@ -243,7 +285,9 @@ export class SchoolPayments {
     if (!school.ok) return school;
     const result = school.value.rejectTransferProof(reason, staffId, this.clock.now());
     if (!result.ok) return result;
-    return ok(await this.persist(school.value));
+    const view = await this.persist(school.value);
+    this.announce(school.value, "REJECTED", reason.trim());
+    return ok(view);
   }
 
   /** Ficheiro do comprovativo atual (só para a equipa). */

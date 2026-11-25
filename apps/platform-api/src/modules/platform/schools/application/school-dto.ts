@@ -1,4 +1,4 @@
-import type { School, SchoolStatus, SubscriptionOrder } from "../domain/School";
+import { type School, type SchoolStatus, type SubscriptionOrder, VALIDATION_HOURS } from "../domain/School";
 import type { SchoolActivityEntry } from "../domain/SchoolRepository";
 
 /** DTOs de leitura — nunca expõem a senha nem a chave interna do comprovativo. */
@@ -44,6 +44,10 @@ function orderDto(o: SubscriptionOrder) {
           fileName: o.proof.fileName,
           mimeType: o.proof.mimeType,
           submittedAt: o.proof.submittedAt.toISOString(),
+          kind: o.proof.kind,
+          paidOn: o.proof.paidOn,
+          /** até quando deve ser validado (48 h) */
+          dueAt: new Date(o.proof.submittedAt.getTime() + VALIDATION_HOURS * 3_600_000).toISOString(),
         }
       : null,
     proofRejectionReason: o.proofRejectionReason,
@@ -93,8 +97,16 @@ export function toSchoolDetail(school: School, activity: SchoolActivityEntry[]) 
   };
 }
 
+export interface PortalPaymentInfo {
+  transferInstructions: string | null;
+  referenceProvider: string;
+  /** contas da EduFlow onde o colégio pode pagar */
+  bankAccounts: { id: string; bankName: string; holder: string; iban: string }[];
+  validationHours: number;
+}
+
 /** O que o responsável do colégio vê no seu portal. */
-export function toPortalView(school: School, activity: SchoolActivityEntry[], extras: { transferInstructions: string | null; referenceProvider: string }) {
+export function toPortalView(school: School, activity: SchoolActivityEntry[], extras: PortalPaymentInfo) {
   const detail = toSchoolDetail(school, activity);
   return {
     ...detail,

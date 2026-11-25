@@ -39,6 +39,8 @@ function orderToDomain(o: OrderRow): SubscriptionOrder {
             fileName: o.proofFileName,
             mimeType: o.proofMimeType,
             submittedAt: o.proofSubmittedAt,
+            kind: (o.proofKind as "TRANSFERENCIA" | "DEPOSITO" | null) ?? null,
+            paidOn: o.proofPaidOn?.toISOString().slice(0, 10) ?? null,
           }
         : null,
     proofRejectionReason: o.proofRejectionReason,
@@ -98,6 +100,8 @@ function orderData(o: SubscriptionOrder) {
     proofFileName: o.proof?.fileName ?? null,
     proofMimeType: o.proof?.mimeType ?? null,
     proofSubmittedAt: o.proof?.submittedAt ?? null,
+    proofKind: o.proof?.kind ?? null,
+    proofPaidOn: o.proof?.paidOn ? new Date(`${o.proof.paidOn}T00:00:00Z`) : null,
     proofRejectionReason: o.proofRejectionReason,
     paidAt: o.paidAt,
   };
@@ -137,6 +141,15 @@ export class PrismaSchoolRepository implements SchoolRepository {
 
   async referenceExists(reference: string) {
     return (await this.prisma.subscriptionOrder.count({ where: { referenceNumber: reference } })) > 0;
+  }
+
+  /** O n.º de transação já foi usado noutro pedido (pago ou em validação) para a mesma conta? */
+  async transactionUsed(iban: string, transactionNumber: string, exceptOrderId: string) {
+    return (
+      (await this.prisma.subscriptionOrder.count({
+        where: { id: { not: exceptOrderId }, bankIban: iban, transactionNumber: { equals: transactionNumber, mode: "insensitive" }, status: { in: ["PROOF_SUBMITTED", "PAID"] } },
+      })) > 0
+    );
   }
 
   async slugExists(slug: string) {

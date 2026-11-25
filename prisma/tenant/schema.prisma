@@ -1593,5 +1593,116 @@ model StudentHandover {
   @@map("student_handovers")
 }
 
+/// Pagamentos (migração 0041): lê-se e escreve-se em SQL (finance/infrastructure/prisma-payments.ts),
+/// onde estão também as chaves estrangeiras e as regras (CHECK, índices únicos parciais).
+model PaymentSettings {
+  id                Int       @id @default(1) @db.SmallInt
+  transferEnabled   Boolean   @default(false) @map("transfer_enabled")
+  activeSince       DateTime? @map("active_since")
+  requireApplication Boolean  @default(true) @map("require_application")
+  requireEnrollment Boolean   @default(true) @map("require_enrollment")
+  /// AAAA-MM
+  monthlyFrom       String?   @map("monthly_from")
+  validationHours   Int       @default(48) @map("validation_hours")
+  instructions      String?
+  updatedById       String?   @map("updated_by_id") @db.Uuid
+  updatedAt         DateTime  @map("updated_at")
+
+  @@map("payment_settings")
+}
+
+/// Coordenadas bancárias do colégio.
+model SchoolBankAccount {
+  id            String   @id @db.Uuid
+  bankName      String   @map("bank_name")
+  holder        String
+  accountNumber String?  @map("account_number")
+  iban          String   @unique
+  notes         String?
+  active        Boolean  @default(true)
+  position      Int      @default(0)
+  createdAt     DateTime @map("created_at")
+  updatedAt     DateTime @map("updated_at")
+
+  @@map("bank_accounts")
+}
+
+/// Cobrança (inscrição, matrícula, propina do mês, outra).
+model Charge {
+  id             String    @id @db.Uuid
+  /// INSCRICAO | MATRICULA | PROPINA | OUTRA
+  kind           String
+  label          String
+  amount         Int
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  studentId      String?   @map("student_id") @db.Uuid
+  applicationId  String?   @map("application_id") @db.Uuid
+  enrollmentId   String?   @map("enrollment_id") @db.Uuid
+  feeItemId      String?   @map("fee_item_id") @db.Uuid
+  month          String?
+  dueOn          DateTime? @map("due_on") @db.Date
+  /// OPEN | PAID | WAIVED | VOID
+  status         String    @default("OPEN")
+  paidAt         DateTime? @map("paid_at")
+  waiveReason    String?   @map("waive_reason")
+  decidedById    String?   @map("decided_by_id") @db.Uuid
+  decidedAt      DateTime? @map("decided_at")
+  createdAt      DateTime  @map("created_at")
+  updatedAt      DateTime  @map("updated_at")
+
+  @@index([studentId, status], map: "charges_student_idx")
+  @@index([status, dueOn], map: "charges_status_idx")
+  @@map("charges")
+}
+
+/// Pagamento por transferência ou depósito (só conta depois de VALIDATED).
+model Payment {
+  id                String    @id @db.Uuid
+  number            Int       @unique(map: "payments_number_key") @default(autoincrement())
+  accountId         String?   @map("account_id") @db.Uuid
+  payerName         String    @map("payer_name")
+  /// TRANSFERENCIA | DEPOSITO
+  method            String
+  bankAccountId     String?   @map("bank_account_id") @db.Uuid
+  bankName          String    @map("bank_name")
+  bankIban          String    @map("bank_iban")
+  transactionNumber String    @map("transaction_number")
+  paidOn            DateTime  @map("paid_on") @db.Date
+  total             Int
+  note              String?
+  proofName         String    @map("proof_name")
+  proofMimeType     String    @map("proof_mime_type")
+  proofSize         Int       @map("proof_size")
+  proofSha256       String    @map("proof_sha256")
+  proofStorageKey   String    @map("proof_storage_key")
+  /// SUBMITTED | VALIDATED | REJECTED | CANCELLED
+  status            String    @default("SUBMITTED")
+  /// FAMILY | STAFF
+  createdByKind     String    @map("created_by_kind")
+  createdById       String    @map("created_by_id") @db.Uuid
+  submittedAt       DateTime  @map("submitted_at")
+  dueAt             DateTime  @map("due_at")
+  overdueNotifiedAt DateTime? @map("overdue_notified_at")
+  decidedById       String?   @map("decided_by_id") @db.Uuid
+  decidedAt         DateTime? @map("decided_at")
+  decisionNote      String?   @map("decision_note")
+
+  @@index([status, submittedAt], map: "payments_status_idx")
+  @@index([accountId, submittedAt], map: "payments_account_idx")
+  @@map("payments")
+}
+
+model PaymentItem {
+  paymentId String @map("payment_id") @db.Uuid
+  chargeId  String @map("charge_id") @db.Uuid
+  label     String
+  amount    Int
+  lateFee   Int    @default(0) @map("late_fee")
+
+  @@id([paymentId, chargeId])
+  @@index([chargeId], map: "payment_items_charge_idx")
+  @@map("payment_items")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
