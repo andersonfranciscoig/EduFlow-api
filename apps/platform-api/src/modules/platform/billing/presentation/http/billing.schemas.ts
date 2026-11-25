@@ -32,6 +32,7 @@ export const settingsSchema = z
     referenceProvider: z.string().trim().max(60),
     referenceValidityDays: z.coerce.number().int(),
     transferInstructions: z.string().max(500).nullable().optional().transform((v) => v ?? null),
+    graceDays: z.coerce.number().int().nullable().optional().transform((v) => v ?? null).meta({ description: "Dias depois do fim da subscrição até desativar o portal (null = nunca)" }),
   })
   .meta({ title: "BillingSettings" });
 

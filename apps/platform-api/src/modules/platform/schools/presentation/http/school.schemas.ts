@@ -100,6 +100,9 @@ export const schoolStatusQuery = z.object({
   status: z.enum(["PENDING_REVIEW", "AWAITING_PAYMENT", "PAYMENT_UNDER_REVIEW", "ACTIVE", "REJECTED", "SUSPENDED"]).optional(),
 });
 
+export const renewalSchema = z.object({ planId: z.uuid({ error: "Escolha um plano." }), cycle: cycleSchema }).meta({ title: "SubscriptionRenewal" });
+
+export type RenewalBody = z.infer<typeof renewalSchema>;
 export type ProofBody = z.infer<typeof proofSchema>;
 export type RegisterSchoolBody = z.infer<typeof registerSchoolSchema>;
 export type PaymentMethodBody = z.infer<typeof paymentMethodSchema>;

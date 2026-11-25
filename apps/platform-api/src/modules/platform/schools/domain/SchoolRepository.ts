@@ -20,6 +20,9 @@ export interface SchoolRepository {
   list(filter?: { status?: SchoolStatus }): Promise<School[]>;
   /** Colégios com email pessoal cujo prazo para passar a corporativo já passou (e ainda não desativados). */
   listPastEmailDeadline(now: Date): Promise<School[]>;
+  listEnding(before: Date): Promise<School[]>;
+  claimNotice(schoolId: string, endsAt: Date, stage: string): Promise<boolean>;
+  releaseNotice(schoolId: string, endsAt: Date, stage: string): Promise<void>;
   countByStatus(): Promise<Record<SchoolStatus, number>>;
   activity(schoolId: string): Promise<SchoolActivityEntry[]>;
   /**

@@ -27,6 +27,7 @@ export interface PlanCatalog {
     referenceProvider: string;
     referenceValidityDays: number;
     transferInstructions: string | null;
+    graceDays: number | null;
   }>;
   listBankAccounts(onlyActive?: boolean): Promise<{ id: string; bankName: string; holder: string; iban: string; active: boolean }[]>;
   findBankAccount(id: string): Promise<{ id: string; bankName: string; holder: string; iban: string; active: boolean } | null>;
@@ -67,7 +68,11 @@ export interface SchoolNotifier {
   schoolActivated(input: { to: { email: string; name: string }; schoolName: string; portalUrl: string; subscriptionEndsAt: Date | null }): Promise<void>;
   schoolSuspended(input: { to: { email: string; name: string }; schoolName: string; reason: string }): Promise<void>;
   /** Estado do pagamento da subscrição (ao responsável do colégio). */
-  paymentUpdate(input: { to: { email: string; name: string }; schoolName: string; state: "OPEN" | "SUBMITTED" | "REJECTED" | "CONFIRMED"; orderNumber: string; total: number; reason?: string }): Promise<void>;
+  paymentUpdate(input: { to: { email: string; name: string }; schoolName: string; state: "OPEN" | "SUBMITTED" | "REJECTED" | "CONFIRMED"; orderNumber: string; total: number; reason?: string; renewal?: boolean; until?: Date | null }): Promise<void>;
+  /** A subscrição está a terminar, terminou, ou o colégio foi desativado por isso (ao responsável). */
+  subscriptionNotice(input: { to: { email: string; name: string }; schoolName: string; stage: "D30" | "D15" | "D7" | "D1" | "EXPIRED" | "E7" | "SUSPENDED"; endsAt: Date; graceDays: number | null }): Promise<void>;
+  /** À equipa que gere a faturação: colégios a terminar ou terminados. */
+  teamSubscriptionNotice(input: { to: { email: string; name: string }[]; schoolId: string; schoolName: string; stage: string; endsAt: Date }): Promise<void>;
   /** À equipa EduFlow que gere a faturação: há um pagamento para validar, ou mudou de estado. */
   teamPaymentUpdate(input: { to: { email: string; name: string }[]; schoolId: string; schoolName: string; state: "SUBMITTED" | "REJECTED" | "CONFIRMED"; orderNumber: string; total: number; detail: string }): Promise<void>;
   /** A resposta da EduFlow a um pedido de pagamento por referência/Express. */

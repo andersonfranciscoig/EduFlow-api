@@ -5,7 +5,7 @@ import type {
   School as SchoolRow,
   SubscriptionOrder as OrderRow,
 } from ".prisma/platform-client";
-import { School, type SchoolActivityType, type SchoolStatus, type SubscriptionOrder } from "../domain/School";
+import { School, type SchoolActivityType, type SchoolStatus, type SubscriptionOrder, type SuspensionCause } from "../domain/School";
 import type { SchoolActivityEntry, SchoolRepository } from "../domain/SchoolRepository";
 
 const withOrders = { orders: { orderBy: { createdAt: "desc" } } } as const;
@@ -21,6 +21,7 @@ function orderToDomain(o: OrderRow): SubscriptionOrder {
   return {
     id: o.id,
     number: o.number,
+    kind: o.kind === "RENEWAL" ? "RENEWAL" : "INITIAL",
     planId: o.planId,
     planName: o.planName,
     planMonthlyPrice: o.planMonthlyPrice,
@@ -69,6 +70,7 @@ function toDomain(row: SchoolRow & { orders: OrderRow[] }): School {
     suspendedAt: row.suspendedAt,
     suspensionReason: row.suspensionReason,
     suspendedFromStatus: row.suspendedFromStatus,
+    suspensionCause: (row.suspensionCause as SuspensionCause | null) ?? null,
     logo: row.logoKey && row.logoUrl && row.logoUpdatedAt ? { key: row.logoKey, url: row.logoUrl, updatedAt: row.logoUpdatedAt } : null,
     createdAt: row.createdAt,
     orders: row.orders.map(orderToDomain),
@@ -79,6 +81,7 @@ function orderData(o: SubscriptionOrder) {
   const ins = o.instructions;
   return {
     number: o.number,
+    kind: o.kind,
     planId: o.planId,
     planName: o.planName,
     planMonthlyPrice: o.planMonthlyPrice,
@@ -165,6 +168,22 @@ export class PrismaSchoolRepository implements SchoolRepository {
     return rows.map(toDomain);
   }
 
+  /** Colégios com a subscrição a terminar (ou terminada há pouco): os que podem ter avisos ou ser desativados. */
+  async listEnding(before: Date) {
+    const rows = await this.prisma.school.findMany({ where: { status: "ACTIVE", subscriptionEndsAt: { lte: before } }, include: withOrders, orderBy: { subscriptionEndsAt: "asc" }, take: 500 });
+    return rows.map(toDomain);
+  }
+
+  /** Reserva um aviso (false = já foi enviado). */
+  async claimNotice(schoolId: string, endsAt: Date, stage: string) {
+    const r = await this.prisma.subscriptionNotice.createMany({ data: [{ schoolId, endsAt, stage }], skipDuplicates: true });
+    return r.count === 1;
+  }
+  /** O envio falhou: volta a poder enviar-se. */
+  async releaseNotice(schoolId: string, endsAt: Date, stage: string) {
+    await this.prisma.subscriptionNotice.deleteMany({ where: { schoolId, endsAt, stage } });
+  }
+
   async list(filter: { status?: SchoolStatus } = {}) {
     const rows = await this.prisma.school.findMany({
       where: { status: filter.status },
@@ -228,6 +247,7 @@ export class PrismaSchoolRepository implements SchoolRepository {
       suspendedAt: s.suspendedAt,
       suspensionReason: s.suspensionReason,
       suspendedFromStatus: s.suspendedFromStatus,
+      suspensionCause: s.suspensionCause,
       logoKey: s.logo?.key ?? null,
       logoUrl: s.logo?.url ?? null,
       logoUpdatedAt: s.logo?.updatedAt ?? null,

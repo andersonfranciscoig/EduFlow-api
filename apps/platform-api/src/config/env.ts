@@ -9,6 +9,8 @@ import { envValidator } from "../../../../libs/kernel/src/infrastructure/env";
 export const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
+  /** Tarefas automáticas (prazos do email, fim das subscrições). Desliga-se em testes. */
+  JOBS_ENABLED: z.enum(["true", "false"]).default("true"),
   FRONTEND_URL: z.string().url().default("http://localhost:3001"),
   /** Utilizador eduflow_platform_app (só dados, sem DDL). */
   PLATFORM_DATABASE_URL: z.string().min(1),

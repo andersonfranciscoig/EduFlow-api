@@ -19,6 +19,8 @@ import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/s
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { type PaymentActor, type PaymentChannels, Payments } from "../application/Payments";
 import { FUTURE_METHODS, type PaymentErrorCode, paymentError, PROOF_MAX_MB, REQUEST_LABELS } from "../domain/payments";
+import { Reminders } from "../application/Reminders";
+import { PrismaRemindersRepository } from "../infrastructure/prisma-reminders";
 import { PaymentRequests } from "../infrastructure/payment-requests";
 import { PrismaPaymentsRepository } from "../infrastructure/prisma-payments";
 
@@ -33,6 +35,7 @@ export const PAYMENTS_HTTP: Partial<Record<PaymentErrorCode, HttpStatus>> = {
   ACCOUNT_EXISTS: HttpStatus.CONFLICT,
   DUPLICATE_TRANSACTION: HttpStatus.CONFLICT,
   CHARGES_CHANGED: HttpStatus.CONFLICT,
+  NEEDS_CONFIRMATION: HttpStatus.CONFLICT,
   STORAGE_UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE,
   PLATFORM_UNAVAILABLE: HttpStatus.SERVICE_UNAVAILABLE,
 };
@@ -54,6 +57,10 @@ const accountBody = z
   .object({ bankName: z.string().max(80), holder: z.string().max(160), accountNumber: z.string().max(40).nullish(), iban: z.string().max(60), notes: z.string().max(300).nullish(), active: z.boolean() })
   .meta({ title: "BankAccount", description: "Coordenadas bancárias do colégio (IBAN confirmado)." });
 const requestBody = z.object({ method: z.enum(["REFERENCIA", "EXPRESS"], { error: "Escolha a forma de pagamento." }), note: z.string().max(500).nullish() }).meta({ title: "PaymentMethodRequest", description: "Pedir à EduFlow o pagamento por referência ou Express (lista de espera)." });
+const remindersBody = z
+  .object({ enabled: z.boolean(), beforeDays: z.number().int(), onDue: z.boolean(), everyDays: z.number().int(), max: z.number().int(), hour: z.number().int() })
+  .meta({ title: "PaymentReminders", description: "beforeDays e max a 0 = não envia." });
+const remindBody = z.object({ chargeIds: z.array(z.uuid()).min(1).max(100).nullish() }).meta({ title: "RemindNow", description: "Sem chargeIds: todas as propinas em atraso." });
 const reasonBody = z.object({ reason: z.string().max(400) }).meta({ title: "PaymentReason" });
 const listQuery = new ZodValidationPipe(z.object({ estado: z.string().max(20).optional(), q: z.string().max(80).optional(), pagina: z.coerce.number().int().min(1).max(5000).optional() }));
 const chargesQuery = new ZodValidationPipe(z.object({ estado: z.string().max(20).optional(), tipo: z.string().max(20).optional(), ano: z.uuid().optional(), q: z.string().max(80).optional(), pagina: z.coerce.number().int().min(1).max(5000).optional() }));
@@ -75,7 +82,7 @@ const proofFile = FileInterceptor("file", { limits: { fileSize: (PROOF_MAX_MB + 
 const repo = (t: TenantContext) => new PrismaPaymentsRepository(t.db);
 export function paymentChannels(notifier: Notifier, t: TenantContext): PaymentChannels {
   const tenant = { slug: t.entry.slug, name: t.entry.schoolName };
-  return { staff: notifier.for(t.db, tenant), familyEmail: (m) => notifier.familyEmail(tenant, { ...m, kind: "PAYMENT" }) };
+  return { staff: notifier.for(t.db, tenant), familyEmail: (m) => notifier.familyEmail(tenant, { ...m, kind: m.kind ?? "PAYMENT" }) };
 }
 export async function paymentActor(t: TenantContext, u: SchoolAccess): Promise<PaymentActor> {
   const p = await permissionsOf(t.db, u);
@@ -97,6 +104,7 @@ export class PaymentsController {
     private readonly stores: HrFileStores,
     private readonly notifier: Notifier,
     private readonly requests: PaymentRequests,
+    private readonly reminders: Reminders,
   ) {}
 
   // ---------------------------------------------------------------- configuração
@@ -123,6 +131,24 @@ export class PaymentsController {
   @ApiBody({ schema: openApi(configBody) })
   async saveSettings(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(configBody)) body: z.infer<typeof configBody>) {
     return unwrap(await this.payments.saveConfig(repo(t), await paymentActor(t, u), body), PAYMENTS_HTTP);
+  }
+
+  @Put("reminders")
+  @RequirePermission("finance.settings.manage")
+  @ApiOperation({ summary: "Lembretes das propinas: ligar, antes do prazo, no dia e em atraso" })
+  @ApiBody({ schema: openApi(remindersBody) })
+  async saveReminders(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(remindersBody)) body: z.infer<typeof remindersBody>) {
+    return unwrap(await this.payments.saveReminders(repo(t), await paymentActor(t, u), body), PAYMENTS_HTTP);
+  }
+
+  @Post("charges/remind")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("finance.payments.view", "finance.charges.manage")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: "Lembrar agora: as cobranças indicadas, ou todas as propinas em atraso (um lembrete por dia a cada família)" })
+  @ApiBody({ schema: openApi(remindBody) })
+  async remind(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(remindBody)) body: z.infer<typeof remindBody>) {
+    return unwrap(await this.reminders.now(repo(t), new PrismaRemindersRepository(t.db), await paymentActor(t, u), paymentChannels(this.notifier, t), body.chargeIds ?? null), PAYMENTS_HTTP);
   }
 
   @Post("accounts")

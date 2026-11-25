@@ -6,6 +6,7 @@ import { platformEmailHtml } from "../../verification/infrastructure/platform-ma
 import { VALIDATION_HOURS } from "../domain/School";
 import type { BillingTeam, CodeGenerator, SchoolNotifier, SchoolTokenService } from "../application/ports";
 
+const day = (d: Date) => d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Africa/Luanda" });
 const money = (n: number) => `${new Intl.NumberFormat("pt-PT").format(n).replace(/\u00a0/g, " ")} Kz`;
 
 /** A equipa que gere a faturação: administradores e gestores com billing.manage (contas ativas). */
@@ -56,8 +57,13 @@ export class EmailSchoolNotifier implements SchoolNotifier {
         lines: [`O pagamento de ${amount} (pedido ${input.orderNumber}) está em validação.`, `A nossa equipa confirma-o em ${VALIDATION_HOURS} horas ou menos. Avisamos por email assim que estiver validado.`],
       },
       REJECTED: { subject: "Pagamento não aceite", lines: [`Não foi possível validar o pagamento de ${amount} (pedido ${input.orderNumber}).`, `Motivo: ${input.reason ?? ""}`, "Confirme os dados e envie um novo comprovativo na área do colégio."] },
-      CONFIRMED: { subject: "Pagamento validado", lines: [`O pagamento de ${amount} (pedido ${input.orderNumber}) foi validado.`] },
+      CONFIRMED: {
+        subject: input.renewal ? "Subscrição renovada" : "Pagamento validado",
+        lines: [`O pagamento de ${amount} (pedido ${input.orderNumber}) foi validado.`, ...(input.renewal && input.until ? [`A subscrição do ${input.schoolName} está ativa até ${day(input.until)}.`] : [])],
+      },
     }[input.state];
+    if (input.renewal && input.state === "OPEN") copy.subject = "Renovação da subscrição: falta o pagamento";
+    if (input.renewal && input.state === "OPEN") copy.lines[0] = `A renovação da subscrição do ${input.schoolName} (pedido ${input.orderNumber}) está à espera do pagamento de ${amount}.`;
     await this.mail(input.to, copy.subject, copy.lines, { label: "Abrir a área do colégio", url: `${this.siteUrl}/colegio` }, "O pagamento só conta depois de validado pela equipa EduFlow.", "school-payment");
   }
 
@@ -66,6 +72,29 @@ export class EmailSchoolNotifier implements SchoolNotifier {
     const lines = [`${input.schoolName}: ${money(input.total)} (pedido ${input.orderNumber}).`, input.detail, ...(input.state === "SUBMITTED" ? [`Prazo da validação: ${VALIDATION_HOURS} horas.`] : [])];
     for (const to of input.to) {
       await this.mail(to, `${subject}: ${input.schoolName}`, lines, { label: "Abrir no painel", url: `${this.siteUrl}/painel/colegios/${input.schoolId}` }, "Recebe este email porque gere a faturação da EduFlow.", "team-payment").catch(() => undefined);
+    }
+  }
+
+  async subscriptionNotice(input: Parameters<SchoolNotifier["subscriptionNotice"]>[0]) {
+    const end = day(input.endsAt);
+    const after = input.graceDays === null ? "O portal continua acessível, mas pedimos que renove quanto antes." : `Se não for renovada, o portal fica desativado ${input.graceDays === 0 ? "logo que termine" : `${input.graceDays} dia${input.graceDays === 1 ? "" : "s"} depois`}.`;
+    const before = (n: string) => ({ subject: `A subscrição termina ${n}`, lines: [`A subscrição do ${input.schoolName} termina a ${end}.`, "Renove na área do colégio: escolha o plano e a periodicidade, pague por transferência ou depósito e envie o comprovativo.", after] });
+    const copy = {
+      D30: before("daqui a 30 dias"),
+      D15: before("daqui a 15 dias"),
+      D7: before("daqui a 7 dias"),
+      D1: before("amanhã"),
+      EXPIRED: { subject: "A subscrição terminou", lines: [`A subscrição do ${input.schoolName} terminou a ${end}.`, after] },
+      E7: { subject: "A subscrição continua por renovar", lines: [`A subscrição do ${input.schoolName} terminou a ${end} e ainda não foi renovada.`, after] },
+      SUSPENDED: { subject: `O portal do ${input.schoolName} foi desativado`, lines: [`A subscrição terminou a ${end} e não foi renovada, por isso o portal foi desativado.`, "Os dados continuam guardados. Assim que o pagamento da renovação for validado, o portal volta a abrir."] },
+    }[input.stage];
+    await this.mail(input.to, copy.subject, copy.lines, { label: "Renovar a subscrição", url: `${this.siteUrl}/colegio` }, "Se já pagou, ignore este aviso: o pagamento é validado em 48 horas ou menos.", "subscription-notice");
+  }
+
+  async teamSubscriptionNotice(input: Parameters<SchoolNotifier["teamSubscriptionNotice"]>[0]) {
+    const what = { D7: "termina daqui a 7 dias", EXPIRED: "terminou", E7: "terminou há 7 dias e continua por renovar", SUSPENDED: "terminou: o portal foi desativado" }[input.stage] ?? "está a terminar";
+    for (const to of input.to) {
+      await this.mail(to, `Subscrição do ${input.schoolName}`, [`A subscrição do ${input.schoolName} ${what} (fim: ${day(input.endsAt)}).`], { label: "Abrir no painel", url: `${this.siteUrl}/painel/colegios/${input.schoolId}` }, "Recebe este email porque gere a faturação da EduFlow.", "team-subscription").catch(() => undefined);
     }
   }
 

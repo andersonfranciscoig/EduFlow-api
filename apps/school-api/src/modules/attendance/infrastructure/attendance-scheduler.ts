@@ -5,6 +5,8 @@ import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
 import { ExamNotices } from "../../exams/application/ExamNotices";
 import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
+import { Reminders } from "../../finance/application/Reminders";
+import { PrismaRemindersRepository } from "../../finance/infrastructure/prisma-reminders";
 import { Payments } from "../../finance/application/Payments";
 import { PrismaPaymentsRepository } from "../../finance/infrastructure/prisma-payments";
 import { Notifier } from "../../notifications/infrastructure/notifier";
@@ -33,6 +35,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
   private readonly missingDigests = new Set<string>();
   /** dia em que as cobranças de cada colégio já foram postas em dia (é idempotente: repetir não faz mal) */
   private readonly chargesDay = new Map<string, string>();
+  private readonly remindersDay = new Map<string, string>();
 
   constructor(
     private readonly config: ConfigService<Env, true>,
@@ -44,6 +47,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     private readonly examNotices: ExamNotices,
     private readonly settings: AttendanceSettings,
     private readonly payments: Payments,
+    private readonly reminders: Reminders,
   ) {}
 
   onApplicationBootstrap() {
@@ -103,7 +107,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     }
   }
 
-  /** Pagamentos: as cobranças do dia (uma vez por dia) e os pagamentos por validar fora do prazo. */
+  /** Pagamentos: as cobranças do dia (uma vez por dia), os pagamentos por validar fora do prazo e os lembretes. */
   private async runPayments(slug: string) {
     try {
       const entry = await this.directory.findBySlug(slug);
@@ -112,12 +116,20 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
       const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('payments') IS NOT NULL AS ok`;
       if (!ready?.ok) return;
       const repo = new PrismaPaymentsRepository(db);
-      const day = localNow("Africa/Luanda", new Date()).slice(0, 10);
+      const local = localNow("Africa/Luanda", new Date());
+      const day = local.slice(0, 10);
       if (this.chargesDay.get(slug) !== day) {
         await this.payments.dailySync(repo);
         this.chargesDay.set(slug, day);
       }
-      await this.payments.overdue(repo, this.notifier.for(db, { slug: entry.slug, name: entry.schoolName }));
+      const tenant = { slug: entry.slug, name: entry.schoolName };
+      await this.payments.overdue(repo, this.notifier.for(db, tenant));
+      // lembretes das propinas, uma vez por dia a partir da hora escolhida (cada um fica reservado: não se repete)
+      if (this.remindersDay.get(slug) !== day) {
+        const sent = await this.reminders.daily(repo, new PrismaRemindersRepository(db), { familyEmail: (m) => this.notifier.familyEmail(tenant, { ...m, kind: m.kind ?? "PAYMENT_REMINDER" }) }, Number(local.slice(11, 13)));
+        if (sent !== null) this.remindersDay.set(slug, day);
+        if (sent) this.logger.log(`${slug}: lembretes de propinas a ${sent} família(s)`);
+      }
     } catch (e) {
       this.logger.warn(`pagamentos falharam em ${slug}: ${(e as Error).message}`);
     }

@@ -166,6 +166,7 @@ import {
         T.SchoolNotifier,
         T.SchoolSettings,
         T.BillingTeam,
+        SHARED_TOKENS.IdGenerator,
       ],
       useFactory: (
         repo: SchoolRepository,
@@ -177,7 +178,8 @@ import {
         notifier: SchoolNotifier,
         settings: SchoolSettings,
         team: BillingTeam,
-      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings, team),
+        ids: IdGenerator,
+      ) => new SchoolPayments(repo, catalog, storage, codes, clock, databases, notifier, settings, team, ids),
     },
     {
       provide: T.LogoStorage,
