@@ -1,4 +1,4 @@
-import { type School, type SchoolStatus, type SubscriptionOrder, VALIDATION_HOURS } from "../domain/School";
+import { daysTo, type School, type SchoolStatus, type SubscriptionOrder, VALIDATION_HOURS } from "../domain/School";
 import type { SchoolActivityEntry } from "../domain/SchoolRepository";
 
 /** DTOs de leitura — nunca expõem a senha nem a chave interna do comprovativo. */
@@ -24,6 +24,7 @@ function orderDto(o: SubscriptionOrder) {
   return {
     id: o.id,
     number: o.number,
+    kind: o.kind,
     plan: { id: o.planId, name: o.planName, monthlyPrice: o.planMonthlyPrice },
     cycle: o.cycle,
     cycleLabel: cycleLabel(o.cycle, o.months),
@@ -58,7 +59,10 @@ function orderDto(o: SubscriptionOrder) {
 
 export function toSchoolSummary(school: School) {
   const s = school.snapshot;
-  const order = school.currentOrder;
+  // com uma renovação por pagar, o plano que conta é o que está em vigor
+  const order = school.paidOrder ?? school.currentOrder;
+  const renewal = school.openRenewal;
+  const daysLeft = s.subscriptionEndsAt ? daysTo(s.subscriptionEndsAt, new Date()) : null;
   return {
     id: s.id,
     name: s.name,
@@ -73,6 +77,12 @@ export function toSchoolSummary(school: School) {
     total: order?.total ?? null,
     cycleLabel: order ? cycleLabel(order.cycle, order.months) : null,
     subscriptionEndsAt: s.subscriptionEndsAt?.toISOString() ?? null,
+    /** dias que faltam (negativo = já terminou) e o estado da subscrição */
+    daysLeft,
+    subscriptionState: daysLeft === null ? null : daysLeft <= 0 ? ("EXPIRED" as const) : daysLeft <= 30 ? ("ENDING" as const) : ("OK" as const),
+    /** renovação por pagar ou em validação */
+    renewal: renewal ? { id: renewal.id, number: renewal.number, plan: renewal.planName, cycleLabel: cycleLabel(renewal.cycle, renewal.months), total: renewal.total, status: renewal.status } : null,
+    suspensionCause: s.suspensionCause,
     slug: s.slug,
     // logótipo público (a chave interna no armazenamento não sai daqui)
     logoUrl: s.logo?.url ?? null,
@@ -103,6 +113,8 @@ export interface PortalPaymentInfo {
   /** contas da EduFlow onde o colégio pode pagar */
   bankAccounts: { id: string; bankName: string; holder: string; iban: string }[];
   validationHours: number;
+  /** dias depois do fim até o portal ser desativado (null = não é automático) */
+  graceDays: number | null;
 }
 
 /** O que o responsável do colégio vê no seu portal. */

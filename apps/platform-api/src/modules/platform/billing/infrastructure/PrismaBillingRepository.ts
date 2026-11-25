@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS: BillingSettings = {
   referenceProvider: "Multicaixa (simulado)",
   referenceValidityDays: 3,
   transferInstructions: "Indique o número do pedido no descritivo da transferência.",
+  graceDays: null,
 };
 
 const DEFAULT_PLANS: Omit<Plan, "id">[] = [

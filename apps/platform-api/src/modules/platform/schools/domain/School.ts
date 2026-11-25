@@ -18,6 +18,9 @@ export type SchoolActivityType =
   | "PROOF_REJECTED"
   | "PAYMENT_CONFIRMED"
   | "SCHOOL_ACTIVATED"
+  | "RENEWAL_REQUESTED"
+  | "RENEWAL_CANCELLED"
+  | "SUBSCRIPTION_RENEWED"
   | "OWNER_PASSWORD_RESET"
   | "OWNER_EMAIL_CHANGED"
   | "SCHOOL_SUSPENDED"
@@ -32,6 +35,8 @@ export interface SchoolEvent {
   details: Record<string, unknown> | null;
   occurredAt: Date;
 }
+
+export type SuspensionCause = "STAFF" | "EMAIL" | "EXPIRED";
 
 /** Instruções de pagamento escolhidas pela equipa na validação. */
 export type PaymentInstructions =
@@ -49,12 +54,36 @@ export interface TransferProof {
   paidOn: string | null;
 }
 
+/** Avisos do fim da subscrição: quantos dias antes (positivo) ou depois (negativo) do fim. */
+export const SUBSCRIPTION_STAGES = [
+  { stage: "D30", days: 30 },
+  { stage: "D15", days: 15 },
+  { stage: "D7", days: 7 },
+  { stage: "D1", days: 1 },
+  { stage: "EXPIRED", days: 0 },
+  { stage: "E7", days: -7 },
+] as const;
+export type SubscriptionStage = (typeof SUBSCRIPTION_STAGES)[number]["stage"];
+
+/** Dias que faltam (negativo = já passou), arredondado para cima. */
+export const daysTo = (end: Date, now: Date) => Math.ceil((end.getTime() - now.getTime()) / DAY_MS);
+
+/** O aviso que se aplica agora (o mais próximo do fim), ou null. Passados 30 dias do fim já não se avisa. */
+export function subscriptionStage(end: Date, now: Date): SubscriptionStage | null {
+  const left = daysTo(end, now);
+  if (left < -30) return null;
+  const due = SUBSCRIPTION_STAGES.filter((s) => left <= s.days);
+  return due.length ? due[due.length - 1].stage : null;
+}
+
 /** Prazo da validação manual de um pagamento. */
 export const VALIDATION_HOURS = 48;
 
 export interface SubscriptionOrder {
   id: string;
   number: string;
+  /** a da adesão, ou uma renovação */
+  kind: "INITIAL" | "RENEWAL";
   planId: string;
   planName: string;
   planMonthlyPrice: number;
@@ -72,6 +101,9 @@ export interface SubscriptionOrder {
   createdAt: Date;
 }
 
+/** Uma encomenda acabada de fazer (ainda sem pagamento). */
+export type NewOrder = Omit<SubscriptionOrder, "kind" | "status" | "instructions" | "proof" | "proofRejectionReason" | "paidAt">;
+
 export interface SchoolProps extends SchoolData {
   id: string;
   /** Identificador público (futuro subdomínio do portal). */
@@ -88,6 +120,8 @@ export interface SchoolProps extends SchoolData {
   suspendedAt: Date | null;
   suspensionReason: string | null;
   suspendedFromStatus: SchoolStatus | null;
+  /** Porque está desativado: pela equipa, pelo email pessoal ou porque a subscrição terminou (renovar reativa). */
+  suspensionCause: SuspensionCause | null;
   /** Logótipo público (null = ainda não tem). */
   logo: SchoolLogo | null;
   createdAt: Date;
@@ -122,7 +156,7 @@ export class School {
     data: SchoolData;
     owner: OwnerData;
     ownerPasswordHash: string;
-    order: Omit<SubscriptionOrder, "status" | "instructions" | "proof" | "proofRejectionReason" | "paidAt">;
+    order: NewOrder;
     now: Date;
   }): School {
     const school = new School({
@@ -140,9 +174,10 @@ export class School {
       suspendedAt: null,
       suspensionReason: null,
       suspendedFromStatus: null,
+      suspensionCause: null,
       logo: null,
       createdAt: input.now,
-      orders: [{ ...input.order, status: "PENDING_REVIEW", instructions: null, proof: null, proofRejectionReason: null, paidAt: null }],
+      orders: [{ ...input.order, kind: "INITIAL", status: "PENDING_REVIEW", instructions: null, proof: null, proofRejectionReason: null, paidAt: null }],
     });
     school.record("SCHOOL_REGISTERED", null, input.now, {
       plan: input.order.planName,
@@ -159,7 +194,7 @@ export class School {
    * Desativa o colégio (equipa, ou automaticamente quando o prazo do email
    * corporativo passa). O portal do colégio deixa de estar acessível.
    */
-  suspend(reason: string, staffId: string | null, now: Date): Result<void, SchoolError> {
+  suspend(reason: string, staffId: string | null, now: Date, cause: SuspensionCause = "STAFF"): Result<void, SchoolError> {
     if (this.props.status === "SUSPENDED") return fail(schoolError("INVALID_STATE", "Este colégio já está desativado."));
     if (this.props.status === "REJECTED") return fail(schoolError("INVALID_STATE", "Um pedido rejeitado não pode ser desativado."));
     const text = reason.trim();
@@ -168,6 +203,7 @@ export class School {
     this.props.status = "SUSPENDED";
     this.props.suspendedAt = now;
     this.props.suspensionReason = text;
+    this.props.suspensionCause = cause;
     this.record("SCHOOL_SUSPENDED", staffId, now, { reason: text, automatic: staffId === null });
     return ok(undefined);
   }
@@ -176,12 +212,13 @@ export class School {
    * Reativa e volta ao estado anterior. Se ainda usa email pessoal com o prazo
    * já passado, a equipa dá-lhe um novo prazo de 30 dias.
    */
-  reactivate(staffId: string, now: Date): Result<void, SchoolError> {
+  reactivate(staffId: string | null, now: Date): Result<void, SchoolError> {
     if (this.props.status !== "SUSPENDED") return fail(schoolError("INVALID_STATE", "Este colégio não está desativado."));
     this.props.status = this.props.suspendedFromStatus ?? "AWAITING_PAYMENT";
     this.props.suspendedAt = null;
     this.props.suspensionReason = null;
     this.props.suspendedFromStatus = null;
+    this.props.suspensionCause = null;
     if (this.props.ownerEmailDeadline && this.props.ownerEmailDeadline <= now) {
       this.props.ownerEmailDeadline = new Date(now.getTime() + CORPORATE_EMAIL_DEADLINE_DAYS * DAY_MS);
     }
@@ -254,14 +291,48 @@ export class School {
     return ok(undefined);
   }
 
+  /** Desativado só porque a subscrição terminou: pode (e deve) renovar. */
+  private get expired(): boolean {
+    return this.props.status === "SUSPENDED" && this.props.suspensionCause === "EXPIRED";
+  }
+
   private ensureNotSuspended(): Result<void, SchoolError> {
-    return this.props.status === "SUSPENDED"
+    return this.props.status === "SUSPENDED" && !this.expired
       ? fail(schoolError("INVALID_STATE", "Este colégio está desativado. Fale com a equipa EduFlow."))
       : ok(undefined);
   }
 
   static restore(props: SchoolProps): School {
     return new School({ ...props, logo: props.logo ? { ...props.logo } : null, orders: props.orders.map((o) => ({ ...o })) });
+  }
+
+  // ================================================================ renovação
+
+  /** A renovação por pagar ou em validação (só há uma de cada vez). */
+  get openRenewal(): SubscriptionOrder | undefined {
+    return this.props.orders.find((o) => o.kind === "RENEWAL" && (o.status === "AWAITING_PAYMENT" || o.status === "PROOF_SUBMITTED"));
+  }
+
+  /**
+   * O colégio pede a renovação (pode mudar de plano e de periodicidade). Não passa por análise: fica logo por
+   * pagar, e o colégio continua ativo enquanto a equipa valida o pagamento.
+   */
+  requestRenewal(order: NewOrder, instructions: PaymentInstructions, now: Date): Result<void, SchoolError> {
+    if (this.props.status !== "ACTIVE" && !this.expired) return fail(schoolError("INVALID_STATE", "Só um colégio ativo pode renovar a subscrição."));
+    if (this.openRenewal) return fail(schoolError("INVALID_STATE", "Já há uma renovação por pagar. Pague-a ou desista dela primeiro."));
+    this.props.orders.unshift({ ...order, kind: "RENEWAL", status: "AWAITING_PAYMENT", instructions, proof: null, proofRejectionReason: null, paidAt: null });
+    this.record("RENEWAL_REQUESTED", null, now, { plan: order.planName, months: order.months, total: order.total });
+    return ok(undefined);
+  }
+
+  /** Desistir de uma renovação ainda sem comprovativo. */
+  cancelRenewal(now: Date): Result<void, SchoolError> {
+    const order = this.openRenewal;
+    if (!order) return fail(schoolError("INVALID_STATE", "Não há nenhuma renovação por pagar."));
+    if (order.status === "PROOF_SUBMITTED") return fail(schoolError("INVALID_STATE", "O pagamento já está em validação: já não se pode desistir."));
+    order.status = "CANCELLED";
+    this.record("RENEWAL_CANCELLED", null, now, { plan: order.planName, total: order.total });
+    return ok(undefined);
   }
 
   // ================================================================ equipa
@@ -328,7 +399,7 @@ export class School {
     order.status = "AWAITING_PAYMENT";
     order.proofRejectionReason = text;
     order.proof = null;
-    this.props.status = "AWAITING_PAYMENT";
+    if (order.kind === "INITIAL") this.props.status = "AWAITING_PAYMENT";
     this.record("PROOF_REJECTED", staffId, now, { reason: text });
     return ok(undefined);
   }
@@ -360,7 +431,7 @@ export class School {
     order.proof = { ...proof, transactionNumber };
     order.proofRejectionReason = null;
     order.status = "PROOF_SUBMITTED";
-    this.props.status = "PAYMENT_UNDER_REVIEW";
+    if (order.kind === "INITIAL") this.props.status = "PAYMENT_UNDER_REVIEW";
     this.record("PROOF_SUBMITTED", null, now, { transactionNumber, ...(proof.kind && { kind: proof.kind }), bank: (order.instructions as { bankName: string }).bankName });
     return ok(undefined);
   }
@@ -388,10 +459,16 @@ export class School {
     order.status = "PAID";
     order.paidAt = now;
     const base = this.props.subscriptionEndsAt && this.props.subscriptionEndsAt > now ? this.props.subscriptionEndsAt : now;
-    this.props.subscriptionEndsAt = addMonths(base, order.months);
-    this.props.status = "ACTIVE";
+    const until = (this.props.subscriptionEndsAt = addMonths(base, order.months));
     this.record("PAYMENT_CONFIRMED", staffId, now, { method, amount: order.total, automatic: method === "REFERENCE" });
-    this.record("SCHOOL_ACTIVATED", staffId, now, { until: this.props.subscriptionEndsAt.toISOString() });
+    if (order.kind === "RENEWAL") {
+      // estava desativado só por ter terminado: volta a abrir
+      if (this.expired) this.reactivate(staffId, now);
+      this.record("SUBSCRIPTION_RENEWED", staffId, now, { until: until.toISOString(), plan: order.planName, months: order.months });
+      return;
+    }
+    this.props.status = "ACTIVE";
+    this.record("SCHOOL_ACTIVATED", staffId, now, { until: until.toISOString() });
   }
 
   // ================================================================ eventos
@@ -414,6 +491,9 @@ export class School {
   get ownerEmail() { return this.props.ownerEmail; }
   get ownerEmailDeadline() { return this.props.ownerEmailDeadline; }
   get ownerPasswordHash() { return this.props.ownerPasswordHash; }
-  get currentOrder(): SubscriptionOrder | undefined { return this.props.orders[0]; }
+  /** A encomenda de que se fala: a mais recente que não foi cancelada (uma renovação de que se desistiu não conta). */
+  get currentOrder(): SubscriptionOrder | undefined { return this.props.orders.find((o) => o.status !== "CANCELLED") ?? this.props.orders[0]; }
+  /** A subscrição em vigor: a última encomenda paga. */
+  get paidOrder(): SubscriptionOrder | undefined { return this.props.orders.filter((o) => o.status === "PAID").sort((a, b) => b.paidAt!.getTime() - a.paidAt!.getTime())[0]; }
   get snapshot(): Readonly<SchoolProps> { return this.props; }
 }

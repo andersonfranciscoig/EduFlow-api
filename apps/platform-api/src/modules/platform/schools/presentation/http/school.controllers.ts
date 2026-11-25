@@ -43,6 +43,8 @@ import {
   type PaymentMethodBody,
   paymentMethodSchema,
   type ProofBody,
+  type RenewalBody,
+  renewalSchema,
   proofSchema,
   reasonSchema,
   type RegisterSchoolBody,
@@ -292,6 +294,21 @@ export class SchoolPortalController {
       }),
       SCHOOL_HTTP,
     );
+  }
+
+  @Post("renewal")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 15 * MINUTE } })
+  @ApiOperation({ summary: "Renovar a subscrição: plano e periodicidade (fica por pagar; o colégio continua ativo)" })
+  @ApiBody({ schema: openApi(renewalSchema) })
+  async renew(@CurrentSchoolId() schoolId: string, @Body(new ZodValidationPipe(renewalSchema)) body: RenewalBody) {
+    return unwrap(await this.payments.requestRenewal(schoolId, body), { ...BILLING_HTTP, ...SCHOOL_HTTP } as Partial<Record<string, HttpStatus>>);
+  }
+
+  @Delete("renewal")
+  @ApiOperation({ summary: "Desistir de uma renovação ainda sem comprovativo" })
+  async cancelRenewal(@CurrentSchoolId() schoolId: string) {
+    return unwrap(await this.payments.cancelRenewal(schoolId), SCHOOL_HTTP);
   }
 
   @Post("payment/simulate-reference")

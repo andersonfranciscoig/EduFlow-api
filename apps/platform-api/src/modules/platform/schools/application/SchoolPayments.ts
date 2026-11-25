@@ -1,7 +1,7 @@
-import type { Clock, FileStorage } from "../../../../../../../libs/kernel/src/application/ports";
+import type { Clock, FileStorage, IdGenerator } from "../../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../../libs/kernel/src/domain/Result";
 import { schoolError, type SchoolError } from "../domain/errors";
-import { type PaymentMethod, type School, VALIDATION_HOURS } from "../domain/School";
+import { daysTo, type PaymentMethod, type School, subscriptionStage, VALIDATION_HOURS } from "../domain/School";
 import type { SchoolRepository } from "../domain/SchoolRepository";
 import type { BillingTeam, CodeGenerator, PlanCatalog, SchoolDatabasePort, SchoolNotifier, SchoolSettings } from "./ports";
 import { toPortalView, toSchoolDetail, toSchoolSummary } from "./school-dto";
@@ -26,6 +26,7 @@ export class SchoolPayments {
     private readonly notifier: SchoolNotifier,
     private readonly settings: SchoolSettings,
     private readonly team: BillingTeam,
+    private readonly ids: IdGenerator,
   ) {}
 
   /** Avisa o colégio e a equipa que gere a faturação (melhor esforço: nunca falha a operação). */
@@ -33,7 +34,7 @@ export class SchoolPayments {
     const s = school.snapshot;
     const order = school.currentOrder;
     if (!order) return;
-    const base = { schoolName: s.name, orderNumber: order.number, total: order.total };
+    const base = { schoolName: s.name, orderNumber: order.number, total: order.total, renewal: order.kind === "RENEWAL", until: s.subscriptionEndsAt };
     void (async () => {
       await this.notifier.paymentUpdate({ ...base, to: { email: s.ownerEmail, name: s.ownerName }, state, reason: detail }).catch(() => undefined);
       if (state !== "OPEN") await this.notifier.teamPaymentUpdate({ ...base, to: await this.team.emails(), schoolId: school.id, state, detail }).catch(() => undefined);
@@ -61,7 +62,7 @@ export class SchoolPayments {
   private async saveAndNotify(school: School, wasActive: boolean) {
     await this.schools.save(school);
     const url = this.portalUrl(school);
-    if (!wasActive && school.status === "ACTIVE" && url) {
+    if (!wasActive && school.status === "ACTIVE" && url && school.currentOrder?.kind === "INITIAL") {
       const s = school.snapshot;
       await this.notifier
         .schoolActivated({ to: { email: s.ownerEmail, name: s.ownerName }, schoolName: s.name, portalUrl: url, subscriptionEndsAt: s.subscriptionEndsAt })
@@ -88,6 +89,7 @@ export class SchoolPayments {
         referenceProvider: settings.referenceProvider,
         bankAccounts: accounts.map(({ id, bankName, holder, iban }) => ({ id, bankName, holder, iban })),
         validationHours: VALIDATION_HOURS,
+        graceDays: settings.graceDays,
       }),
       // o portal do colégio (Módulo 2): endereço e se já está pronto a usar
       portal: url && school.value.status === "ACTIVE" ? { url, ready } : null,
@@ -270,7 +272,7 @@ export class SchoolPayments {
     let count = 0;
     for (const school of await this.schools.listPastEmailDeadline(now)) {
       if (!school.emailDeadlinePassed(now)) continue;
-      const result = school.suspend("Não passou a usar um email corporativo no prazo de 30 dias.", null, now);
+      const result = school.suspend("Não passou a usar um email corporativo no prazo de 30 dias.", null, now, "EMAIL");
       if (!result.ok) continue;
       await this.schools.save(school);
       const s = school.snapshot;
@@ -278,6 +280,89 @@ export class SchoolPayments {
       count++;
     }
     return count;
+  }
+
+  // ================================================================ renovação
+
+  /** O colégio renova: escolhe o plano e a periodicidade; fica logo por pagar. */
+  async requestRenewal(schoolId: string, input: { planId: string; cycle: Parameters<PlanCatalog["quote"]>[1] }) {
+    const school = await this.load(schoolId);
+    if (!school.ok) return school;
+    const quote = await this.catalog.quote(input.planId, input.cycle);
+    if (!quote.ok) return quote;
+    const ins = await this.instructions("TRANSFER");
+    if (!ins.ok) return ins;
+    const now = this.clock.now();
+    const q = quote.value;
+    const result = school.value.requestRenewal(
+      {
+        id: this.ids.next(),
+        number: this.codes.orderNumber(now),
+        planId: q.plan.id,
+        planName: q.plan.name,
+        planMonthlyPrice: q.plan.monthlyPrice,
+        cycle: q.cycle.kind,
+        months: q.cycle.months,
+        subtotal: q.subtotal,
+        discountPct: q.discountPct,
+        total: q.total,
+        createdAt: now,
+      },
+      ins.value,
+      now,
+    );
+    if (!result.ok) return result;
+    await this.schools.save(school.value);
+    this.announce(school.value, "OPEN", "");
+    return this.portalView(schoolId);
+  }
+
+  async cancelRenewal(schoolId: string) {
+    const school = await this.load(schoolId);
+    if (!school.ok) return school;
+    const result = school.value.cancelRenewal(this.clock.now());
+    if (!result.ok) return result;
+    await this.schools.save(school.value);
+    return this.portalView(schoolId);
+  }
+
+  /**
+   * De hora a hora: avisa os colégios com a subscrição a terminar (cada aviso uma vez) e, se a equipa o
+   * definiu, desativa os que passaram o prazo sem renovar. Com um pagamento em validação não se avisa nem desativa.
+   */
+  async sweepSubscriptions(): Promise<{ notices: number; suspended: number }> {
+    const now = this.clock.now();
+    const { graceDays } = await this.catalog.getSettings();
+    let notices = 0;
+    let suspended = 0;
+    for (const school of await this.schools.listEnding(new Date(now.getTime() + 31 * 86_400_000))) {
+      const s = school.snapshot;
+      const ends = s.subscriptionEndsAt!;
+      if (school.openRenewal?.status === "PROOF_SUBMITTED") continue;
+      const to = { email: s.ownerEmail, name: s.ownerName };
+      const past = -daysTo(ends, now);
+      if (graceDays !== null && now > ends && past >= graceDays) {
+        if (!school.suspend("A subscrição terminou e não foi renovada.", null, now, "EXPIRED").ok) continue;
+        await this.schools.save(school);
+        suspended++;
+        await this.notifier.subscriptionNotice({ to, schoolName: s.name, stage: "SUSPENDED", endsAt: ends, graceDays }).catch(() => undefined);
+        await this.notifier.teamSubscriptionNotice({ to: await this.team.emails(), schoolId: school.id, schoolName: s.name, stage: "SUSPENDED", endsAt: ends }).catch(() => undefined);
+        continue;
+      }
+      const stage = subscriptionStage(ends, now);
+      if (!stage || !(await this.schools.claimNotice(school.id, ends, stage))) continue;
+      try {
+        await this.notifier.subscriptionNotice({ to, schoolName: s.name, stage, endsAt: ends, graceDays });
+        notices++;
+      } catch {
+        await this.schools.releaseNotice(school.id, ends, stage);
+        continue;
+      }
+      if (stage === "D7" || stage === "EXPIRED" || stage === "E7") {
+        await this.notifier.teamSubscriptionNotice({ to: await this.team.emails(), schoolId: school.id, schoolName: s.name, stage, endsAt: ends }).catch(() => undefined);
+      }
+    }
+    return { notices, suspended };
   }
 
   async rejectProof(schoolId: string, staffId: string, reason: string) {

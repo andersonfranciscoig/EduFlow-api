@@ -48,6 +48,8 @@ export interface BillingSettings {
   referenceValidityDays: number;
   /** Texto extra mostrado ao colégio quando paga por transferência. */
   transferInstructions: string | null;
+  /** Dias depois do fim da subscrição até desativar o portal sozinho (null = nunca: só a equipa desativa). */
+  graceDays: number | null;
 }
 
 export function validateSettings(input: BillingSettings): Result<BillingSettings, BillingError> {
@@ -60,6 +62,9 @@ export function validateSettings(input: BillingSettings): Result<BillingSettings
   }
   if (!Number.isInteger(input.referenceValidityDays) || input.referenceValidityDays < 1 || input.referenceValidityDays > 30) {
     return fail(billingError("INVALID_SETTINGS", "A validade da referência tem de estar entre 1 e 30 dias."));
+  }
+  if (input.graceDays !== null && (!Number.isInteger(input.graceDays) || input.graceDays < 0 || input.graceDays > 90)) {
+    return fail(billingError("INVALID_SETTINGS", "O prazo depois do fim da subscrição vai de 0 a 90 dias."));
   }
   return ok({
     ...input,

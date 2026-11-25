@@ -34,8 +34,8 @@ GRANT SELECT, UPDATE (status, safety_backup_id, rolled_back, error, started_at, 
 -- school-api: só lê o diretório
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM eduflow_school_directory;
 GRANT SELECT ON public.tenant_databases TO eduflow_school_directory;
--- …e o logótipo (público) do colégio: só o id e o URL, nada mais da tabela schools
-GRANT SELECT (id, logo_url) ON public.schools TO eduflow_school_directory;
+-- …e o logótipo (público) do colégio e o fim da subscrição (aviso no portal): nada mais da tabela schools
+GRANT SELECT (id, logo_url, subscription_ends_at) ON public.schools TO eduflow_school_directory;
 -- …e a app do UploadThing do colégio: só o token SELADO (abre-o com a chave privada dele)
 GRANT SELECT (school_id, app_id, token_sealed) ON public.school_storage TO eduflow_school_directory;
 -- …e a lista de espera dos pagamentos (referência, Express): pedir, retirar e ver o estado (sem as notas da equipa;
