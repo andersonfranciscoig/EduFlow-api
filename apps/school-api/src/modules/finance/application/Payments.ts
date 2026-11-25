@@ -41,7 +41,7 @@ export interface PaymentActor {
 /** Para avisar: a equipa e o email da família (já ligados ao colégio). */
 export interface PaymentChannels {
   staff: StaffNotify;
-  familyEmail: (m: { to: { email: string; name: string }; title: string; body: string; link: string; sections: EmailSection[] }) => Promise<void>;
+  familyEmail: (m: { to: { email: string; name: string }; title: string; body: string; link: string; sections: EmailSection[]; kind?: "PAYMENT" | "PAYMENT_REMINDER" }) => Promise<void>;
 }
 const FINANCE = ["finance.payments.view", "finance.payments.validate"];
 const OFFICE = ["admissions.applications.view", "admissions.enrollments.manage"];
@@ -75,6 +75,7 @@ export function chargeDto(c: ChargeRow, today: string) {
     pendingPaymentId: c.pendingPaymentId,
     paidAt: c.paidAt?.toISOString() ?? null,
     waiveReason: c.waiveReason,
+    lastReminderAt: c.lastReminderAt?.toISOString() ?? null,
   };
 }
 export function paymentDto(p: PaymentRow, now: Date) {
@@ -145,6 +146,7 @@ export class Payments {
       validationHours: s.validationHours,
       instructions: s.instructions,
       thisMonth: this.today().slice(0, 7),
+      reminders: { enabled: s.remindersEnabled, beforeDays: s.remindBeforeDays, onDue: s.remindOnDue, everyDays: s.remindEveryDays, max: s.remindMax, hour: s.remindHour },
       accounts: accounts.map(accountDto),
       maxAccounts: MAX_ACCOUNTS,
     };
@@ -164,10 +166,26 @@ export class Payments {
     const nextMonth = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7);
     const monthlyFrom = input.monthlyFrom ?? s.monthlyFrom ?? (input.transferEnabled ? nextMonth : null);
     if (monthlyFrom && !/^\d{4}-(0[1-9]|1[0-2])$/.test(monthlyFrom)) return fail(paymentError("INVALID_INPUT", "Escolha o mês a partir do qual se cobram as propinas."));
-    const next: SettingsRow = { transferEnabled: input.transferEnabled, activeSince: s.activeSince ?? (input.transferEnabled ? now : null), requireApplication: input.requireApplication, requireEnrollment: input.requireEnrollment, monthlyFrom, validationHours: input.validationHours, instructions };
+    const next: SettingsRow = { ...s, transferEnabled: input.transferEnabled, activeSince: s.activeSince ?? (input.transferEnabled ? now : null), requireApplication: input.requireApplication, requireEnrollment: input.requireEnrollment, monthlyFrom, validationHours: input.validationHours, instructions };
     await repo.saveSettings(next, actor.id, now);
     await repo.record("PAYMENT_SETTINGS_SAVED", "00000000-0000-0000-0000-00000000f1a1", actor.id, { before: { ...s, activeSince: s.activeSince?.toISOString() ?? null }, after: { ...next, activeSince: next.activeSince?.toISOString() ?? null } }, now);
     await repo.sync(next, now);
+    return ok({ saved: true as const });
+  }
+
+  /** Lembretes das propinas: quando, quantas vezes e a partir de que hora. */
+  async saveReminders(repo: PrismaPaymentsRepository, actor: PaymentActor, input: { enabled: boolean; beforeDays: number; onDue: boolean; everyDays: number; max: number; hour: number }): R<{ saved: true }> {
+    if (!actor.canConfigure) return fail(paymentError("FORBIDDEN", "Não tem permissão para configurar os pagamentos."));
+    const within = (n: number, a: number, b: number) => Number.isInteger(n) && n >= a && n <= b;
+    if (!within(input.beforeDays, 0, 15)) return fail(paymentError("INVALID_INPUT", "O lembrete antes do prazo vai de 0 (não envia) a 15 dias."));
+    if (!within(input.everyDays, 1, 60)) return fail(paymentError("INVALID_INPUT", "Em atraso, lembra-se de 1 em 1 a 60 em 60 dias."));
+    if (!within(input.max, 0, 12)) return fail(paymentError("INVALID_INPUT", "Em atraso, no máximo 12 lembretes (0 = não envia)."));
+    if (!within(input.hour, 7, 20)) return fail(paymentError("INVALID_INPUT", "Os lembretes enviam-se entre as 7 e as 20 horas."));
+    const s = await repo.settings();
+    const next: SettingsRow = { ...s, remindersEnabled: input.enabled, remindBeforeDays: input.beforeDays, remindOnDue: input.onDue, remindEveryDays: input.everyDays, remindMax: input.max, remindHour: input.hour };
+    const now = this.clock.now();
+    await repo.saveSettings(next, actor.id, now);
+    await repo.record("PAYMENT_REMINDERS_SAVED", "00000000-0000-0000-0000-00000000f1a1", actor.id, { after: input }, now);
     return ok({ saved: true as const });
   }
 

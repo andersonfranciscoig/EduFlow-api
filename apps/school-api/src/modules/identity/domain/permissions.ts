@@ -39,6 +39,9 @@ export const PERMISSIONS = {
   "finance.payments.view": { group: "finance", label: "Consultar pagamentos e cobranças", hint: "Ver o que cada aluno tem a pagar, os pagamentos e os comprovativos." },
   "finance.payments.validate": { group: "finance", label: "Validar pagamentos", hint: "Validar ou recusar os pagamentos (e anular uma validação), com motivo." },
   "finance.charges.manage": { group: "finance", label: "Isentar cobranças e registar pagamentos", hint: "Isentar uma cobrança, com motivo, e registar pagamentos entregues em mão." },
+  "finance.expenses.view": { group: "finance", label: "Consultar despesas", hint: "Ver as despesas do colégio e os seus comprovativos." },
+  "finance.expenses.manage": { group: "finance", label: "Gerir despesas", hint: "Registar, pagar e anular despesas (com motivo) e gerir as categorias." },
+  "finance.reports.view": { group: "finance", label: "Painel e relatórios das finanças", hint: "Receitas, dívidas, despesas, resultado e isenções, com gráficos e exportação." },
   // ---- Assiduidade e avaliação: presenças, ocorrências dos professores, provas (as restantes chegam com cada fase)
   "attendance.access": { group: "attendance", label: "Aceder à assiduidade e avaliação", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
   "attendance.settings.manage": { group: "attendance", label: "Configurar as regras de assiduidade", hint: "Modelo dos professores (por aula ou por dia), procedimento sem presenças, prazo, alertas e fuso horário." },
@@ -99,6 +102,7 @@ export function normalizePermissions(list: string[]): Result<Permission[], { cod
   // gerir, gerar ou publicar provas não serve de nada sem as ver
   if (set.has("attendance.exams.manage") || set.has("attendance.exams.generate") || set.has("attendance.exams.publish")) set.add("attendance.exams.view");
   if (set.has("finance.payments.validate") || set.has("finance.charges.manage")) set.add("finance.payments.view");
+  if (set.has("finance.expenses.manage")) set.add("finance.expenses.view");
   for (const p of [...set]) set.add(accessOf(p));
   return ok(ALL_PERMISSIONS.filter((p) => set.has(p)));
 }

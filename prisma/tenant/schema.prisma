@@ -1605,6 +1605,12 @@ model PaymentSettings {
   monthlyFrom       String?   @map("monthly_from")
   validationHours   Int       @default(48) @map("validation_hours")
   instructions      String?
+  remindersEnabled  Boolean   @default(false) @map("reminders_enabled")
+  remindBeforeDays  Int       @default(3) @map("remind_before_days")
+  remindOnDue       Boolean   @default(true) @map("remind_on_due")
+  remindEveryDays   Int       @default(7) @map("remind_every_days")
+  remindMax         Int       @default(4) @map("remind_max")
+  remindHour        Int       @default(9) @map("remind_hour")
   updatedById       String?   @map("updated_by_id") @db.Uuid
   updatedAt         DateTime  @map("updated_at")
 
@@ -1702,6 +1708,68 @@ model PaymentItem {
   @@id([paymentId, chargeId])
   @@index([chargeId], map: "payment_items_charge_idx")
   @@map("payment_items")
+}
+
+/// Lembrete de uma cobrança enviado a uma conta da família (migração 0042).
+model ChargeReminder {
+  id        String   @id @db.Uuid
+  chargeId  String   @map("charge_id") @db.Uuid
+  accountId String   @map("account_id") @db.Uuid
+  /// BEFORE | DUE | AFTER | MANUAL
+  stage     String
+  day       DateTime @db.Date
+  sentAt    DateTime @map("sent_at")
+  byId      String?  @map("by_id") @db.Uuid
+
+  @@unique([chargeId, accountId, day], map: "charge_reminders_key")
+  @@map("charge_reminders")
+}
+
+model ExpenseCategory {
+  id         String    @id @db.Uuid
+  name       String
+  position   Int       @default(0)
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @map("created_at")
+
+  @@map("expense_categories")
+}
+
+/// Despesa do colégio (lê-se e escreve-se em SQL: finance/infrastructure/prisma-expenses.ts).
+model Expense {
+  id                String    @id @db.Uuid
+  number            Int       @unique(map: "expenses_number_key") @default(autoincrement())
+  categoryId        String    @map("category_id") @db.Uuid
+  description       String
+  supplier          String?
+  documentNumber    String?   @map("document_number")
+  amount            Int
+  issuedOn          DateTime  @map("issued_on") @db.Date
+  dueOn             DateTime? @map("due_on") @db.Date
+  note              String?
+  /// PENDING | PAID | CANCELLED
+  status            String    @default("PENDING")
+  paidOn            DateTime? @map("paid_on") @db.Date
+  method            String?
+  bankAccountId     String?   @map("bank_account_id") @db.Uuid
+  bankName          String?   @map("bank_name")
+  transactionNumber String?   @map("transaction_number")
+  proofName         String?   @map("proof_name")
+  proofMimeType     String?   @map("proof_mime_type")
+  proofSize         Int?      @map("proof_size")
+  proofSha256       String?   @map("proof_sha256")
+  proofStorageKey   String?   @map("proof_storage_key")
+  createdById       String?   @map("created_by_id") @db.Uuid
+  createdAt         DateTime  @map("created_at")
+  updatedAt         DateTime  @map("updated_at")
+  paidById          String?   @map("paid_by_id") @db.Uuid
+  cancelledById     String?   @map("cancelled_by_id") @db.Uuid
+  cancelledAt       DateTime? @map("cancelled_at")
+  cancelReason      String?   @map("cancel_reason")
+
+  @@index([status, dueOn], map: "expenses_status_idx")
+  @@index([paidOn], map: "expenses_paid_idx")
+  @@map("expenses")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida

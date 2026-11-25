@@ -153,6 +153,15 @@ export const KINDS = {
     defaultEmail: true,
     emailAvailable: true,
   },
+  PAYMENT_REMINDER: {
+    audience: "FAMILY",
+    label: "Lembretes de propinas",
+    hint: "Uma propina está a vencer ou ficou em atraso, ou o colégio enviou um lembrete.",
+    to: "O aluno maior de idade ou o encarregado",
+    defaultEnabled: true,
+    defaultEmail: true,
+    emailAvailable: true,
+  },
   FAMILY_DAILY_DIGEST: {
     audience: "FAMILY",
     label: "Resumo diário",

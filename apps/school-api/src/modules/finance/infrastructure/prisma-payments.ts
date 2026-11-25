@@ -12,6 +12,12 @@ export interface SettingsRow {
   monthlyFrom: string | null;
   validationHours: number;
   instructions: string | null;
+  remindersEnabled: boolean;
+  remindBeforeDays: number;
+  remindOnDue: boolean;
+  remindEveryDays: number;
+  remindMax: number;
+  remindHour: number;
 }
 export interface AccountRow {
   id: string;
@@ -49,6 +55,7 @@ export interface ChargeRow {
   planValue: number | null;
   /** pagamento submetido que a cobre (em validação) */
   pendingPaymentId: string | null;
+  lastReminderAt: Date | null;
 }
 export interface PaymentRow {
   id: string;
@@ -99,7 +106,7 @@ export type SubmitOutcome = { ok: true; number: number } | { ok: false; reason: 
 type Tx = Prisma.TransactionClient;
 const isUnique = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && (e.code === "P2002" || (e.meta as { code?: string } | undefined)?.code === "23505");
 
-const isMissingTable = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && (e.meta as { code?: string } | undefined)?.code === "42P01";
+const isMissingTable = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && ["42P01", "42703"].includes((e.meta as { code?: string } | undefined)?.code ?? "");
 
 /** A conta pode ver esta cobrança: é de uma inscrição dela, ou de um aluno a que tem acesso. */
 const ACCESS = (accountId: string, today: string) => Prisma.sql`(
@@ -113,7 +120,8 @@ const CHARGE = Prisma.raw(`
          coalesce(st.full_name, a.student_data->>'fullName', 'Aluno') AS "studentName", st.number AS "studentNumber", c.application_id AS "applicationId", a.number AS "applicationNumber",
          c.enrollment_id AS "enrollmentId", cl.grade, co.name AS "courseName", g.name AS "groupName", c.month, to_char(c.due_on, 'YYYY-MM-DD') AS "dueOn", c.status, c.paid_at AS "paidAt", c.waive_reason AS "waiveReason",
          fp.late_fee_kind AS "planKind", fp.late_fee_value AS "planValue",
-         (SELECT p.id FROM payment_items pi JOIN payments p ON p.id = pi.payment_id WHERE pi.charge_id = c.id AND p.status = 'SUBMITTED' LIMIT 1) AS "pendingPaymentId"
+         (SELECT p.id FROM payment_items pi JOIN payments p ON p.id = pi.payment_id WHERE pi.charge_id = c.id AND p.status = 'SUBMITTED' LIMIT 1) AS "pendingPaymentId",
+         (SELECT max(cr.sent_at) FROM charge_reminders cr WHERE cr.charge_id = c.id) AS "lastReminderAt"
     FROM charges c JOIN academic_years y ON y.id = c.academic_year_id
     LEFT JOIN students st ON st.id = c.student_id LEFT JOIN applications a ON a.id = c.application_id LEFT JOIN enrollments e ON e.id = c.enrollment_id
     LEFT JOIN school_classes cl ON cl.id = coalesce(e.class_id, a.class_id) LEFT JOIN courses co ON co.id = cl.course_id LEFT JOIN class_groups g ON g.id = e.group_id
@@ -138,20 +146,25 @@ export class PrismaPaymentsRepository {
   async settings(): Promise<SettingsRow> {
     const [r] = await this.db.$queryRaw<SettingsRow[]>`
       SELECT transfer_enabled AS "transferEnabled", active_since AS "activeSince", require_application AS "requireApplication", require_enrollment AS "requireEnrollment", monthly_from AS "monthlyFrom",
-             validation_hours AS "validationHours", instructions FROM payment_settings WHERE id = 1`.catch((e: unknown) => {
-      // colégio ainda sem a migração 0041: os pagamentos estão desligados e o resto (inscrições…) continua
+             validation_hours AS "validationHours", instructions, reminders_enabled AS "remindersEnabled", remind_before_days AS "remindBeforeDays", remind_on_due AS "remindOnDue",
+             remind_every_days AS "remindEveryDays", remind_max AS "remindMax", remind_hour AS "remindHour" FROM payment_settings WHERE id = 1`.catch((e: unknown) => {
+      // colégio ainda sem as migrações 0041/0042: os pagamentos estão desligados e o resto (inscrições…) continua
       if (isMissingTable(e)) return [];
       throw e;
     });
-    return r ?? { transferEnabled: false, activeSince: null, requireApplication: true, requireEnrollment: true, monthlyFrom: null, validationHours: 48, instructions: null };
+    return r ?? { transferEnabled: false, activeSince: null, requireApplication: true, requireEnrollment: true, monthlyFrom: null, validationHours: 48, instructions: null, remindersEnabled: false, remindBeforeDays: 3, remindOnDue: true, remindEveryDays: 7, remindMax: 4, remindHour: 9 };
   }
 
   async saveSettings(s: SettingsRow, actorId: string | null, now: Date) {
     await this.db.$executeRaw`
-      INSERT INTO payment_settings (id, transfer_enabled, active_since, require_application, require_enrollment, monthly_from, validation_hours, instructions, updated_by_id, updated_at)
-      VALUES (1, ${s.transferEnabled}, ${s.activeSince}::timestamp, ${s.requireApplication}, ${s.requireEnrollment}, ${s.monthlyFrom}, ${s.validationHours}, ${s.instructions}, ${actorId}::uuid, ${now})
+      INSERT INTO payment_settings (id, transfer_enabled, active_since, require_application, require_enrollment, monthly_from, validation_hours, instructions,
+                                    reminders_enabled, remind_before_days, remind_on_due, remind_every_days, remind_max, remind_hour, updated_by_id, updated_at)
+      VALUES (1, ${s.transferEnabled}, ${s.activeSince}::timestamp, ${s.requireApplication}, ${s.requireEnrollment}, ${s.monthlyFrom}, ${s.validationHours}, ${s.instructions},
+              ${s.remindersEnabled}, ${s.remindBeforeDays}, ${s.remindOnDue}, ${s.remindEveryDays}, ${s.remindMax}, ${s.remindHour}, ${actorId}::uuid, ${now})
       ON CONFLICT (id) DO UPDATE SET transfer_enabled = EXCLUDED.transfer_enabled, active_since = EXCLUDED.active_since, require_application = EXCLUDED.require_application, require_enrollment = EXCLUDED.require_enrollment,
-             monthly_from = EXCLUDED.monthly_from, validation_hours = EXCLUDED.validation_hours, instructions = EXCLUDED.instructions, updated_by_id = EXCLUDED.updated_by_id, updated_at = EXCLUDED.updated_at`;
+             monthly_from = EXCLUDED.monthly_from, validation_hours = EXCLUDED.validation_hours, instructions = EXCLUDED.instructions,
+             reminders_enabled = EXCLUDED.reminders_enabled, remind_before_days = EXCLUDED.remind_before_days, remind_on_due = EXCLUDED.remind_on_due, remind_every_days = EXCLUDED.remind_every_days,
+             remind_max = EXCLUDED.remind_max, remind_hour = EXCLUDED.remind_hour, updated_by_id = EXCLUDED.updated_by_id, updated_at = EXCLUDED.updated_at`;
   }
 
   async accounts(onlyActive = false): Promise<AccountRow[]> {
@@ -409,18 +422,22 @@ export class PrismaPaymentsRepository {
     await notifyFamily(this.db, { accountId, kind: "PAYMENT", title, body, link: "/familia/pagamentos", studentId, now });
   }
 
-  async familyType() {
-    const [r] = await this.db.$queryRaw<{ enabled: boolean; email: boolean }[]>`SELECT enabled, email FROM notification_types WHERE kind = 'PAYMENT'`;
+  async remindFamily(accountId: string, title: string, body: string, link: string, studentId: string | null, now: Date) {
+    await notifyFamily(this.db, { accountId, kind: "PAYMENT_REMINDER", title, body, link, studentId, now });
+  }
+
+  async familyType(kind: "PAYMENT" | "PAYMENT_REMINDER" = "PAYMENT") {
+    const [r] = await this.db.$queryRaw<{ enabled: boolean; email: boolean }[]>`SELECT enabled, email FROM notification_types WHERE kind = ${kind}`;
     return r ?? null;
   }
-  async familyWantsEmail(accountId: string) {
-    const [r] = await this.db.$queryRaw<{ email: boolean }[]>`SELECT email FROM family_notification_preferences WHERE account_id = ${accountId}::uuid AND kind = 'PAYMENT'`;
+  async familyWantsEmail(accountId: string, kind: "PAYMENT" | "PAYMENT_REMINDER" = "PAYMENT") {
+    const [r] = await this.db.$queryRaw<{ email: boolean }[]>`SELECT email FROM family_notification_preferences WHERE account_id = ${accountId}::uuid AND kind = ${kind}`;
     return r?.email ?? true;
   }
-  async logFamilyEmail(e: { accountId: string; fullName: string; title: string; destination: string | null; status: "SENT" | "FAILED" | "SKIPPED"; error: string | null; now: Date }) {
+  async logFamilyEmail(e: { accountId: string; fullName: string; title: string; destination: string | null; status: "SENT" | "FAILED" | "SKIPPED"; error: string | null; now: Date; kind?: "PAYMENT" | "PAYMENT_REMINDER" }) {
     await this.db.$executeRaw`
       INSERT INTO notification_deliveries (id, audience, notification_id, recipient_id, recipient_name, kind, title, channel, destination, status, error, created_at)
-      VALUES (${randomUUID()}::uuid, 'FAMILY', NULL, ${e.accountId}::uuid, ${e.fullName}, 'PAYMENT', ${e.title.slice(0, 200)}, 'EMAIL', ${e.destination}, ${e.status}, ${e.error}, ${e.now})`;
+      VALUES (${randomUUID()}::uuid, 'FAMILY', NULL, ${e.accountId}::uuid, ${e.fullName}, ${e.kind ?? "PAYMENT"}, ${e.title.slice(0, 200)}, 'EMAIL', ${e.destination}, ${e.status}, ${e.error}, ${e.now})`;
   }
 
   async application(id: string) {
