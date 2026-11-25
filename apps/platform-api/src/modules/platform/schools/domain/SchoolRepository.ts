@@ -14,6 +14,7 @@ export interface SchoolRepository {
   findByReference(reference: string): Promise<School | null>;
   ownerEmailExists(email: string): Promise<boolean>;
   nifExists(nif: string): Promise<boolean>;
+  transactionUsed(iban: string, transactionNumber: string, exceptOrderId: string): Promise<boolean>;
   referenceExists(reference: string): Promise<boolean>;
   slugExists(slug: string): Promise<boolean>;
   list(filter?: { status?: SchoolStatus }): Promise<School[]>;

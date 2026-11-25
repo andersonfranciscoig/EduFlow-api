@@ -42,6 +42,7 @@ import {
   ownerResetSchema,
   type PaymentMethodBody,
   paymentMethodSchema,
+  type ProofBody,
   proofSchema,
   reasonSchema,
   type RegisterSchoolBody,
@@ -265,19 +266,28 @@ export class SchoolPortalController {
     schema: {
       type: "object",
       required: ["transactionNumber", "proof"],
-      properties: { transactionNumber: { type: "string" }, proof: { type: "string", format: "binary" } },
+      properties: {
+        transactionNumber: { type: "string" },
+        kind: { type: "string", enum: ["TRANSFERENCIA", "DEPOSITO"] },
+        paidOn: { type: "string", format: "date" },
+        bankAccountId: { type: "string", format: "uuid" },
+        proof: { type: "string", format: "binary" },
+      },
     },
   })
-  @ApiOperation({ summary: "Enviar comprovativo de transferência", description: "PDF ou imagem até 5 MB. Validação manual pela equipa." })
+  @ApiOperation({ summary: "Enviar o pagamento (transferência ou depósito): conta, n.º da transação, data e comprovativo", description: "PDF ou imagem até 5 MB. Validação manual pela equipa em 48 horas ou menos." })
   async proof(
     @CurrentSchoolId() schoolId: string,
-    @Body(new ZodValidationPipe(proofSchema)) body: { transactionNumber: string },
+    @Body(new ZodValidationPipe(proofSchema)) body: ProofBody,
     @UploadedFile() file?: { originalname: string; mimetype: string; buffer: Buffer },
   ) {
     if (!file) throw new BadRequestException({ code: "INVALID_PROOF", message: "Anexe o comprovativo." });
     return unwrap(
       await this.payments.submitTransferProof(schoolId, {
         transactionNumber: body.transactionNumber,
+        kind: body.kind ?? null,
+        paidOn: body.paidOn ?? null,
+        bankAccountId: body.bankAccountId,
         file: { fileName: file.originalname.slice(0, 120), mimeType: file.mimetype, content: file.buffer },
       }),
       SCHOOL_HTTP,
