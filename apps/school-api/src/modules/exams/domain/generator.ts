@@ -273,6 +273,7 @@ function attempt(ctx: YearCtx, season: SeasonCtx, units: Unit[], others: ExamCtx
         source: "AUTOMATIC",
         cancelReason: null,
         updatedAt: "",
+        invigilators: [],
       });
     }
     return null;

@@ -124,6 +124,8 @@ export interface ExamCtx {
   source: "MANUAL" | "AUTOMATIC";
   cancelReason: string | null;
   updatedAt: string;
+  /** professores escalados para vigiar */
+  invigilators: { id: string; name: string }[];
 }
 export interface LessonCtx {
   groupId: string;
@@ -150,7 +152,9 @@ export interface Conflict {
   code: string;
   message: string;
 }
-export type Slot = Pick<ExamCtx, "seasonId" | "groupId" | "subjectId" | "subjectName" | "teacherId" | "teacherName" | "day" | "startsAt" | "endsAt" | "room" | "format"> & { id: string | null };
+export type Slot = Pick<ExamCtx, "seasonId" | "groupId" | "subjectId" | "subjectName" | "teacherId" | "teacherName" | "day" | "startsAt" | "endsAt" | "room" | "format"> & { id: string | null; invigilators?: { id: string; name: string }[] };
+/** Vigilantes por prova, no máximo. */
+export const MAX_INVIGILATORS = 6;
 
 /** Época com interrupção que suspende as aulas desta turma neste dia (publicada, ou a que se está a preparar). */
 const suspendedBy = (ctx: YearCtx, groupId: string, day: string, current: string) =>
@@ -197,6 +201,14 @@ export function conflictsOf(ctx: YearCtx, e: Slot, today: string): Conflict[] {
     }
     const room = (e.room ?? g.room ?? "").toLocaleLowerCase("pt");
     const other = (o.room ?? groups.get(o.groupId)?.room ?? "").toLocaleLowerCase("pt");
+    // ---- a vigilância
+    for (const i of e.invigilators ?? []) {
+      if (o.invigilators.some((x) => x.id === i.id)) {
+        if (room && room === other) warn("INVIGILATOR_SHARED", `${i.name} também vigia a turma ${label(o.groupId)}, na mesma sala e à mesma hora.`);
+        else block("INVIGILATOR_BUSY", `${i.name} já vigia a prova de ${what} da turma ${label(o.groupId)}.`);
+      } else if (o.teacherId === i.id) warn("INVIGILATOR_RESPONSIBLE", `${i.name} é responsável pela prova de ${what} da turma ${label(o.groupId)}.`);
+    }
+    if (e.teacherId && o.invigilators.some((x) => x.id === e.teacherId) && !(e.invigilators ?? []).some((x) => x.id === e.teacherId)) warn("TEACHER_INVIGILATES", `${e.teacherName ?? "O professor"} vigia a prova de ${what} da turma ${label(o.groupId)}.`);
     if (room && room === other) warn("ROOM_SHARED", `A sala ${e.room ?? g.room} também está marcada para a turma ${label(o.groupId)} (${what}).`);
   }
   if (sameDay >= MAX_PER_DAY) warn("MANY_SAME_DAY", `A turma ${g.label} fica com ${sameDay + 1} provas a ${dmy(e.day)}.`);
@@ -210,6 +222,10 @@ export function conflictsOf(ctx: YearCtx, e: Slot, today: string): Conflict[] {
     for (const l of ctx.lessons)
       if (l.teacherId === e.teacherId && l.groupId !== e.groupId && l.weekday === weekday && overlaps(l, e) && !suspendedBy(ctx, l.groupId, e.day, e.seasonId))
         warn("TEACHER_LESSON", `${e.teacherName ?? "O professor"} tem aula com a turma ${label(l.groupId)} (${l.startsAt}–${l.endsAt}).`);
+  for (const i of e.invigilators ?? [])
+    for (const l of ctx.lessons)
+      if (l.teacherId === i.id && l.groupId !== e.groupId && l.weekday === weekday && overlaps(l, e) && !suspendedBy(ctx, l.groupId, e.day, e.seasonId))
+        warn("INVIGILATOR_LESSON", `${i.name} tem aula com a turma ${label(l.groupId)} (${l.startsAt}–${l.endsAt}).`);
   const shift = ctx.shifts.find((s) => s.shift === g.shift);
   if (shift && (e.startsAt < shift.startsAt || e.endsAt > shift.endsAt)) warn("OUT_OF_SHIFT", `Fica fora do turno da turma ${g.label} (${shift.startsAt}–${shift.endsAt}).`);
   return out;

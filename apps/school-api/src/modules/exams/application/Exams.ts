@@ -18,6 +18,7 @@ import {
   type ExamFormat,
   FORMAT_LABELS,
   isDay,
+  MAX_INVIGILATORS,
   MAX_PER_PERIOD,
   SEASON_LABELS,
   type SeasonCtx,
@@ -70,6 +71,7 @@ const examDto = (e: ExamCtx, groups: YearCtx["groups"]) => {
     statusLabel: EXAM_LABELS[e.status],
     source: e.source,
     cancelReason: e.cancelReason,
+    invigilators: e.invigilators,
   };
 };
 const publicDto = (e: PublicExam) => ({
@@ -108,6 +110,7 @@ const HISTORY: Record<string, string> = {
   EXAM_GENERATED: "Proposta automática aplicada",
   EXAM_CREATED: "Prova marcada",
   EXAM_UPDATED: "Prova alterada",
+  EXAM_INVIGILATORS: "Vigilantes da prova",
   EXAM_REMOVED: "Prova retirada",
   EXAM_CANCELLED: "Prova cancelada",
 };
@@ -401,7 +404,7 @@ export class Exams {
       const teacherId = auto ? (choices.groupTeachers.find((t) => t.groupId === groupId && t.subjectId === input.subjectId)?.employeeId ?? null) : (input.teacherId ?? null);
       const teacherName = choices.teachers.find((t) => t.id === teacherId)?.fullName ?? null;
       const e: NewExam = { id: this.ids.next(), seasonId: s.id, groupId, subjectId: input.subjectId, teacherId, ...data.value };
-      const full: ExamCtx = { ...e, subjectName: subject.name, subjectColor: subject.color, teacherName, status: "SCHEDULED", source: "MANUAL", cancelReason: null, updatedAt: "" };
+      const full: ExamCtx = { ...e, subjectName: subject.name, subjectColor: subject.color, teacherName, status: "SCHEDULED", source: "MANUAL", cancelReason: null, updatedAt: "", invigilators: [] };
       const dup = ctx.exams.find((o) => o.seasonId === s.id && o.status === "SCHEDULED" && o.groupId === groupId && o.subjectId === input.subjectId && o.format === e.format);
       const label = ctx.groups.find((g) => g.id === groupId)?.label ?? "";
       if (dup) conflicts.push({ level: "BLOCK", code: "EXAM_EXISTS", message: `A turma ${label} já tem a prova ${FORMAT_LABELS[e.format].toLowerCase()} de ${subject.name} nesta época (${dmy(dup.day)} às ${dup.startsAt}).` });
@@ -505,7 +508,7 @@ export class Exams {
               seasonId: s.id,
               groupIds: [e.groupId],
               subjectId: e.subjectId,
-              teacherIds: [e.teacherId, teacherId].filter((t): t is string => !!t),
+              teacherIds: [e.teacherId, teacherId, ...e.invigilators.map((i) => i.id)].filter((t): t is string => !!t),
               title: `Prova de ${e.subjectName} alterada`,
               body: `${s.name} · ${label}: ${moved ? `passou de ${dmy(e.day)} às ${e.startsAt} para ${dmy(next.day)}, das ${next.startsAt} às ${next.endsAt}` : `${dmy(next.day)}, das ${next.startsAt} às ${next.endsAt}`}${next.room && next.room !== e.room ? `, sala ${next.room}` : ""}. Motivo: ${reason.value}`,
             },
@@ -542,13 +545,70 @@ export class Exams {
             seasonId: s.id,
             groupIds: [e.groupId],
             subjectId: e.subjectId,
-            teacherIds: e.teacherId ? [e.teacherId] : [],
+            teacherIds: [...(e.teacherId ? [e.teacherId] : []), ...e.invigilators.map((i) => i.id)],
             title: `Prova de ${e.subjectName} cancelada`,
             body: `${s.name} · ${label}: a prova de ${dmy(e.day)} às ${e.startsAt} foi cancelada. Motivo: ${reason.value}`,
           },
           now,
         );
       return ok({ cancelled: true as const });
+    });
+  }
+
+  // ============================================================ vigilância
+
+  /** Quem pode vigiar a prova: cada professor, com o que o impede ou o que convém saber, e quantas já vigia na época. */
+  async invigilatorCandidates(repo: PrismaExamsRepository, timeZone: string, examId: string) {
+    const ref = await repo.seasonOfExam(examId);
+    const [ctx, choices] = ref ? await Promise.all([repo.context(ref.yearId), repo.choices(ref.yearId)]) : [null, null];
+    const e = ctx?.exams.find((x) => x.id === examId);
+    if (!ctx || !choices || !e) return fail(examError("NOT_FOUND", "Prova não encontrada."));
+    const today = this.today(timeZone);
+    const dayCtx = { ...ctx, exams: ctx.exams.filter((x) => x.day === e.day) };
+    const people = [...choices.teachers, ...e.invigilators.filter((i) => !choices.teachers.some((t) => t.id === i.id)).map((i) => ({ id: i.id, fullName: i.name }))];
+    return ok({
+      max: MAX_INVIGILATORS,
+      exam: examDto(e, ctx.groups),
+      candidates: people.map((t) => ({
+        id: t.id,
+        fullName: t.fullName,
+        chosen: e.invigilators.some((i) => i.id === t.id),
+        /** dá esta disciplina nesta turma (muitos colégios preferem outro vigilante) */
+        ownSubject: choices.groupTeachers.some((g) => g.groupId === e.groupId && g.subjectId === e.subjectId && g.employeeId === t.id),
+        duties: ctx.exams.filter((x) => x.seasonId === e.seasonId && x.status === "SCHEDULED" && x.id !== e.id && x.invigilators.some((i) => i.id === t.id)).length,
+        issues: conflictsOf(dayCtx, { ...e, invigilators: [{ id: t.id, name: t.fullName }] }, today).filter((c) => c.code.startsWith("INVIGILATOR")),
+      })),
+    });
+  }
+
+  /** Escala os vigilantes de uma prova. Com o calendário publicado, avisa quem entra e quem sai. */
+  async setInvigilators(repo: PrismaExamsRepository, actor: ExamActor, timeZone: string, examId: string, input: { employeeIds: string[]; confirm?: boolean; reason?: string | null }): R<{ saved: number }> {
+    const ids = [...new Set(input.employeeIds)];
+    if (ids.length > MAX_INVIGILATORS) return fail(examError("INVALID_INPUT", `No máximo ${MAX_INVIGILATORS} vigilantes por prova.`));
+    const note = cleanLong(input.reason).slice(0, 300);
+    return this.withinExam(repo, actor, this.today(timeZone), examId, async (tx, ctx, s, e, label): R<{ saved: number }> => {
+      const before = e.invigilators;
+      const teachers = (await tx.choices(ctx.year.id)).teachers;
+      const next = ids.map((id) => ({ id, name: teachers.find((t) => t.id === id)?.fullName ?? before.find((b) => b.id === id)?.name ?? "" }));
+      if (next.some((n) => !n.name)) return fail(examError("INVALID_INPUT", "Escolha professores do colégio."));
+      const added = next.filter((n) => !before.some((b) => b.id === n.id));
+      const removed = before.filter((b) => !ids.includes(b.id));
+      if (!added.length && !removed.length) return ok({ saved: next.length });
+      const conflicts = tidy(conflictsOf(ctx, { ...e, invigilators: next }, this.today(timeZone)).filter((c) => c.code.startsWith("INVIGILATOR")));
+      const g = this.gate(conflicts, input.confirm);
+      if (!g.ok) return g;
+      const now = this.clock.now();
+      await tx.setInvigilators(examId, ids, actor.id, now);
+      const names = (l: { name: string }[]) => l.map((x) => x.name).join(", ") || null;
+      await tx.record("EXAM_INVIGILATORS", s.id, actor.id, { before: { prova: `${e.subjectName} · ${label}`, vigilantes: names(before) }, after: { prova: `${e.subjectName} · ${label}`, vigilantes: names(next) }, ...(note ? { reason: note } : {}) }, now);
+      if (s.status === "PUBLISHED") {
+        const room = e.room ?? ctx.groups.find((x) => x.id === e.groupId)?.room;
+        const what = `${s.name}: ${e.subjectName}, turma ${label}, ${dmy(e.day)} das ${e.startsAt} às ${e.endsAt}${room ? `, sala ${room.replace(/^sala\s+/i, "")}` : ""}.${note ? ` ${note}` : ""}`;
+        const base = { kind: "INVIGILATION" as const, seasonId: s.id, groupIds: [], subjectId: null };
+        if (added.length) await tx.addNotice({ ...base, teacherIds: added.map((a) => a.id), title: `Vai vigiar a prova de ${e.subjectName} a ${dmy(e.day)}`, body: what }, now);
+        if (removed.length) await tx.addNotice({ ...base, teacherIds: removed.map((a) => a.id), title: `Já não vigia a prova de ${e.subjectName} a ${dmy(e.day)}`, body: what }, now);
+      }
+      return ok({ saved: next.length });
     });
   }
 
@@ -646,6 +706,8 @@ export class Exams {
       const missing = this.missing(ctx, s);
       const conflicts: Conflict[] = problems.map(({ level, code, message, exam }) => ({ level, code, message: `${exam}: ${message}` }));
       if (missing.length) conflicts.push({ level: "WARN", code: "MISSING", message: `${missing.length === 1 ? "Falta marcar 1 prova" : `Faltam marcar ${missing.length} provas`} das turmas e disciplinas abrangidas.` });
+      const unwatched = exams.filter((e) => !e.invigilators.length).length;
+      if (unwatched && unwatched < exams.length) conflicts.push({ level: "WARN", code: "NO_INVIGILATOR", message: unwatched === 1 ? "1 prova ainda não tem vigilante." : `${unwatched} provas ainda não têm vigilante.` });
       if (s.interrupts && s.startsOn <= today) {
         const sessions = await tx.sessionsInside(s.groupIds, s.startsOn, s.endsOn);
         conflicts.push({ level: "WARN", code: "STARTED", message: `A época já começou: as aulas destas turmas desde ${dmy(s.startsOn)} passam a contar como suspensas e as que esperam decisão no RH ficam dispensadas${sessions ? ` (as ${sessions} com presenças já registadas mantêm-se)` : ""}.` });
@@ -658,6 +720,7 @@ export class Exams {
       await tx.record("EXAM_SEASON_PUBLISHED", id, actor.id, { after: { provas: exams.length, turmas: s.groupIds.length, aulas: s.interrupts ? "Interrompidas" : "Mantêm-se", ...(dismissed ? { "pendências dispensadas": dismissed } : {}) }, warnings: conflicts.length }, now);
       await tx.addNotice(
         {
+          kind: "PUBLISHED",
           seasonId: id,
           groupIds: s.groupIds,
           subjectId: null,
@@ -718,7 +781,16 @@ export class Exams {
     return ok({
       today: this.today(timeZone),
       seasons: seasons.map(({ groupIds: _g, ...s }) => s),
-      exams: list.map((e) => ({ ...publicDto(e), responsible: e.teacherId === employeeId, coordinates: coordinated.has(e.groupId) })),
+      exams: list.map((e) => ({
+        ...publicDto(e),
+        responsible: e.teacherId === employeeId,
+        mySubject: !!e.mySubject,
+        teaches: !!e.teaches,
+        coordinates: coordinated.has(e.groupId),
+        invigilator: e.invigilators.some((i) => i.id === employeeId),
+        /** os colegas que vigiam (só a equipa os vê) */
+        invigilators: e.invigilators.map((i) => i.name),
+      })),
     });
   }
 
