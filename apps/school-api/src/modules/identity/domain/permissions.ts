@@ -42,8 +42,8 @@ export const PERMISSIONS = {
   "finance.expenses.view": { group: "finance", label: "Consultar despesas", hint: "Ver as despesas do colégio e os seus comprovativos." },
   "finance.expenses.manage": { group: "finance", label: "Gerir despesas", hint: "Registar, pagar e anular despesas (com motivo) e gerir as categorias." },
   "finance.reports.view": { group: "finance", label: "Painel e relatórios das finanças", hint: "Receitas, dívidas, despesas, resultado e isenções, com gráficos e exportação." },
-  // ---- Assiduidade e avaliação: presenças, ocorrências dos professores, provas (as restantes chegam com cada fase)
-  "attendance.access": { group: "attendance", label: "Aceder à assiduidade e avaliação", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
+  // ---- Assiduidade e provas: presenças, ocorrências dos professores, provas (as restantes chegam com cada fase)
+  "attendance.access": { group: "attendance", label: "Aceder à assiduidade e provas", hint: "Sem esta, nenhuma das outras da assiduidade funciona." },
   "attendance.settings.manage": { group: "attendance", label: "Configurar as regras de assiduidade", hint: "Modelo dos professores (por aula ou por dia), procedimento sem presenças, prazo, alertas e fuso horário." },
   "attendance.teachers.view": { group: "attendance", label: "Consultar a assiduidade dos professores", hint: "Ver as faltas e atrasos dos professores (marcados pelo RH ou automáticos) e o histórico." },
   "attendance.students.view": { group: "attendance", label: "Consultar as presenças dos alunos", hint: "Ver as aulas registadas de cada turma e a assiduidade de cada aluno." },
@@ -54,6 +54,9 @@ export const PERMISSIONS = {
   "attendance.exams.manage": { group: "attendance", label: "Gerir o calendário de provas", hint: "Definir as provas de cada período, as turmas e disciplinas, e marcar, alterar ou retirar provas." },
   "attendance.exams.generate": { group: "attendance", label: "Gerar o calendário automaticamente", hint: "Pedir ao sistema uma proposta de calendário e usá-la (fica em preparação, para rever e publicar)." },
   "attendance.exams.publish": { group: "attendance", label: "Publicar o calendário de provas", hint: "Publicar para professores e famílias; com a gestão, também alterar ou cancelar o que já está publicado." },
+  // ---- Avaliação e pautas: critérios (as restantes chegam com cada fase)
+  "grading.access": { group: "grading", label: "Aceder à avaliação e pautas", hint: "Consultar os critérios de avaliação. Sem esta, nenhuma das outras da avaliação funciona." },
+  "grading.settings.manage": { group: "grading", label: "Configurar os critérios de avaliação", hint: "Modelos, componentes e pesos, elementos de avaliação e a que classes e disciplinas se aplicam." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -61,14 +64,15 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 type Group = (typeof PERMISSIONS)[Permission]["group"];
 
 /** Cada grupo tem uma permissão de acesso: sem ela, as outras do grupo não servem. */
-export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access" };
+export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access", grading: "grading.access" };
 
 export const PERMISSION_GROUPS = (
   [
     { key: "hr", label: "Recursos Humanos" },
     { key: "admissions", label: "Inscrições e matrículas" },
     { key: "finance", label: "Finanças" },
-    { key: "attendance", label: "Assiduidade e avaliação" },
+    { key: "attendance", label: "Assiduidade e provas" },
+    { key: "grading", label: "Avaliação e pautas" },
   ] as const
 ).map((g) => ({ ...g, permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === g.key) }));
 
@@ -79,7 +83,7 @@ export const accessOf = (p: Permission) => GROUP_ACCESS[PERMISSIONS[p].group];
  * Sessões de SUPORTE EduFlow: podem ajudar a configurar os formulários e os períodos
  * (sem dados pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
  */
-export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage", "finance.access", "finance.settings.manage"];
+export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage", "finance.access", "finance.settings.manage", "grading.access", "grading.settings.manage"];
 
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 

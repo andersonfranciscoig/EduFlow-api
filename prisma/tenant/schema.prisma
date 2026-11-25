@@ -1772,5 +1772,65 @@ model Expense {
   @@map("expenses")
 }
 
+/// Critérios de avaliação (migração 0043): lê-se e escreve-se em SQL (grading/infrastructure/prisma-grading-settings.ts),
+/// onde estão também as chaves estrangeiras e as regras (CHECK, índices únicos).
+model GradingModel {
+  id             String    @id @db.Uuid
+  name           String
+  description    String?
+  draft          Json?
+  currentVersion Int?      @map("current_version")
+  revision       Int       @default(1)
+  archivedAt     DateTime? @map("archived_at")
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @map("created_at")
+  updatedById    String?   @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime  @map("updated_at")
+
+  @@map("grading_models")
+}
+
+/// Uma versão publicada de um modelo: imutável.
+model GradingModelVersion {
+  id            String   @id @db.Uuid
+  modelId       String   @map("model_id") @db.Uuid
+  number        Int
+  definition    Json
+  reason        String?
+  publishedById String?  @map("published_by_id") @db.Uuid
+  publishedAt   DateTime @map("published_at")
+
+  @@unique([modelId, number], map: "grading_model_versions_number_key")
+  @@map("grading_model_versions")
+}
+
+/// Que modelo se aplica a quê num ano letivo (todo o colégio, ensino, curso ou classe; disciplina e período opcionais).
+model GradingRule {
+  id             String   @id @db.Uuid
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  level          String?
+  courseId       String?  @map("course_id") @db.Uuid
+  classId        String?  @map("class_id") @db.Uuid
+  subjectId      String?  @map("subject_id") @db.Uuid
+  periodPosition Int?     @map("period_position")
+  modelId        String   @map("model_id") @db.Uuid
+  setById        String?  @map("set_by_id") @db.Uuid
+  setAt          DateTime @map("set_at")
+
+  @@index([modelId], map: "grading_rules_model_idx")
+  @@map("grading_rules")
+}
+
+/// Elementos de avaliação do colégio (participação, testes, trabalhos…).
+model GradingType {
+  id         String    @id @db.Uuid
+  name       String
+  position   Int
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @map("created_at")
+
+  @@map("grading_types")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
