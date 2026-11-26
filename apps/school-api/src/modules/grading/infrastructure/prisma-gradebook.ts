@@ -477,6 +477,40 @@ export class PrismaGradebookRepository {
         ON CONFLICT (academic_year_id, student_id) DO UPDATE SET group_id = EXCLUDED.group_id, computed = EXCLUDED.computed, negatives = EXCLUDED.negatives, details = EXCLUDED.details, updated_at = EXCLUDED.updated_at`;
   }
   /** As turmas de um ano com alguma nota final publicada (para recalcular depois de mudarem as regras). */
+  // ================================================================ pautas
+
+  /** A última publicação de cada disciplina da turma num período (0 = final do ano): o que vai para a pauta. */
+  groupPublications(groupId: string, period: number) {
+    return this.db.$queryRaw<{ subjectId: string; number: number; results: FrozenResults; publishedAt: Date; publishedBy: string | null }[]>`
+      SELECT DISTINCT ON (subject_id) subject_id AS "subjectId", number, results, published_at AS "publishedAt", published_by_name AS "publishedBy" FROM grading_publications
+       WHERE group_id = ${groupId}::uuid AND period_position = ${period} ORDER BY subject_id, number DESC`;
+  }
+  /** Quantas disciplinas de cada turma do ano já têm publicação, por período. */
+  publishedCounts(yearId: string) {
+    return this.db.$queryRaw<{ groupId: string; period: number; subjects: number }[]>`
+      SELECT group_id AS "groupId", period_position AS period, count(DISTINCT subject_id)::int AS subjects FROM grading_publications
+       WHERE academic_year_id = ${yearId}::uuid GROUP BY group_id, period_position`;
+  }
+  /** A última publicação de cada disciplina de cada turma do ano num período (para o painel). */
+  yearPublications(yearId: string, period: number) {
+    return this.db.$queryRaw<{ groupId: string; subjectId: string; results: FrozenResults }[]>`
+      SELECT DISTINCT ON (group_id, subject_id) group_id AS "groupId", subject_id AS "subjectId", results FROM grading_publications
+       WHERE academic_year_id = ${yearId}::uuid AND period_position = ${period} ORDER BY group_id, subject_id, number DESC`;
+  }
+  /** O resultado do ano de cada aluno (a deliberação da direção prevalece sobre o calculado). */
+  yearOutcomes(yearId: string) {
+    return this.db.$queryRaw<{ outcome: string; count: number }[]>`
+      SELECT coalesce(d.outcome, r.computed) AS outcome, count(*)::int AS count FROM grading_year_results r
+        LEFT JOIN grading_year_decisions d ON d.academic_year_id = r.academic_year_id AND d.student_id = r.student_id
+       WHERE r.academic_year_id = ${yearId}::uuid GROUP BY 1`;
+  }
+  /** O turno, a sala e o diretor de turma (para o cabeçalho da pauta). */
+  async groupExtra(groupId: string) {
+    const r = await this.db.$queryRaw<{ shift: string | null; room: string | null; coordinator: string | null }[]>`
+      SELECT g.shift, g.room, e.full_name AS coordinator FROM class_groups g LEFT JOIN employees e ON e.id = g.coordinator_id WHERE g.id = ${groupId}::uuid`;
+    return r[0] ?? { shift: null, room: null, coordinator: null };
+  }
+
   groupsWithFinals(yearId: string) {
     return this.db.$queryRaw<{ groupId: string }[]>`SELECT DISTINCT group_id AS "groupId" FROM grading_publications WHERE academic_year_id = ${yearId}::uuid AND period_position = 0`;
   }
