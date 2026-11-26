@@ -1,5 +1,6 @@
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
-import { periodName, type PeriodKind } from "../../pedagogy/domain/calendar";
+import type { PeriodKind } from "../../pedagogy/domain/calendar";
+import { termName } from "./Gradebook";
 import type { StaffNotify } from "../../notifications/infrastructure/notifier";
 import type { PrismaGradebookRepository, TermKey } from "../infrastructure/prisma-gradebook";
 import { gradeName } from "./GradingModels";
@@ -21,7 +22,7 @@ export class GradingNotices {
   private async context(books: Books, k: TermKey) {
     const book = await books.book(k.groupId, k.subjectId);
     if (!book) return null;
-    const period = periodName(book.periodKind as PeriodKind, k.period);
+    const period = termName(book.periodKind as PeriodKind, k.period);
     const where = `${gradeName(book.grade, book.courseName)} · Turma ${book.groupName}`;
     const q = `turma=${k.groupId}&disciplina=${k.subjectId}&periodo=${k.period}`;
     return { book, period, where, q };

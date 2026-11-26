@@ -6,6 +6,7 @@ import { GradingRules } from "./application/GradingRules";
 import { GradingSimulator } from "./application/GradingSimulator";
 import { Gradebook } from "./application/Gradebook";
 import { GradingNotices } from "./application/GradingNotices";
+import { YearResults } from "./application/YearResults";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { GradebookController } from "./presentation/gradebook.controller";
 import { GradingSettingsController } from "./presentation/grading-settings.controller";
@@ -24,7 +25,8 @@ import { GradingSettingsController } from "./presentation/grading-settings.contr
     { provide: GradingSimulator, useFactory: () => new GradingSimulator() },
     { provide: Gradebook, useFactory: () => new Gradebook(systemClock) },
     { provide: GradingNotices, useFactory: () => new GradingNotices(systemClock) },
+    { provide: YearResults, useFactory: () => new YearResults(systemClock) },
   ],
-  exports: [GradingModels, GradingRules, GradingSimulator, Gradebook, GradingNotices],
+  exports: [GradingModels, GradingRules, GradingSimulator, Gradebook, GradingNotices, YearResults],
 })
 export class GradingModule {}

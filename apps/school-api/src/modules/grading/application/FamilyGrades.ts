@@ -1,6 +1,8 @@
 import { periodName, type PeriodKind } from "../../pedagogy/domain/calendar";
 import type { PrismaGradebookRepository } from "../infrastructure/prisma-gradebook";
+import { systemClock } from "../../../../../../libs/kernel/src/infrastructure/system";
 import { gradeName } from "./GradingModels";
+import { YearResults } from "./YearResults";
 
 /**
  * As classificações do aluno para a família: só o que a direção publicou (a última publicação de
@@ -11,11 +13,15 @@ export async function familyGrades(books: PrismaGradebookRepository, studentId: 
   const g = await books.groupHeader(groupId);
   if (!g) return null;
   const kind = g.periodKind as PeriodKind;
-  const [periods, subjects, published] = await Promise.all([books.periods(g.yearId), books.groupSubjects(groupId), books.studentPublications(g.yearId, studentId)]);
+  const [periods, subjects, published, year] = await Promise.all([books.periods(g.yearId), books.groupSubjects(groupId), books.studentPublications(g.yearId, studentId), new YearResults(systemClock).forFamily(books, studentId, groupId)]);
+  const hasFinal = published.some((p) => p.period === 0);
   return {
     year: { id: g.yearId, name: g.yearName },
     group: { name: g.groupName, classLabel: gradeName(g.grade, g.courseName) },
-    periods: periods.map((p) => ({ position: p.position, name: periodName(kind, p.position) })),
+    // o "Final do ano" aparece quando houver alguma nota final publicada
+    periods: [...periods.map((p) => ({ position: p.position, name: periodName(kind, p.position) })), ...(hasFinal ? [{ position: 0, name: "Final do ano" }] : [])],
+    /** o resultado do ano (transita, não transita, em recuperação): só quando já está decidido */
+    outcome: year?.outcome ?? null,
     subjects: subjects.map((s) => ({
       id: s.id,
       name: s.name,

@@ -140,7 +140,22 @@ export interface TermRow {
 }
 /** As classificações congeladas na submissão (o que se valida e publica). */
 export interface FrozenResults {
-  students: { id: string; name: string; number: number | null; status: string; value: number | null; level: string | null; passed: boolean | null; comment: string | null }[];
+  students: {
+    id: string;
+    name: string;
+    number: number | null;
+    status: string;
+    value: number | null;
+    level: string | null;
+    passed: boolean | null;
+    comment: string | null;
+    /** só no "Final do ano": a nota de frequência, o exame, a recuperação e se ainda pode ir a ela */
+    frequency?: number | null;
+    exam?: { status: string; value: number | null } | null;
+    recovery?: number | null;
+    recoveryOpen?: boolean;
+    recoveryMax?: number | null;
+  }[];
   stats: { students: number; done: number; passed: number; average: number | null };
 }
 export interface TermKey {
@@ -377,6 +392,95 @@ export class PrismaGradebookRepository {
         FROM class_groups g JOIN academic_years y ON y.id = g.academic_year_id JOIN school_classes c ON c.id = g.class_id LEFT JOIN courses co ON co.id = c.course_id WHERE g.id = ${groupId}::uuid`;
     return r[0] ?? null;
   }
+  // ================================================================ final do ano
+
+  /** A última publicação de cada período desta disciplina na turma (o que conta para a nota do ano). */
+  latestPublications(groupId: string, subjectId: string) {
+    return this.db.$queryRaw<{ period: number; number: number; results: FrozenResults; modelId: string | null; modelVersion: number | null }[]>`
+      SELECT DISTINCT ON (period_position) period_position AS period, number, results, model_id AS "modelId", model_version AS "modelVersion"
+        FROM grading_publications WHERE group_id = ${groupId}::uuid AND subject_id = ${subjectId}::uuid ORDER BY period_position, number DESC`;
+  }
+  finalMarks(groupId: string, subjectId: string) {
+    return this.db.$queryRaw<{ studentId: string; examState: string | null; examValue: number | null; examParts: Record<string, number | null> | null; recovery: number | null }[]>`
+      SELECT student_id AS "studentId", exam_state AS "examState", exam_value::float8 AS "examValue", exam_parts AS "examParts", recovery_value::float8 AS recovery
+        FROM grading_final_marks WHERE group_id = ${groupId}::uuid AND subject_id = ${subjectId}::uuid`;
+  }
+  /** Lança o exame e a recuperação (só regista no histórico o que mudou). */
+  async setFinalMarks(k: TermKey, entries: { studentId: string; examState: string | null; examValue: number | null; examParts: Record<string, number | null> | null; recovery: number | null }[], actor: Actor, now: Date) {
+    const current = new Map((await this.finalMarks(k.groupId, k.subjectId)).map((m) => [m.studentId, m]));
+    let changed = 0;
+    for (const e of entries) {
+      const old = current.get(e.studentId);
+      const before = old ? { examState: old.examState, examValue: old.examValue, examParts: old.examParts, recovery: old.recovery } : null;
+      const empty = !e.examState && e.recovery === null;
+      const after = empty ? null : { examState: e.examState, examValue: e.examValue, examParts: e.examParts, recovery: e.recovery };
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      if (!after) await this.db.$executeRaw`DELETE FROM grading_final_marks WHERE group_id = ${k.groupId}::uuid AND subject_id = ${k.subjectId}::uuid AND student_id = ${e.studentId}::uuid`;
+      else
+        await this.db.$executeRaw`
+          INSERT INTO grading_final_marks (academic_year_id, group_id, subject_id, student_id, exam_state, exam_value, exam_parts, recovery_value, updated_by_id, updated_at)
+          VALUES (${k.yearId}::uuid, ${k.groupId}::uuid, ${k.subjectId}::uuid, ${e.studentId}::uuid, ${e.examState}, ${e.examValue}::numeric, ${json(e.examParts)}::jsonb, ${e.recovery}::numeric, ${actor.id}::uuid, ${now})
+          ON CONFLICT (group_id, subject_id, student_id) DO UPDATE SET exam_state = EXCLUDED.exam_state, exam_value = EXCLUDED.exam_value, exam_parts = EXCLUDED.exam_parts,
+                 recovery_value = EXCLUDED.recovery_value, updated_by_id = EXCLUDED.updated_by_id, updated_at = EXCLUDED.updated_at`;
+      await this.change({ ...k, period: 0 }, "FINAL_MARK", { studentId: e.studentId, before, after }, actor, now);
+      changed++;
+    }
+    return changed;
+  }
+
+  // ================================================================ transição de ano
+
+  progressionRules() {
+    return this.db.$queryRaw<{ level: string; maxNegatives: number | null; coreSubjectIds: string[]; maxCoreNegatives: number | null; updatedAt: Date }[]>`
+      SELECT level, max_negatives AS "maxNegatives", core_subject_ids AS "coreSubjectIds", max_core_negatives AS "maxCoreNegatives", updated_at AS "updatedAt" FROM grading_progression`;
+  }
+  async setProgression(level: string, r: { maxNegatives: number | null; coreSubjectIds: string[]; maxCoreNegatives: number | null }, actorId: string | null, now: Date) {
+    await this.db.$executeRaw`
+      INSERT INTO grading_progression (level, max_negatives, core_subject_ids, max_core_negatives, updated_by_id, updated_at)
+      VALUES (${level}, ${r.maxNegatives}::int, ${r.coreSubjectIds}::uuid[], ${r.maxCoreNegatives}::int, ${actorId}::uuid, ${now})
+      ON CONFLICT (level) DO UPDATE SET max_negatives = EXCLUDED.max_negatives, core_subject_ids = EXCLUDED.core_subject_ids, max_core_negatives = EXCLUDED.max_core_negatives, updated_by_id = EXCLUDED.updated_by_id, updated_at = EXCLUDED.updated_at`;
+  }
+  /** As notas finais publicadas (posição 0) de todas as disciplinas de uma turma: a última publicação de cada uma. */
+  groupFinals(groupId: string) {
+    return this.db.$queryRaw<{ subjectId: string; results: FrozenResults }[]>`
+      SELECT DISTINCT ON (subject_id) subject_id AS "subjectId", results FROM grading_publications
+       WHERE group_id = ${groupId}::uuid AND period_position = 0 ORDER BY subject_id, number DESC`;
+  }
+  decisions(yearId: string) {
+    return this.db.$queryRaw<{ studentId: string; outcome: "PASSED" | "RETAINED"; reason: string; decidedBy: string | null; decidedAt: Date }[]>`
+      SELECT student_id AS "studentId", outcome, reason, decided_by_name AS "decidedBy", decided_at AS "decidedAt" FROM grading_year_decisions WHERE academic_year_id = ${yearId}::uuid`;
+  }
+  async setDecision(yearId: string, groupId: string, studentId: string, d: { outcome: "PASSED" | "RETAINED"; reason: string } | null, actor: Actor, now: Date) {
+    const [old] = await this.db.$queryRaw<{ outcome: string; reason: string }[]>`SELECT outcome, reason FROM grading_year_decisions WHERE academic_year_id = ${yearId}::uuid AND student_id = ${studentId}::uuid`;
+    if (!d) await this.db.$executeRaw`DELETE FROM grading_year_decisions WHERE academic_year_id = ${yearId}::uuid AND student_id = ${studentId}::uuid`;
+    else
+      await this.db.$executeRaw`
+        INSERT INTO grading_year_decisions (academic_year_id, student_id, group_id, outcome, reason, decided_by_id, decided_by_name, decided_at)
+        VALUES (${yearId}::uuid, ${studentId}::uuid, ${groupId}::uuid, ${d.outcome}, ${d.reason}, ${actor.id}::uuid, ${actor.name}, ${now})
+        ON CONFLICT (academic_year_id, student_id) DO UPDATE SET group_id = EXCLUDED.group_id, outcome = EXCLUDED.outcome, reason = EXCLUDED.reason, decided_by_id = EXCLUDED.decided_by_id, decided_by_name = EXCLUDED.decided_by_name, decided_at = EXCLUDED.decided_at`;
+    // a deliberação é sobre o aluno (não sobre uma disciplina): fica no histórico do colégio, com o aluno por assunto
+    await this.db.$executeRaw`
+      INSERT INTO school_activity (id, type, subject_id, actor_id, details, occurred_at)
+      VALUES (${randomUUID()}::uuid, 'GRADING_YEAR_DECISION', ${studentId}::uuid, ${actor.id}::uuid, ${json({ yearId, groupId, before: old ?? null, after: d })}::jsonb, ${now})`;
+  }
+  decisionHistory(studentId: string) {
+    return this.db.$queryRaw<{ at: Date; by: string | null; details: { before: { outcome: string; reason: string } | null; after: { outcome: string; reason: string } | null } }[]>`
+      SELECT a.occurred_at AS at, u.full_name AS by, a.details FROM school_activity a LEFT JOIN school_users u ON u.id = a.actor_id
+       WHERE a.subject_id = ${studentId}::uuid AND a.type = 'GRADING_YEAR_DECISION' ORDER BY a.occurred_at DESC LIMIT 20`;
+  }
+  /** Guarda o resultado calculado dos alunos de uma turma (substitui o anterior). */
+  async saveYearResults(yearId: string, groupId: string, rows: { studentId: string; computed: string; negatives: number; details: unknown }[], now: Date) {
+    for (const r of rows)
+      await this.db.$executeRaw`
+        INSERT INTO grading_year_results (academic_year_id, student_id, group_id, computed, negatives, details, updated_at)
+        VALUES (${yearId}::uuid, ${r.studentId}::uuid, ${groupId}::uuid, ${r.computed}, ${r.negatives}, ${json(r.details)}::jsonb, ${now})
+        ON CONFLICT (academic_year_id, student_id) DO UPDATE SET group_id = EXCLUDED.group_id, computed = EXCLUDED.computed, negatives = EXCLUDED.negatives, details = EXCLUDED.details, updated_at = EXCLUDED.updated_at`;
+  }
+  /** As turmas de um ano com alguma nota final publicada (para recalcular depois de mudarem as regras). */
+  groupsWithFinals(yearId: string) {
+    return this.db.$queryRaw<{ groupId: string }[]>`SELECT DISTINCT group_id AS "groupId" FROM grading_publications WHERE academic_year_id = ${yearId}::uuid AND period_position = 0`;
+  }
+
   // ================================================================ a quem avisar
 
   /** A conta do portal do diretor de turma (se tiver). */
