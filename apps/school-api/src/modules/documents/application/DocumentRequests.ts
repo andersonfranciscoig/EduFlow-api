@@ -85,7 +85,13 @@ export class DocumentRequests {
       relationship: r.relationship,
       answers: r.answers,
       /** as respostas com o nome de cada campo (os campos do tipo; um campo que já não exista mostra a chave) */
-      answerList: Object.entries(r.answers).map(([key, value]) => ({ key, label: fields.find((f) => f.key === key)?.label ?? key, value })),
+      answerList: [
+        // pela ordem dos campos do documento; um campo que já não exista vai no fim
+        ...fields.filter((f) => r.answers[f.key]).map((f) => ({ key: f.key, label: f.label, value: r.answers[f.key] })),
+        ...Object.entries(r.answers)
+          .filter(([key]) => !fields.some((f) => f.key === key))
+          .map(([key, value]) => ({ key, label: key, value })),
+      ],
       notes: r.notes,
       status: r.status,
       statusLabel: STATUS_LABELS[r.status],
