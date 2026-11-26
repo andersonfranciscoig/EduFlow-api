@@ -596,7 +596,7 @@ export class Gradebook {
   }
 
   /** A direção publica as classificações validadas de uma turma num período (todas, ou só as disciplinas indicadas). */
-  async publishGroup(books: Books, viewer: GradebookViewer, input: { groupId: string; period: number; subjectIds?: string[] | null }): R<{ published: number; notReady: string[] }> {
+  async publishGroup(books: Books, viewer: GradebookViewer, input: { groupId: string; period: number; subjectIds?: string[] | null }): R<{ published: number; notReady: string[]; subjects: { id: string; name: string; number: number }[] }> {
     if (!viewer.canPublish) return fail(gradingError("FORBIDDEN", "Publicar exige a permissão “Publicar as classificações”."));
     const group = await books.groupInfo(input.groupId);
     if (!group) return fail(gradingError("NOT_FOUND", "Turma não encontrada."));
@@ -607,13 +607,13 @@ export class Gradebook {
     const notReady = wanted.filter((s) => !terms.some((t) => t.groupId === input.groupId && t.subjectId === s.id && (t.status === "VALIDATED" || t.status === "PUBLISHED"))).map((s) => s.name);
     if (!ready.length) return fail(gradingError("INVALID_STATE", "Não há classificações validadas por publicar nesta turma e período."));
     const actor = await this.actor(books, viewer);
-    let published = 0;
+    const done: { id: string; name: string; number: number }[] = [];
     for (const s of ready) {
       const t = terms.find((x) => x.groupId === input.groupId && x.subjectId === s.id)!;
       const n = await books.locked(input.groupId, s.id, (tx) => tx.publishTerm({ yearId: group.yearId, groupId: input.groupId, subjectId: s.id, period: input.period }, t.revision, actor, this.clock.now()));
-      if (n !== null) published++;
+      if (n !== null) done.push({ id: s.id, name: s.name, number: n });
     }
-    return ok({ published, notReady });
+    return ok({ published: done.length, notReady, subjects: done });
   }
 
   /** O estado das classificações de todas as turmas e disciplinas de um período (validação e publicação). */

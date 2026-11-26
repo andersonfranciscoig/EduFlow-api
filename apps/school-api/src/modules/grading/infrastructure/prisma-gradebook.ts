@@ -368,8 +368,70 @@ export class PrismaGradebookRepository {
   }
   /** As disciplinas do plano curricular da classe da turma. */
   groupSubjects(groupId: string) {
-    return this.db.$queryRaw<{ id: string; name: string }[]>`
-      SELECT s.id, s.name FROM class_groups g JOIN class_subjects cs ON cs.class_id = g.class_id JOIN subjects s ON s.id = cs.subject_id WHERE g.id = ${groupId}::uuid ORDER BY cs.position, s.name`;
+    return this.db.$queryRaw<{ id: string; name: string; code: string; color: string }[]>`
+      SELECT s.id, s.name, s.code, s.color FROM class_groups g JOIN class_subjects cs ON cs.class_id = g.class_id JOIN subjects s ON s.id = cs.subject_id WHERE g.id = ${groupId}::uuid ORDER BY cs.position, s.name`;
+  }
+  async groupHeader(groupId: string) {
+    const r = await this.db.$queryRaw<{ yearId: string; yearName: string; periodKind: string; groupName: string; grade: number; courseName: string | null }[]>`
+      SELECT y.id AS "yearId", y.name AS "yearName", y.period_kind AS "periodKind", g.name AS "groupName", c.grade, co.name AS "courseName"
+        FROM class_groups g JOIN academic_years y ON y.id = g.academic_year_id JOIN school_classes c ON c.id = g.class_id LEFT JOIN courses co ON co.id = c.course_id WHERE g.id = ${groupId}::uuid`;
+    return r[0] ?? null;
+  }
+  // ================================================================ a quem avisar
+
+  /** A conta do portal do diretor de turma (se tiver). */
+  async coordinatorUser(groupId: string) {
+    const r = await this.db.$queryRaw<{ id: string }[]>`
+      SELECT e.user_id AS id FROM class_groups g JOIN employees e ON e.id = g.coordinator_id WHERE g.id = ${groupId}::uuid AND e.user_id IS NOT NULL`;
+    return r[0]?.id ?? null;
+  }
+  async userOfEmployee(employeeId: string) {
+    const r = await this.db.$queryRaw<{ id: string }[]>`SELECT user_id AS id FROM employees WHERE id = ${employeeId}::uuid AND user_id IS NOT NULL`;
+    return r[0]?.id ?? null;
+  }
+  /** Quem tem uma permissão da avaliação (e o responsável do colégio). */
+  usersWith(permission: string) {
+    return this.db.$queryRaw<{ id: string }[]>`
+      SELECT u.id FROM school_users u WHERE u.status = 'ACTIVE' AND (u.is_owner OR EXISTS (SELECT 1 FROM school_user_permissions p WHERE p.user_id = u.id AND p.permission = ${permission}))`;
+  }
+  /**
+   * Avisa as famílias dos alunos de uma turma de que há classificações publicadas: o próprio aluno
+   * (com conta) e, enquanto for menor, os encarregados que o gerem. Uma notificação por aluno e conta.
+   */
+  async notifyFamilies(groupId: string, kind: string, titlePrefix: string, body: string, link: string, today: string, now: Date) {
+    const [r] = await this.db.$queryRaw<{ n: number }[]>`
+      WITH type AS (SELECT coalesce((SELECT enabled FROM notification_types WHERE kind = ${kind}), true) AS on_),
+      rec AS (
+        SELECT st.id AS student_id, st.account_id FROM students st WHERE st.account_id IS NOT NULL
+        UNION
+        SELECT sg.student_id, gu.account_id FROM student_guardians sg JOIN guardians gu ON gu.id = sg.guardian_id JOIN students st ON st.id = sg.student_id
+         WHERE sg.can_manage AND gu.account_id IS NOT NULL AND ${today}::date < (st.birth_date + interval '18 years')::date
+      ),
+      target AS (
+        SELECT DISTINCT fa.id AS account_id, fa.full_name, st.id AS student_id, left(${titlePrefix} || ' · ' || split_part(st.full_name, ' ', 1), 200) AS title
+          FROM enrollments en JOIN students st ON st.id = en.student_id JOIN rec ON rec.student_id = st.id JOIN family_accounts fa ON fa.id = rec.account_id AND fa.status = 'ACTIVE'
+         WHERE en.group_id = ${groupId}::uuid AND en.status = 'ACTIVE'
+      ),
+      ins AS (
+        INSERT INTO family_notifications (id, account_id, kind, title, body, link, student_id, created_at)
+        SELECT gen_random_uuid(), t.account_id, ${kind}, t.title, ${body}, ${link} || t.student_id, t.student_id, ${now}::timestamp FROM target t, type WHERE type.on_
+        RETURNING id, account_id, student_id
+      ),
+      log AS (
+        INSERT INTO notification_deliveries (id, audience, notification_id, recipient_id, recipient_name, kind, title, channel, status, error, created_at)
+        SELECT gen_random_uuid(), 'FAMILY', i.id, t.account_id, t.full_name, ${kind}, t.title, 'IN_APP', CASE WHEN type.on_ THEN 'SENT' ELSE 'SKIPPED' END, CASE WHEN type.on_ THEN NULL ELSE 'Tipo desligado pelo colégio' END, ${now}::timestamp
+          FROM target t CROSS JOIN type LEFT JOIN ins i ON i.account_id = t.account_id AND i.student_id = t.student_id
+      )
+      SELECT count(*)::int AS n FROM ins`;
+    return r?.n ?? 0;
+  }
+  /** As classificações publicadas de um aluno num ano (a última publicação de cada disciplina e período). */
+  studentPublications(yearId: string, studentId: string) {
+    return this.db.$queryRaw<{ subjectId: string; period: number; number: number; publishedAt: Date; reason: string | null; result: { status: string; value: number | null; level: string | null; passed: boolean | null; comment: string | null } }[]>`
+      SELECT DISTINCT ON (p.subject_id, p.period_position) p.subject_id AS "subjectId", p.period_position AS period, p.number, p.published_at AS "publishedAt", p.reason, st AS result
+        FROM grading_publications p CROSS JOIN LATERAL jsonb_array_elements(p.results->'students') st
+       WHERE p.academic_year_id = ${yearId}::uuid AND st->>'id' = ${studentId}
+       ORDER BY p.subject_id, p.period_position, p.number DESC`;
   }
   publications(groupId: string, subjectId: string, period: number) {
     return this.db.$queryRaw<{ number: number; reason: string | null; publishedAt: Date; publishedBy: string | null; modelVersion: number | null }[]>`
