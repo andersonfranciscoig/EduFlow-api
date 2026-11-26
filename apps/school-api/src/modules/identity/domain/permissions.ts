@@ -22,6 +22,10 @@ export const PERMISSIONS = {
   "hr.attendance.manage": { group: "hr", label: "Registar a assiduidade", hint: "Marcar presenças, atrasos e faltas; juntar comprovativos." },
   "hr.settings.manage": { group: "hr", label: "Configurar o formulário", hint: "Campos da formação e dos dados profissionais; publicar versões." },
   "hr.documents.manage": { group: "hr", label: "Configurar os documentos", hint: "Documentos pedidos, formatos e tamanhos." },
+  "hr.doc_types.manage": { group: "hr", label: "Configurar os documentos dos funcionários", hint: "Que declarações e documentos profissionais os funcionários podem pedir, como se emitem e em que prazo." },
+  "hr.doc_requests.view": { group: "hr", label: "Consultar os pedidos de documentos dos funcionários", hint: "Ver os pedidos de declarações e documentos profissionais e o seu histórico." },
+  "hr.doc_requests.process": { group: "hr", label: "Tratar os pedidos de documentos dos funcionários", hint: "Analisar, preparar, rejeitar (com motivo) e marcar como pronto; registar pedidos em nome de um funcionário." },
+  "hr.doc_requests.deliver": { group: "hr", label: "Entregar documentos aos funcionários", hint: "Confirmar o levantamento, com quem recebeu." },
   // ---- Secretaria: inscrições e matrículas (as restantes chegam com cada fase)
   "admissions.access": { group: "admissions", label: "Aceder às inscrições e matrículas", hint: "Sem esta, nenhuma das outras das inscrições funciona." },
   "admissions.settings.manage": { group: "admissions", label: "Configurar os períodos", hint: "Quando abrem e fecham as inscrições, as matrículas e as renovações." },
@@ -60,6 +64,12 @@ export const PERMISSIONS = {
   "grading.results.validate": { group: "grading", label: "Validar as classificações", hint: "Validar ou devolver ao professor as classificações submetidas (o diretor de turma valida as da sua turma sem esta permissão)." },
   "grading.results.publish": { group: "grading", label: "Publicar as classificações", hint: "Publicar as classificações validadas de cada turma e período: só então as famílias as veem." },
   "grading.results.rectify": { group: "grading", label: "Abrir retificações", hint: "Reabrir classificações já publicadas para o professor as corrigir, com o motivo; voltam a ser validadas e publicadas." },
+  // ---- Documentos dos alunos (secretaria e pedagogia); os dos funcionários são do RH (hr.doc_*)
+  "documents.access": { group: "documents", label: "Aceder aos pedidos de documentos", hint: "Sem esta, nenhuma das outras dos documentos funciona." },
+  "documents.settings.manage": { group: "documents", label: "Configurar os documentos dos alunos", hint: "Que documentos os alunos e encarregados podem pedir, como se emitem, prazos e campos." },
+  "documents.requests.view": { group: "documents", label: "Consultar os pedidos de documentos", hint: "Ver os pedidos dos alunos e encarregados e o seu histórico." },
+  "documents.requests.process": { group: "documents", label: "Tratar os pedidos de documentos", hint: "Analisar, preparar, rejeitar (com motivo) e marcar como pronto; registar pedidos ao balcão." },
+  "documents.requests.deliver": { group: "documents", label: "Entregar documentos", hint: "Confirmar o levantamento, com quem recebeu e a relação com o aluno." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -67,7 +77,7 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 type Group = (typeof PERMISSIONS)[Permission]["group"];
 
 /** Cada grupo tem uma permissão de acesso: sem ela, as outras do grupo não servem. */
-export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access", grading: "grading.access" };
+export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access", grading: "grading.access", documents: "documents.access" };
 
 export const PERMISSION_GROUPS = (
   [
@@ -76,6 +86,7 @@ export const PERMISSION_GROUPS = (
     { key: "finance", label: "Finanças" },
     { key: "attendance", label: "Assiduidade e provas" },
     { key: "grading", label: "Avaliação e pautas" },
+    { key: "documents", label: "Documentos" },
   ] as const
 ).map((g) => ({ ...g, permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === g.key) }));
 
@@ -86,7 +97,7 @@ export const accessOf = (p: Permission) => GROUP_ACCESS[PERMISSIONS[p].group];
  * Sessões de SUPORTE EduFlow: podem ajudar a configurar os formulários e os períodos
  * (sem dados pessoais de ninguém) — e continuam só de leitura, salvo modo de edição.
  */
-export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage", "finance.access", "finance.settings.manage", "grading.access", "grading.settings.manage"];
+export const SUPPORT_PERMISSIONS: Permission[] = ["hr.access", "hr.settings.manage", "hr.documents.manage", "admissions.access", "admissions.settings.manage", "admissions.documents.manage", "admissions.forms.manage", "attendance.access", "attendance.settings.manage", "finance.access", "finance.settings.manage", "grading.access", "grading.settings.manage", "documents.access", "documents.settings.manage", "hr.doc_types.manage"];
 
 export const isPermission = (p: string): p is Permission => p in PERMISSIONS;
 
@@ -110,6 +121,9 @@ export function normalizePermissions(list: string[]): Result<Permission[], { cod
   if (set.has("attendance.exams.manage") || set.has("attendance.exams.generate") || set.has("attendance.exams.publish")) set.add("attendance.exams.view");
   if (set.has("finance.payments.validate") || set.has("finance.charges.manage")) set.add("finance.payments.view");
   if (set.has("finance.expenses.manage")) set.add("finance.expenses.view");
+  // tratar ou entregar pedidos não serve de nada sem os ver
+  if (set.has("documents.requests.process") || set.has("documents.requests.deliver")) set.add("documents.requests.view");
+  if (set.has("hr.doc_requests.process") || set.has("hr.doc_requests.deliver")) set.add("hr.doc_requests.view");
   for (const p of [...set]) set.add(accessOf(p));
   return ok(ALL_PERMISSIONS.filter((p) => set.has(p)));
 }
