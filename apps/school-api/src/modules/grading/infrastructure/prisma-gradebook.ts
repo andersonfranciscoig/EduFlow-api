@@ -54,6 +54,25 @@ export interface AssessmentRow {
   marks: number;
   createdAt: Date;
   createdByName: string | null;
+  /** a prova do calendário que regista (null = avaliação do professor) */
+  examId: string | null;
+  examDay: string | null;
+  examStatus: string | null;
+  seasonName: string | null;
+}
+/** Uma prova do calendário publicado, para uma turma e disciplina. */
+export interface CalendarExamRow {
+  id: string;
+  seasonName: string;
+  seasonPosition: number;
+  day: string;
+  startsAt: string;
+  endsAt: string;
+  room: string | null;
+  format: string;
+  status: string;
+  cancelReason: string | null;
+  assessmentId: string | null;
 }
 export interface MarkRow {
   assessmentId: string;
@@ -79,6 +98,7 @@ export interface ChangeRow {
   reason: string | null;
 }
 export interface MyBookRow {
+  classId: string;
   groupId: string;
   groupName: string;
   shift: string;
@@ -120,8 +140,10 @@ const BOOK = Prisma.sql`
 const ASSESSMENT = Prisma.sql`
   SELECT a.id, a.academic_year_id AS "yearId", a.group_id AS "groupId", a.subject_id AS "subjectId", a.period_position AS period, a.component_key AS "componentKey",
          a.type_id AS "typeId", t.name AS "typeName", a.name, to_char(a.held_on, 'YYYY-MM-DD') AS "heldOn", a.out_of::float8 AS "outOf", a.weight::float8 AS weight,
-         a.revision, (SELECT count(*)::int FROM grading_marks m WHERE m.assessment_id = a.id) AS marks, a.created_at AS "createdAt", u.full_name AS "createdByName"
-    FROM grading_assessments a LEFT JOIN grading_types t ON t.id = a.type_id LEFT JOIN school_users u ON u.id = a.created_by_id`;
+         a.revision, (SELECT count(*)::int FROM grading_marks m WHERE m.assessment_id = a.id) AS marks, a.created_at AS "createdAt", u.full_name AS "createdByName",
+         a.exam_id AS "examId", to_char(e.day, 'YYYY-MM-DD') AS "examDay", e.status AS "examStatus", es.name AS "seasonName"
+    FROM grading_assessments a LEFT JOIN grading_types t ON t.id = a.type_id LEFT JOIN school_users u ON u.id = a.created_by_id
+    LEFT JOIN exams e ON e.id = a.exam_id LEFT JOIN exam_seasons es ON es.id = e.season_id`;
 
 /** A caderneta digital, na BD do colégio: avaliações, notas, menções e o histórico (só de acrescentar). */
 export class PrismaGradebookRepository {
@@ -171,7 +193,7 @@ export class PrismaGradebookRepository {
   /** As cadernetas do professor (as suas disciplinas) e as das turmas que coordena. */
   myBooks(employeeId: string, yearId: string) {
     return this.db.$queryRaw<MyBookRow[]>`
-      SELECT g.id AS "groupId", g.name AS "groupName", g.shift, c.grade, co.name AS "courseName",
+      SELECT c.id AS "classId", g.id AS "groupId", g.name AS "groupName", g.shift, c.grade, co.name AS "courseName",
              s.id AS "subjectId", s.name AS "subjectName", s.code AS "subjectCode", s.color AS "subjectColor",
              (SELECT count(*)::int FROM enrollments en WHERE en.group_id = g.id AND en.status = 'ACTIVE') AS students,
              (SELECT count(*)::int FROM grading_assessments a WHERE a.group_id = g.id AND a.subject_id = s.id) AS assessments,
@@ -220,6 +242,24 @@ export class PrismaGradebookRepository {
     return this.db.$queryRaw<MarkRow[]>`
       SELECT assessment_id AS "assessmentId", student_id AS "studentId", state, score::float8 AS score, note FROM grading_marks WHERE assessment_id = ANY(${assessmentIds}::uuid[])`;
   }
+  /** As provas do calendário publicado desta turma e disciplina num período (e a avaliação que as regista). */
+  calendarExams(yearId: string, groupId: string, subjectId: string, period: number) {
+    return this.db.$queryRaw<CalendarExamRow[]>`
+      SELECT e.id, s.name AS "seasonName", s.position AS "seasonPosition", to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt",
+             e.room, e.format, e.status, e.cancel_reason AS "cancelReason", (SELECT a.id FROM grading_assessments a WHERE a.exam_id = e.id) AS "assessmentId"
+        FROM exams e JOIN exam_seasons s ON s.id = e.season_id
+       WHERE s.academic_year_id = ${yearId}::uuid AND s.period_position = ${period} AND s.status = 'PUBLISHED'
+         AND e.group_id = ${groupId}::uuid AND e.subject_id = ${subjectId}::uuid
+       ORDER BY e.day, e.starts_at, s.position`;
+  }
+  async calendarExam(id: string) {
+    const r = await this.db.$queryRaw<(CalendarExamRow & { yearId: string; period: number; groupId: string; subjectId: string; seasonStatus: string })[]>`
+      SELECT e.id, s.name AS "seasonName", s.position AS "seasonPosition", to_char(e.day, 'YYYY-MM-DD') AS day, to_char(e.starts_at, 'HH24:MI') AS "startsAt", to_char(e.ends_at, 'HH24:MI') AS "endsAt",
+             e.room, e.format, e.status, e.cancel_reason AS "cancelReason", (SELECT a.id FROM grading_assessments a WHERE a.exam_id = e.id) AS "assessmentId",
+             s.academic_year_id AS "yearId", s.period_position AS period, e.group_id AS "groupId", e.subject_id AS "subjectId", s.status AS "seasonStatus"
+        FROM exams e JOIN exam_seasons s ON s.id = e.season_id WHERE e.id = ${id}::uuid`;
+    return r[0] ?? null;
+  }
   notes(groupId: string, subjectId: string, period: number) {
     return this.db.$queryRaw<NoteRow[]>`
       SELECT student_id AS "studentId", level_key AS level, comment FROM grading_period_notes WHERE group_id = ${groupId}::uuid AND subject_id = ${subjectId}::uuid AND period_position = ${period}`;
@@ -245,12 +285,12 @@ export class PrismaGradebookRepository {
          AND id IS DISTINCT FROM ${except}::uuid`;
     return r[0].n;
   }
-  async createAssessment(book: { yearId: string; groupId: string; subjectId: string }, input: AssessmentInput, actor: Actor, now: Date) {
+  async createAssessment(book: { yearId: string; groupId: string; subjectId: string }, input: AssessmentInput & { examId?: string | null }, actor: Actor, now: Date) {
     const id = randomUUID();
     await this.db.$executeRaw`
-      INSERT INTO grading_assessments (id, academic_year_id, group_id, subject_id, period_position, component_key, type_id, name, held_on, out_of, weight, created_by_id, created_at, updated_by_id, updated_at)
+      INSERT INTO grading_assessments (id, academic_year_id, group_id, subject_id, period_position, component_key, type_id, name, held_on, out_of, weight, exam_id, created_by_id, created_at, updated_by_id, updated_at)
       VALUES (${id}::uuid, ${book.yearId}::uuid, ${book.groupId}::uuid, ${book.subjectId}::uuid, ${input.period}, ${input.componentKey}, ${input.typeId}::uuid, ${input.name}, ${input.heldOn}::date,
-              ${input.outOf}::numeric, ${input.weight}::numeric, ${actor.id}::uuid, ${now}, ${actor.id}::uuid, ${now})`;
+              ${input.outOf}::numeric, ${input.weight}::numeric, ${input.examId ?? null}::uuid, ${actor.id}::uuid, ${now}, ${actor.id}::uuid, ${now})`;
     await this.change({ ...book, period: input.period }, "ASSESSMENT_CREATED", { assessmentId: id, after: input }, actor, now);
     return id;
   }

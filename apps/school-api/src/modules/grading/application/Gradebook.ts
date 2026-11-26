@@ -30,6 +30,24 @@ const twoDecimals = (n: number) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-
 const today = (now: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Luanda" }).format(now);
 const STATUS_LABEL: Record<PeriodOutcome["status"], string> = { DONE: "Calculada", PENDING: "Pendente", MISSING: "Por fazer", EXEMPT: "Dispensado" };
 
+/**
+ * O componente onde uma prova do calendário costuma contar: o que tem o mesmo nome da prova; senão
+ * a única "prova trimestral/semestral" do modelo; senão a única "prova do professor". O professor confirma.
+ */
+export function suggestComponent(d: Definition, season: string): string | null {
+  const norm = (s: string) => clean(s).normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const name = norm(season);
+  const exams = d.components.filter((c) => c.source !== "CONTINUOUS");
+  // o mesmo nome, ou um dentro do outro ("1.ª prova do professor" → "Prova do professor")
+  const same = exams.find((c) => norm(c.name) === name) ?? exams.find((c) => name.includes(norm(c.name)) || norm(c.name).includes(name));
+  if (same) return same.key;
+  const term = exams.filter((c) => c.source === "TERM_TEST");
+  if (term.length === 1) return term[0].key;
+  const teacher = exams.filter((c) => c.source === "TEACHER_TEST");
+  if (teacher.length === 1 && !term.length) return teacher[0].key;
+  return exams[0]?.key ?? null;
+}
+
 interface Model {
   id: string;
   name: string;
@@ -87,6 +105,10 @@ export class Gradebook {
     const year = await books.currentYear(today(this.clock.now()));
     const rows = year ? await books.myBooks(me.id, year.id) : [];
     const item = (r: (typeof rows)[number]) => ({
+      classId: r.classId,
+      grade: r.grade,
+      courseName: r.courseName,
+      mine: r.mine,
       groupId: r.groupId,
       groupName: r.groupName,
       classLabel: gradeName(r.grade, r.courseName),
@@ -138,13 +160,14 @@ export class Gradebook {
     const periods = await books.periods(book.yearId);
     const day = today(this.clock.now());
     const position = wanted && periods.some((p) => p.position === wanted) ? wanted : (periods.find((p) => p.startsOn <= day && day <= p.endsOn)?.position ?? [...periods].reverse().find((p) => p.startsOn <= day)?.position ?? periods[0]?.position ?? 1);
-    const [model, students, assessments, all, notes, types] = await Promise.all([
+    const [model, students, assessments, all, notes, types, exams] = await Promise.all([
       this.modelFor(settings, book, position),
       books.students(groupId),
       books.assessments(groupId, subjectId, position),
       books.assessments(groupId, subjectId, null),
       books.notes(groupId, subjectId, position),
       settings.types(),
+      books.calendarExams(book.yearId, groupId, subjectId, position),
     ]);
     const typeNames = new Map(types.map((t) => [t.id, t.name]));
     const marks = await books.marks(assessments.map((a) => a.id));
@@ -227,6 +250,20 @@ export class Gradebook {
         revision: a.revision,
         marks: a.marks,
         createdBy: a.createdByName,
+        exam: a.examId ? { id: a.examId, day: a.examDay, cancelled: a.examStatus === "CANCELLED", season: a.seasonName, open: !!a.examDay && a.examDay <= day } : null,
+      })),
+      /** as provas do calendário publicado desta turma e disciplina, no período */
+      exams: exams.map((e) => ({
+        id: e.id,
+        season: e.seasonName,
+        day: e.day,
+        startsAt: e.startsAt,
+        endsAt: e.endsAt,
+        room: e.room,
+        cancelled: e.status === "CANCELLED",
+        cancelReason: e.cancelReason,
+        assessmentId: e.assessmentId,
+        suggested: d ? suggestComponent(d, e.seasonName) : null,
       })),
       students: rows,
       stats: {
@@ -281,21 +318,40 @@ export class Gradebook {
     return ok({ ...input, name });
   }
 
-  async createAssessment(books: Books, settings: Settings, viewer: GradebookViewer, groupId: string, subjectId: string, input: { period: number; componentKey: string; typeId?: string | null; name: string; heldOn?: string | null; outOf?: number | null; weight?: number | null }): R<{ id: string }> {
+  /**
+   * Cria uma avaliação. Com `examId`, regista uma prova do calendário publicado desta turma e
+   * disciplina, no mesmo período: o nome (por omissão) e a data vêm da prova.
+   */
+  async createAssessment(books: Books, settings: Settings, viewer: GradebookViewer, groupId: string, subjectId: string, input: { period: number; componentKey: string; typeId?: string | null; name: string; heldOn?: string | null; outOf?: number | null; weight?: number | null; examId?: string | null }): R<{ id: string }> {
     const w = await this.writable(books, settings, viewer, await books.book(groupId, subjectId), input.period);
     if (!w.ok) return w;
     const { book, model, periods } = w.value;
     const c = model.definition.components.find((x) => x.key === input.componentKey);
     if (!c) return bad("Esse componente não faz parte do modelo de avaliação desta disciplina.");
+    let name = input.name;
+    let heldOn = input.heldOn ?? null;
+    const examId = input.examId ?? null;
+    if (examId) {
+      const e = await books.calendarExam(examId);
+      if (!e || e.groupId !== groupId || e.subjectId !== subjectId || e.yearId !== book.yearId) return bad("Essa prova não é desta turma e disciplina.");
+      if (e.period !== input.period) return bad("Essa prova é de outro período.");
+      if (e.seasonStatus !== "PUBLISHED") return fail(gradingError("INVALID_STATE", "O calendário dessa prova ainda não foi publicado."));
+      if (e.status === "CANCELLED") return fail(gradingError("INVALID_STATE", "Essa prova foi cancelada."));
+      if (e.assessmentId) return fail(gradingError("INVALID_STATE", "Essa prova já está registada na caderneta."));
+      if (c.source === "CONTINUOUS") return bad(`Uma prova do calendário não conta na “${c.name}”: escolha o componente das provas.`);
+      if (!clean(name)) name = e.seasonName;
+      heldOn = e.day;
+    }
     const types = new Set((await settings.types()).filter((t) => !t.archived).map((t) => t.id));
     const span = periods.length ? { startsOn: periods[0].startsOn, endsOn: periods[periods.length - 1].endsOn } : null;
-    const checked = this.checkAssessment(model.definition, c, { typeId: input.typeId ?? null, name: input.name, heldOn: input.heldOn ?? null, outOf: input.outOf ?? null, weight: input.weight ?? null }, types, span);
+    const checked = this.checkAssessment(model.definition, c, { typeId: input.typeId ?? null, name, heldOn, outOf: input.outOf ?? null, weight: input.weight ?? null }, types, span);
     if (!checked.ok) return checked;
     const actor = await this.actor(books, viewer);
     return books.locked(groupId, subjectId, async (tx) => {
       if (c.maxItems !== null && (await tx.countIn(groupId, subjectId, input.period, c.key)) >= c.maxItems)
         return fail(gradingError("INVALID_STATE", `“${c.name}” admite no máximo ${c.maxItems} ${c.maxItems === 1 ? "avaliação" : "avaliações"} por período.`));
-      const id = await tx.createAssessment({ yearId: book.yearId, groupId, subjectId }, { period: input.period, componentKey: c.key, ...checked.value }, actor, this.clock.now());
+      if (examId && (await tx.calendarExam(examId))?.assessmentId) return fail(gradingError("INVALID_STATE", "Essa prova já está registada na caderneta."));
+      const id = await tx.createAssessment({ yearId: book.yearId, groupId, subjectId }, { period: input.period, componentKey: c.key, ...checked.value, examId }, actor, this.clock.now());
       return ok({ id });
     });
   }
@@ -315,7 +371,8 @@ export class Gradebook {
     if (!c) return fail(gradingError("INVALID_STATE", "Esta avaliação é de um componente que já não está no modelo: não conta para a média e só se pode apagar."));
     const types = new Set((await settings.types()).filter((t) => !t.archived || t.id === a.typeId).map((t) => t.id));
     const span = periods.length ? { startsOn: periods[0].startsOn, endsOn: periods[periods.length - 1].endsOn } : null;
-    const checked = this.checkAssessment(model.definition, c, { typeId: input.typeId ?? null, name: input.name, heldOn: input.heldOn ?? null, outOf: input.outOf ?? null, weight: input.weight ?? null }, types, span);
+    // a data de uma prova do calendário é a da prova
+    const checked = this.checkAssessment(model.definition, c, { typeId: input.typeId ?? null, name: input.name, heldOn: a.examId ? a.examDay : (input.heldOn ?? null), outOf: input.outOf ?? null, weight: input.weight ?? null }, types, span);
     if (!checked.ok) return checked;
     const actor = await this.actor(books, viewer);
     return books.locked(a.groupId, a.subjectId, async (tx) => {
@@ -348,6 +405,11 @@ export class Gradebook {
     const { a, model, c } = o.value;
     if (!c) return fail(gradingError("INVALID_STATE", "Esta avaliação é de um componente que já não está no modelo: não conta para a média e só se pode apagar."));
     if (input.marks.length > MAX_MARKS_PER_SAVE) return bad(`No máximo ${MAX_MARKS_PER_SAVE} notas de cada vez.`);
+    // uma prova do calendário: as notas lançam-se a partir do dia da prova; cancelada, só se retiram
+    if (a.examId && input.marks.some((m) => m.state !== null)) {
+      if (a.examStatus === "CANCELLED") return fail(gradingError("INVALID_STATE", "Esta prova foi cancelada no calendário: não leva notas (pode apagar a avaliação)."));
+      if (a.examDay && a.examDay > today(this.clock.now())) return fail(gradingError("INVALID_STATE", `A prova é a ${a.examDay.split("-").reverse().join("/")}: as notas lançam-se a partir desse dia.`));
+    }
     const students = new Set((await books.students(a.groupId)).map((s) => s.id));
     const { min, max } = model.definition.scale;
     const seen = new Set<string>();

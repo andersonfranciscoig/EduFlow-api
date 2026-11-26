@@ -22,8 +22,11 @@ const yearQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional() }));
 const confirmQuery = new ZodValidationPipe(z.object({ confirmar: z.enum(["true", "false"]).optional() }));
 const fields = { typeId: z.uuid().nullish(), name: z.string().max(200), heldOn: day.nullish(), outOf: num.nullish(), weight: num.nullish() };
 const createBody = z
-  .object({ period, componentKey: z.string().regex(/^[a-z0-9-]{1,40}$/, "Componente inválido."), ...fields })
-  .meta({ title: "GradebookAssessment", description: "Uma avaliação num componente do modelo: elemento (componentes por elemento), data, cotação (vazio = na escala do modelo) e peso (média ponderada)." });
+  .object({ period, componentKey: z.string().regex(/^[a-z0-9-]{1,40}$/, "Componente inválido."), ...fields, examId: z.uuid().nullish() })
+  .meta({
+    title: "GradebookAssessment",
+    description: "Uma avaliação num componente do modelo: elemento (componentes por elemento), data, cotação (vazio = na escala do modelo) e peso (média ponderada). Com examId regista uma prova do calendário publicado (nome por omissão e data vêm da prova).",
+  });
 const updateBody = z.object({ revision: z.number().int().min(1), ...fields }).meta({ title: "GradebookAssessmentUpdate", description: "O componente não muda; a cotação nova tem de caber nas notas já lançadas." });
 const marksBody = z
   .object({

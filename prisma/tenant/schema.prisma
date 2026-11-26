@@ -1846,6 +1846,8 @@ model GradingAssessment {
   outOf          Decimal?  @map("out_of") @db.Decimal(7, 2)
   weight         Decimal?  @db.Decimal(5, 2)
   revision       Int       @default(1)
+  /// a prova do calendário que esta avaliação regista (única; SET NULL se a prova for retirada)
+  examId         String?   @map("exam_id") @db.Uuid
   createdById    String?   @map("created_by_id") @db.Uuid
   createdAt      DateTime  @map("created_at")
   updatedById    String?   @map("updated_by_id") @db.Uuid
