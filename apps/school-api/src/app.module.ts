@@ -7,6 +7,7 @@ import { validateEnv } from "./config/env";
 import { AdmissionsModule } from "./modules/admissions/admissions.module";
 import { AttendanceModule } from "./modules/attendance/attendance.module";
 import { ExamsModule } from "./modules/exams/exams.module";
+import { DocumentsModule } from "./modules/documents/documents.module";
 import { FamilyModule } from "./modules/family/family.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { GradingModule } from "./modules/grading/grading.module";
@@ -52,6 +53,7 @@ class HealthController {
     AttendanceModule,
     ExamsModule,
     GradingModule,
+    DocumentsModule,
     NotificationsModule,
   ],
   controllers: [HealthController],

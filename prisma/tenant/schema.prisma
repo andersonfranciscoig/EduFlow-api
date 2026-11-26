@@ -2021,5 +2021,113 @@ model GradingChange {
   @@map("grading_changes")
 }
 
+// =============================================================================
+// DOCUMENTOS — pedidos, emissão e levantamento (usados por SQL; ver 0048_documents)
+// =============================================================================
+
+/// Um tipo de documento que se pode pedir (alunos: secretaria/pedagogia; funcionários: RH).
+model DocumentType {
+  id               String   @id @db.Uuid
+  /// STUDENT | EMPLOYEE
+  audience         String
+  /// SECRETARIA | PEDAGOGIA | RH
+  department       String
+  category         String
+  name             String
+  description      String?
+  requirements     String?
+  /// AUTO | EXTERNAL
+  method           String   @default("EXTERNAL")
+  pickup           Boolean  @default(true)
+  download         Boolean  @default(false)
+  fee              Int?
+  slaDays          Int      @default(3) @map("sla_days")
+  requiresApproval Boolean  @default(false) @map("requires_approval")
+  fields           Json     @default("[]")
+  active           Boolean  @default(true)
+  position         Int      @default(0)
+  createdById      String?  @map("created_by_id") @db.Uuid
+  createdAt        DateTime @map("created_at")
+  updatedAt        DateTime @map("updated_at")
+
+  @@map("document_types")
+}
+
+/// Um pedido de documento (DOC-<ano>-<n.º>), com a cópia do tipo e do beneficiário.
+model DocumentRequest {
+  id                 String    @id @db.Uuid
+  number             Int       @unique(map: "document_requests_number_key") @default(autoincrement())
+  year               Int
+  typeId             String    @map("type_id") @db.Uuid
+  typeName           String    @map("type_name")
+  category           String
+  audience           String
+  department         String
+  method             String
+  pickup             Boolean
+  download           Boolean
+  requiresApproval   Boolean   @map("requires_approval")
+  fee                Int?
+  studentId          String?   @map("student_id") @db.Uuid
+  employeeId         String?   @map("employee_id") @db.Uuid
+  beneficiary        Json
+  requesterKind      String    @map("requester_kind")
+  requesterAccountId String?   @map("requester_account_id") @db.Uuid
+  requesterUserId    String?   @map("requester_user_id") @db.Uuid
+  requesterName      String    @map("requester_name")
+  relationship       String
+  answers            Json      @default("{}")
+  notes              String?
+  /// PENDING | IN_REVIEW | AWAITING_PAYMENT | PROCESSING | READY_PICKUP | READY_DOWNLOAD | COMPLETED | REJECTED | CANCELLED
+  status             String    @default("PENDING")
+  revision           Int       @default(1)
+  dueOn              DateTime? @map("due_on") @db.Date
+  rejectReason       String?   @map("reject_reason")
+  cancelReason       String?   @map("cancel_reason")
+  handledById        String?   @map("handled_by_id") @db.Uuid
+  handledByName      String?   @map("handled_by_name")
+  createdAt          DateTime  @map("created_at")
+  updatedAt          DateTime  @map("updated_at")
+  completedAt        DateTime? @map("completed_at")
+
+  @@index([studentId, createdAt(sort: Desc)], map: "document_requests_student_idx")
+  @@index([employeeId, createdAt(sort: Desc)], map: "document_requests_employee_idx")
+  @@index([typeId], map: "document_requests_type_idx")
+  @@map("document_requests")
+}
+
+/// Cada passo e cada nota de um pedido (só de acrescentar).
+model DocumentRequestEvent {
+  id         String   @id @db.Uuid
+  requestId  String   @map("request_id") @db.Uuid
+  kind       String
+  fromStatus String?  @map("from_status")
+  toStatus   String?  @map("to_status")
+  note       String?
+  internal   Boolean  @default(false)
+  actorKind  String   @map("actor_kind")
+  actorId    String?  @map("actor_id") @db.Uuid
+  actorName  String?  @map("actor_name")
+  at         DateTime
+
+  @@index([requestId, at], map: "document_request_events_request_idx")
+  @@map("document_request_events")
+}
+
+/// A entrega de um documento físico: quem recebeu, a relação com o beneficiário e quem entregou.
+model DocumentDelivery {
+  id                 String   @id @db.Uuid
+  requestId          String   @unique(map: "document_deliveries_request_key") @map("request_id") @db.Uuid
+  receivedBy         String   @map("received_by")
+  receivedByDocument String?  @map("received_by_document")
+  relationship       String
+  deliveredById      String?  @map("delivered_by_id") @db.Uuid
+  deliveredByName    String?  @map("delivered_by_name")
+  deliveredAt        DateTime @map("delivered_at")
+  notes              String?
+
+  @@map("document_deliveries")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
