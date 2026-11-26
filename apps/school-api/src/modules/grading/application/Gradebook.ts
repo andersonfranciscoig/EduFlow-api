@@ -320,7 +320,11 @@ export class Gradebook {
   private async yearModel(books: Books, settings: Settings, book: BookRow, periods: PeriodRow[]) {
     const last = periods[periods.length - 1];
     if (!last) return null;
-    return this.modelFor(settings, book, last.position, await books.term(book.groupId, book.subjectId, last.position));
+    const [term, pubs] = await Promise.all([books.term(book.groupId, book.subjectId, last.position), books.latestPublications(book.groupId, book.subjectId)]);
+    // a publicação do último período diz com que versão do modelo foi calculado (vale mesmo que o estado mude depois)
+    const pub = pubs.find((p) => p.period === last.position);
+    if (pub?.modelId && pub.modelVersion) return this.modelFor(settings, book, last.position, { ...(term ?? ({} as TermRow)), publications: Math.max(1, term?.publications ?? 0), modelId: pub.modelId, modelVersion: pub.modelVersion });
+    return this.modelFor(settings, book, last.position, term);
   }
 
   /**
