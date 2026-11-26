@@ -10,6 +10,7 @@ import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from ".
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { Gradebook, type GradebookViewer, MAX_MARKS_PER_SAVE } from "../application/Gradebook";
 import { GradingNotices } from "../application/GradingNotices";
+import { YearResults } from "../application/YearResults";
 import { PrismaGradebookRepository } from "../infrastructure/prisma-gradebook";
 import { Notifier, type StaffNotify } from "../../notifications/infrastructure/notifier";
 import { PrismaGradingSettingsRepository } from "../infrastructure/prisma-grading-settings";
@@ -19,7 +20,9 @@ const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const num = z.number().finite();
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD.");
 const period = z.number().int().min(1).max(3);
-const periodQuery = new ZodValidationPipe(z.object({ periodo: z.coerce.number().int().min(1).max(3).optional() }));
+/** 0 = "Final do ano" (nota final, exame e recuperação) */
+const anyPeriod = z.number().int().min(0).max(3);
+const periodQuery = new ZodValidationPipe(z.object({ periodo: z.coerce.number().int().min(0).max(3).optional() }));
 const yearQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional() }));
 const confirmQuery = new ZodValidationPipe(z.object({ confirmar: z.enum(["true", "false"]).optional() }));
 const fields = { typeId: z.uuid().nullish(), name: z.string().max(200), heldOn: day.nullish(), outOf: num.nullish(), weight: num.nullish() };
@@ -40,10 +43,32 @@ const notesBody = z
   .object({ period, notes: z.array(z.object({ studentId: z.uuid(), level: z.string().max(40).nullish(), comment: z.string().max(2000).nullish() })).max(MAX_MARKS_PER_SAVE) })
   .meta({ title: "GradebookNotes", description: "Menção do período (modelos qualitativos) e apreciação escrita, por aluno." });
 
-const termsQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional(), periodo: z.coerce.number().int().min(1).max(3).optional() }));
-const submitBody = z.object({ period }).meta({ title: "GradebookTermSubmit" });
-const moveBody = z.object({ period, revision: z.number().int().min(1), reason: z.string().max(600).nullish() }).meta({ title: "GradebookTermMove", description: "revision = a do estado que se está a ver (duas pessoas não se pisam); motivo obrigatório ao devolver e ao reabrir." });
-const publishBody = z.object({ groupId: z.uuid(), period, subjectIds: z.array(z.uuid()).max(60).nullish() }).meta({ title: "GradingTermsPublish" });
+const termsQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional(), periodo: z.coerce.number().int().min(0).max(3).optional() }));
+const submitBody = z.object({ period: anyPeriod }).meta({ title: "GradebookTermSubmit", description: "period 0 = Final do ano." });
+const moveBody = z.object({ period: anyPeriod, revision: z.number().int().min(1), reason: z.string().max(600).nullish() }).meta({ title: "GradebookTermMove", description: "revision = a do estado que se está a ver (duas pessoas não se pisam); motivo obrigatório ao devolver e ao reabrir." });
+const publishBody = z.object({ groupId: z.uuid(), period: anyPeriod, subjectIds: z.array(z.uuid()).max(60).nullish() }).meta({ title: "GradingTermsPublish" });
+const finalBody = z
+  .object({
+    marks: z
+      .array(
+        z.object({
+          studentId: z.uuid(),
+          examState: z.enum(["GRADED", "ABSENT", "ABSENT_JUSTIFIED"]).nullish(),
+          examValue: num.nullish(),
+          examParts: z.record(z.string().regex(/^[a-z0-9-]{1,40}$/), num.nullable()).nullish(),
+          recovery: num.nullish(),
+        }),
+      )
+      .max(MAX_MARKS_PER_SAVE),
+  })
+  .meta({ title: "GradebookFinalMarks", description: "Final do ano: exame (ou as provas do exame) e prova de recuperação de cada aluno. examState null e recovery null = retirar." });
+const decisionBody = z
+  .object({ groupId: z.uuid(), studentId: z.uuid(), outcome: z.enum(["PASSED", "RETAINED"]).nullable(), reason: z.string().max(600).nullish() })
+  .meta({ title: "GradingYearDecision", description: "Deliberação da direção sobre o resultado do ano (com o motivo); outcome null = retirar a deliberação." });
+const progressionBody = z
+  .object({ maxNegatives: z.number().int().min(0).max(20).nullable(), coreSubjectIds: z.array(z.uuid()).max(30), maxCoreNegatives: z.number().int().min(0).max(20).nullable() })
+  .meta({ title: "GradingProgression", description: "Regras de transição de um ensino: quantas negativas transitam e o limite nas disciplinas nucleares (null = sem regra)." });
+const levelPipe = new ZodValidationPipe(z.enum(["pre", "primario", "ciclo1", "ciclo2"], { error: "Ensino desconhecido." }));
 
 /**
  * CADERNETA DIGITAL. O professor da disciplina na turma lança (rotas `@TeacherMay`); o diretor de
@@ -60,7 +85,56 @@ export class GradebookController {
     private readonly gradebook: Gradebook,
     private readonly notices: GradingNotices,
     private readonly notifier: Notifier,
+    private readonly years: YearResults,
   ) {}
+
+  // ---------------------------------------------------------------- final do ano e transição
+
+  @Put("gradebooks/:groupId/:subjectId/final-marks")
+  @TeacherMay()
+  @ApiOperation({ summary: "Final do ano: lançar o exame (classes de exame) e a prova de recuperação (só para quem tem direito)" })
+  @ApiBody({ schema: openApi(finalBody) })
+  async finalMarks(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("groupId", id) groupId: string, @Param("subjectId", id) subjectId: string, @Body(new ZodValidationPipe(finalBody)) body: z.infer<typeof finalBody>) {
+    return unwrap(await this.gradebook.setFinalMarks(this.books(t), this.settings(t), await this.viewer(t, u), groupId, subjectId, body), GRADING_HTTP);
+  }
+
+  @Get("progression")
+  @RequirePermission("grading.access")
+  @ApiOperation({ summary: "As regras de transição de cada ensino (negativas admitidas, disciplinas nucleares)" })
+  async progression(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
+    return this.years.progression(this.books(t), (await permissionsOf(t.db, u)).includes("grading.settings.manage"));
+  }
+
+  @Put("progression/:level")
+  @RequirePermission("grading.settings.manage")
+  @ApiOperation({ summary: "Definir as regras de transição de um ensino (recalcula o resultado das turmas com notas finais)" })
+  @ApiBody({ schema: openApi(progressionBody) })
+  async setProgression(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("level", levelPipe) level: string, @Body(new ZodValidationPipe(progressionBody)) body: z.infer<typeof progressionBody>) {
+    return unwrap(await this.years.setProgression(this.books(t), { ...(await this.viewer(t, u)), canManage: true }, level, body), GRADING_HTTP);
+  }
+
+  @Get("results")
+  @RequirePermission("grading.access")
+  @ApiOperation({ summary: "Resultado do ano de todas as turmas (?ano=): transitam, não transitam, em recuperação, por decidir" })
+  async results(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(yearQuery) q: { ano?: string }) {
+    return this.years.overview(this.books(t), await this.viewer(t, u), q.ano);
+  }
+
+  @Get("results/groups/:groupId")
+  @RequirePermission("grading.access")
+  @ApiOperation({ summary: "Uma turma: a nota final de cada disciplina de cada aluno, o resultado calculado (com as razões) e a deliberação" })
+  async resultsGroup(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("groupId", id) groupId: string) {
+    return unwrap(await this.years.group(this.books(t), await this.viewer(t, u), groupId), GRADING_HTTP);
+  }
+
+  @Post("results/decisions")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("grading.results.publish")
+  @ApiOperation({ summary: "A direção delibera o resultado do ano de um aluno (com o motivo), ou retira a deliberação" })
+  @ApiBody({ schema: openApi(decisionBody) })
+  async decide(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(decisionBody)) body: z.infer<typeof decisionBody>) {
+    return unwrap(await this.years.decide(this.books(t), await this.viewer(t, u), body), GRADING_HTTP);
+  }
   /** Depois de submeter, validar, devolver, reabrir ou publicar: os avisos (um erro aqui não desfaz nada). */
   private async notice(t: TenantContext, work: (books: PrismaGradebookRepository, notify: StaffNotify) => Promise<unknown>) {
     try {
@@ -126,6 +200,8 @@ export class GradebookController {
   @ApiBody({ schema: openApi(publishBody) })
   async publish(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(publishBody)) body: z.infer<typeof publishBody>) {
     const r = unwrap(await this.gradebook.publishGroup(this.books(t), await this.viewer(t, u), body), GRADING_HTTP);
+    // final do ano publicado: o resultado dos alunos da turma muda (a renovação lê-o)
+    if (body.period === 0) await this.years.recompute(this.books(t), body.groupId);
     await this.notice(t, (books) => this.notices.published(books, body.groupId, body.period, r.subjects));
     return r;
   }

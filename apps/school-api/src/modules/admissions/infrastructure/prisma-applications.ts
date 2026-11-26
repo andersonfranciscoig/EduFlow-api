@@ -175,8 +175,12 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
 
   async renewalOffer(studentId: string, today: string): Promise<OpenYear[]> {
     // a matrícula ativa mais recente (ano, classe, curso)
-    const [cur] = await this.db.$queryRaw<{ starts_on: Date; grade: number; course_id: string | null }[]>`
-      SELECT y.starts_on, c.grade, c.course_id FROM enrollments e
+    // retained: não transitou (deliberação da direção, ou o resultado calculado) → propõe-se a mesma classe
+    const [cur] = await this.db.$queryRaw<{ starts_on: Date; grade: number; course_id: string | null; retained: boolean }[]>`
+      SELECT y.starts_on, c.grade, c.course_id,
+             coalesce((SELECT d.outcome FROM grading_year_decisions d WHERE d.academic_year_id = y.id AND d.student_id = e.student_id),
+                      (SELECT r.computed FROM grading_year_results r WHERE r.academic_year_id = y.id AND r.student_id = e.student_id)) IS NOT DISTINCT FROM 'RETAINED' AS retained
+        FROM enrollments e
         JOIN academic_years y ON y.id = e.academic_year_id JOIN school_classes c ON c.id = e.class_id
        WHERE e.student_id = ${studentId}::uuid AND e.status = 'ACTIVE' ORDER BY y.starts_on DESC LIMIT 1`;
     if (!cur) return [];
@@ -189,7 +193,7 @@ export class PrismaApplicationsRepository implements ApplicationsRepository {
       include: {
         admissionPeriods: true,
         classes: {
-          where: { grade: cur.grade + 1, ...(cur.course_id ? { courseId: cur.course_id } : {}) },
+          where: { grade: cur.retained ? cur.grade : cur.grade + 1, ...(cur.course_id ? { courseId: cur.course_id } : {}) },
           orderBy: { createdAt: "asc" },
           include: { course: { select: { name: true } }, groups: { select: { shift: true } } },
         },

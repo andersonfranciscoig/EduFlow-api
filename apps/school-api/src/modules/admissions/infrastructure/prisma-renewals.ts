@@ -77,9 +77,16 @@ export class PrismaRenewalsRepository implements RenewalsRepository {
     return rows.map((r) => ({ id: r.id, studentId: r.student_id, academicYearId: r.academic_year_id, status: r.status as ApplicationStatus, number: r.number, enrollmentNumber: r.enrollment_number }));
   }
 
+  async retained(studentId: string, yearId: string) {
+    const [r] = await this.db.$queryRaw<{ o: string | null }[]>`
+      SELECT coalesce((SELECT outcome FROM grading_year_decisions WHERE academic_year_id = ${yearId}::uuid AND student_id = ${studentId}::uuid),
+                      (SELECT computed FROM grading_year_results WHERE academic_year_id = ${yearId}::uuid AND student_id = ${studentId}::uuid)) AS o`;
+    return r?.o === "RETAINED";
+  }
+
   async nextClasses(yearId: string, grade: number, courseId: string | null): Promise<NextClassRow[]> {
     const rows = await this.db.schoolClass.findMany({
-      where: { academicYearId: yearId, grade: grade + 1, ...(courseId ? { courseId } : {}) },
+      where: { academicYearId: yearId, grade, ...(courseId ? { courseId } : {}) },
       orderBy: { createdAt: "asc" },
       include: { course: { select: { name: true } }, groups: { select: { shift: true } } },
     });

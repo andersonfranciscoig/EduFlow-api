@@ -1937,6 +1937,68 @@ model GradingPublication {
   @@map("grading_publications")
 }
 
+/// Regras de transição do colégio, por ensino (sem regras: o resultado do aluno fica por decidir).
+model GradingProgression {
+  /// pre | primario | ciclo1 | ciclo2
+  level            String   @id
+  maxNegatives     Int?     @map("max_negatives")
+  coreSubjectIds   String[] @default([]) @map("core_subject_ids") @db.Uuid
+  maxCoreNegatives Int?     @map("max_core_negatives")
+  updatedById      String?  @map("updated_by_id") @db.Uuid
+  updatedAt        DateTime @map("updated_at")
+
+  @@map("grading_progression")
+}
+
+/// "Final do ano" de um aluno numa disciplina: exame (e provas do exame) e prova de recuperação.
+model GradingFinalMark {
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  subjectId      String   @map("subject_id") @db.Uuid
+  studentId      String   @map("student_id") @db.Uuid
+  /// GRADED | ABSENT | ABSENT_JUSTIFIED
+  examState      String?  @map("exam_state")
+  examValue      Decimal? @map("exam_value") @db.Decimal(7, 2)
+  examParts      Json?    @map("exam_parts")
+  recoveryValue  Decimal? @map("recovery_value") @db.Decimal(7, 2)
+  updatedById    String?  @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime @map("updated_at")
+
+  @@id([groupId, subjectId, studentId])
+  @@map("grading_final_marks")
+}
+
+/// Deliberação da direção sobre o resultado do ano de um aluno (muda o calculado; sempre com motivo).
+model GradingYearDecision {
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  studentId      String   @map("student_id") @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  /// PASSED | RETAINED
+  outcome        String
+  reason         String
+  decidedById    String?  @map("decided_by_id") @db.Uuid
+  decidedByName  String?  @map("decided_by_name")
+  decidedAt      DateTime @map("decided_at")
+
+  @@id([academicYearId, studentId])
+  @@map("grading_year_decisions")
+}
+
+/// O resultado do ano calculado de cada aluno (guardado: a renovação lê-o sem refazer as contas).
+model GradingYearResult {
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  studentId      String   @map("student_id") @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  /// PASSED | RETAINED | RECOVERY | UNDECIDED
+  computed       String
+  negatives      Int      @default(0)
+  details        Json     @default("{}")
+  updatedAt      DateTime @map("updated_at")
+
+  @@id([academicYearId, studentId])
+  @@map("grading_year_results")
+}
+
 /// Histórico da caderneta, só de acrescentar (um trigger impede alterar ou apagar).
 model GradingChange {
   id             String   @id @db.Uuid

@@ -60,8 +60,10 @@ export interface RenewalsRepository {
   candidates(accountId: string): Promise<RenewalCandidateRow[]>;
   /** As renovações destes alunos (de qualquer ano), com o n.º de matrícula se já matriculados. */
   apps(studentIds: string[]): Promise<RenewalAppRow[]>;
-  /** As classes da classe seguinte no ano (mesmo curso, se o aluno já tiver curso). */
+  /** As classes desta classe (grade) no ano (mesmo curso, se o aluno já tiver curso). */
   nextClasses(yearId: string, grade: number, courseId: string | null): Promise<NextClassRow[]>;
+  /** O aluno não transitou nesse ano (deliberação da direção, ou o resultado calculado)? */
+  retained(studentId: string, yearId: string): Promise<boolean>;
   /** Os dados que o colégio já tem: o aluno e o encarregado (o da conta, ou o principal). */
   prefill(studentId: string, accountId: string): Promise<{ student: Entry; guardian: Entry }>;
   /** Secretaria: os alunos matriculados no ano anterior e a renovação de cada um para o ano. */
@@ -99,14 +101,17 @@ export class Renewals {
         const renewed = apps.find((a) => a.studentId === s.id && a.academicYearId === cur.yearId && a.enrollmentNumber);
         if (renewed && windowState(next, today) === "NOT_SET") {
           const w = windows.find((x) => x.id === cur.yearId) ?? null;
-          return { s, cur, w, app: renewed, classes: [] as NextClassRow[], state: "ENROLLED" as RenewalState };
+          return { s, cur, w, app: renewed, classes: [] as NextClassRow[], state: "ENROLLED" as RenewalState, retained: false, target: cur.grade };
         }
         const w = next;
         const app = w ? apps.find((a) => a.studentId === s.id && a.academicYearId === w.id && (ACTIVE_RENEWAL.includes(a.status) || a.enrollmentNumber)) : undefined;
-        const classes = w ? await repo.nextClasses(w.id, cur.grade, cur.courseId) : [];
+        // não transitou: propõe-se a mesma classe (sem impedir a renovação)
+        const retained = await repo.retained(s.id, cur.yearId);
+        const target = retained ? cur.grade : cur.grade + 1;
+        const classes = w ? await repo.nextClasses(w.id, target, cur.courseId) : [];
         const wState = windowState(w, today);
         const state: RenewalState = app?.enrollmentNumber ? "ENROLLED" : app ? "STARTED" : wState === "OPEN" && !classes.length ? "NO_CLASS" : wState;
-        return { s, cur, w, app, classes, state };
+        return { s, cur, w, app, classes, state, retained, target };
       }),
     );
   }
@@ -115,13 +120,15 @@ export class Renewals {
   async familyList(repo: RenewalsRepository, account: FamilyAccountRow) {
     const rows = await this.familyState(repo, account.id);
     return {
-      students: rows.map(({ s, cur, w, app, classes, state }) => ({
+      students: rows.map(({ s, cur, w, app, classes, state, retained, target }) => ({
         id: s.id,
         fullName: s.fullName,
         number: formatStudentNumber(s.number),
         self: s.self,
         current: { yearName: cur.yearName, classLabel: classLabel(cur.grade, cur.courseName), groupName: cur.groupName, shiftLabel: cur.shift ? SHIFTS[cur.shift] : null },
-        next: w ? { yearId: w.id, yearName: w.name, from: w.from, to: w.to, fromLabel: fmt(w.from), toLabel: fmt(w.to), classLabel: classes.length === 1 ? classLabel(classes[0].grade, classes[0].courseName) : classes.length ? `${gradeLabel(cur.grade + 1)} (a escolher)` : null } : null,
+        next: w ? { yearId: w.id, yearName: w.name, from: w.from, to: w.to, fromLabel: fmt(w.from), toLabel: fmt(w.to), classLabel: classes.length === 1 ? classLabel(classes[0].grade, classes[0].courseName) : classes.length ? `${gradeLabel(target)} (a escolher)` : null } : null,
+        /** não transitou: a renovação propõe a mesma classe */
+        retained,
         state,
         stateLabel: RENEWAL_STATE_LABELS[state],
         canStart: state === "OPEN",
