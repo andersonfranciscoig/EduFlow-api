@@ -14,6 +14,8 @@ import { PrismaStudentAttendanceRepository } from "../../attendance/infrastructu
 import { Exams } from "../../exams/application/Exams";
 import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
+import { familyGrades } from "../../grading/application/FamilyGrades";
+import { PrismaGradebookRepository } from "../../grading/infrastructure/prisma-gradebook";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import type { SchoolAccess } from "../../identity/application/ports";
 import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from "../../identity/presentation/http/permissions";
@@ -175,6 +177,18 @@ export class FamilyStudentsController {
     const att = new PrismaStudentAttendanceRepository(t.db);
     const groupId = (await att.attendanceGroup(studentId, localNow(rules.timeZone, new Date()).slice(0, 10))) ?? latest;
     return unwrap(await this.alerts.familyView(att, rules, studentId, groupId), STUDENTS_HTTP);
+  }
+
+  @Get(":id/grades")
+  @ApiOperation({ summary: "As classificações publicadas do aluno no ano da turma atual: por disciplina e período (só o que a direção publicou; a retificação substitui a anterior)" })
+  async grades(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) studentId: string) {
+    // familyGroup confirma o acesso ao aluno (e que tem turma)
+    const { groupId: latest } = unwrap(await this.students.familyGroup(repo(t), f.account.id, studentId), STUDENTS_HTTP);
+    const { timeZone } = await this.attendanceSettings.rules(new PrismaAttendanceSettingsRepository(t.db));
+    const groupId = (await new PrismaStudentAttendanceRepository(t.db).attendanceGroup(studentId, localNow(timeZone, new Date()).slice(0, 10))) ?? latest;
+    const r = await familyGrades(PrismaGradebookRepository.for(t.db), studentId, groupId);
+    if (!r) throw new NotFoundException({ code: "NO_GROUPS", message: "Turma não encontrada." });
+    return r;
   }
 
   @Get("journey")

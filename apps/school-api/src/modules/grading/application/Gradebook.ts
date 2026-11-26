@@ -4,7 +4,7 @@ import { periodName, type PeriodKind } from "../../pedagogy/domain/calendar";
 import { fmt, type MarkInput, MARK_STATES, type MarkState, type PeriodOutcome, periodResult } from "../domain/engine";
 import { AGGREGATIONS, type Component, type Definition, type GradingError, gradingError, SOURCES, summaryOf } from "../domain/model";
 import { levelOf, originOf, resolve } from "../domain/rules";
-import type { Actor, AssessmentRow, BookRow, PeriodRow, PrismaGradebookRepository } from "../infrastructure/prisma-gradebook";
+import type { Actor, AssessmentRow, BookRow, FrozenResults, PeriodRow, PrismaGradebookRepository, TermRow, TermStatus } from "../infrastructure/prisma-gradebook";
 import type { PrismaGradingSettingsRepository } from "../infrastructure/prisma-grading-settings";
 import { gradeName } from "./GradingModels";
 
@@ -18,7 +18,20 @@ export interface GradebookViewer {
   support: boolean;
   /** grading.access: a gestão vê todas as cadernetas (só leitura) */
   canView: boolean;
+  /** grading.results.validate · publish · rectify */
+  canValidate?: boolean;
+  canPublish?: boolean;
+  canRectify?: boolean;
 }
+/** Em que estados o professor pode alterar a caderneta (sem linha = em preparação). */
+const EDITABLE: (TermStatus | null)[] = [null, "RETURNED", "REOPENED"];
+export const TERM_LABELS: Record<TermStatus | "DRAFT", string> = { DRAFT: "Em preparação", RETURNED: "Devolvida", SUBMITTED: "Pendente de validação", VALIDATED: "Validada", PUBLISHED: "Publicada", REOPENED: "Em retificação" };
+const termLabel = (t: { status: TermStatus; publications: number } | null) => (!t ? TERM_LABELS.DRAFT : t.status === "PUBLISHED" && t.publications > 1 ? "Retificada" : TERM_LABELS[t.status]);
+const LOCKED: Record<string, string> = {
+  SUBMITTED: "As classificações deste período foram submetidas e aguardam validação: já não se alteram. Se precisar de corrigir, peça que lhas devolvam.",
+  VALIDATED: "As classificações deste período já foram validadas: já não se alteram.",
+  PUBLISHED: "As classificações deste período estão publicadas: só se alteram numa retificação aberta pela direção.",
+};
 export type BookRole = "TEACHER" | "COORDINATOR" | "STAFF";
 export const MAX_MARKS_PER_SAVE = 200;
 
@@ -76,24 +89,34 @@ export class Gradebook {
   private async actor(books: Books, viewer: GradebookViewer): Promise<Actor> {
     return viewer.support ? { id: null, name: "Suporte EduFlow" } : { id: viewer.userId, name: await books.userName(viewer.userId) };
   }
-  /** O modelo (versão em vigor) que se aplica a esta caderneta num período. */
-  private async modelFor(settings: Settings, book: BookRow, period: number): Promise<Model | null> {
+  /**
+   * O modelo que se aplica a esta caderneta num período: a versão em vigor; mas, depois de o período
+   * ter sido publicado, a versão com que foi calculado (uma versão nova não mexe no que já se publicou).
+   */
+  private async modelFor(settings: Settings, book: BookRow, period: number, term: TermRow | null = null): Promise<Model | null> {
     const rule = resolve(await settings.rules(book.yearId), { id: book.classId, grade: book.grade, courseId: book.courseId }, book.subjectId, period);
+    if (term && term.publications > 0 && term.modelId && term.modelVersion) {
+      const [m, v] = await Promise.all([settings.model(term.modelId), settings.versions(term.modelId)]);
+      const frozen = v.find((x) => x.number === term.modelVersion);
+      if (m && frozen) return { id: m.id, name: m.name, version: frozen.number, definition: frozen.definition, origin: rule ? originOf(rule) : "SCHOOL" };
+    }
     if (!rule) return null;
     const m = await settings.model(rule.modelId);
     if (!m?.current || !m.currentVersion) return null;
     return { id: m.id, name: m.name, version: m.currentVersion, definition: m.current, origin: originOf(rule) };
   }
-  /** Para escrever: a caderneta é do professor, o ano está aberto e o período existe. */
-  private async writable(books: Books, settings: Settings, viewer: GradebookViewer, book: BookRow | null, period: number): R<{ book: BookRow; model: Model; periods: PeriodRow[] }> {
+  /** Para escrever: a caderneta é do professor, o ano está aberto, o período existe e ainda não foi submetido. */
+  private async writable(books: Books, settings: Settings, viewer: GradebookViewer, book: BookRow | null, period: number): R<{ book: BookRow; model: Model; periods: PeriodRow[]; term: TermRow | null }> {
     if (!book) return missing();
     if ((await this.role(books, viewer, book)) !== "TEACHER") return forbidden();
     if (book.yearStatus === "CLOSED") return fail(gradingError("YEAR_CLOSED", "Este ano letivo está encerrado: a caderneta é só de leitura."));
     const periods = await books.periods(book.yearId);
     if (!periods.some((p) => p.position === period)) return fail(gradingError("INVALID_STATE", periods.length ? "Esse período não existe neste ano letivo." : "O ano letivo ainda não tem os períodos definidos (Pedagógico → Ano letivo)."));
-    const model = await this.modelFor(settings, book, period);
+    const term = await books.term(book.groupId, book.subjectId, period);
+    if (!EDITABLE.includes(term?.status ?? null)) return fail(gradingError("INVALID_STATE", LOCKED[term!.status]));
+    const model = await this.modelFor(settings, book, period, term);
     if (!model) return fail(gradingError("INVALID_STATE", "Esta disciplina ainda não tem modelo de avaliação para este período: fale com a pedagogia."));
-    return ok({ book, model, periods });
+    return ok({ book, model, periods, term });
   }
 
   // ---------------------------------------------------------------- listas
@@ -160,48 +183,47 @@ export class Gradebook {
     const periods = await books.periods(book.yearId);
     const day = today(this.clock.now());
     const position = wanted && periods.some((p) => p.position === wanted) ? wanted : (periods.find((p) => p.startsOn <= day && day <= p.endsOn)?.position ?? [...periods].reverse().find((p) => p.startsOn <= day)?.position ?? periods[0]?.position ?? 1);
-    const [model, students, assessments, all, notes, types, exams] = await Promise.all([
-      this.modelFor(settings, book, position),
-      books.students(groupId),
-      books.assessments(groupId, subjectId, position),
+    const term = await books.term(groupId, subjectId, position);
+    const [model, all, types, exams, publications] = await Promise.all([
+      this.modelFor(settings, book, position, term),
       books.assessments(groupId, subjectId, null),
-      books.notes(groupId, subjectId, position),
       settings.types(),
       books.calendarExams(book.yearId, groupId, subjectId, position),
+      books.publications(groupId, subjectId, position),
     ]);
-    const typeNames = new Map(types.map((t) => [t.id, t.name]));
-    const marks = await books.marks(assessments.map((a) => a.id));
+    const { assessments, rows, typeNames } = await this.compute(books, book, position, model, types);
     const d = model?.definition ?? null;
     const comps = new Map((d?.components ?? []).map((c) => [c.key, c]));
-    const noteOf = new Map(notes.map((n) => [n.studentId, n]));
-
-    const rows = students.map((s) => {
-      const mine = new Map(marks.filter((m) => m.studentId === s.id).map((m) => [m.assessmentId, m]));
-      const note = noteOf.get(s.id) ?? null;
-      let result: PeriodOutcome | null = null;
-      if (d) {
-        const input: MarkInput[] = assessments.map((a) => {
-          const m = mine.get(a.id);
-          return { component: a.componentKey, typeId: a.typeId, weight: a.weight, outOf: a.outOf, label: a.name, score: m?.score ?? null, state: m?.state ?? "GRADED" };
-        });
-        result = periodResult(d, { marks: input, level: note?.level ?? null, comment: note?.comment ?? null }, typeNames);
-      }
-      return {
-        id: s.id,
-        name: s.name,
-        number: s.number,
-        marks: Object.fromEntries([...mine.values()].map((m) => [m.assessmentId, { state: m.state, score: m.score, note: m.note }])),
-        note: note ? { level: note.level, comment: note.comment } : null,
-        result,
-      };
-    });
     // com média (ou, nos qualitativos, com menção); a média da turma só com números
     const done = rows.filter((r) => r.result?.status === "DONE");
     const valued = done.filter((r) => r.result!.value !== null);
-    const can = role === "TEACHER" && book.yearStatus !== "CLOSED" && !!model;
+    const open = book.yearStatus !== "CLOSED";
+    const editable = EDITABLE.includes(term?.status ?? null);
+    const validator = role === "COORDINATOR" || !!viewer.canValidate;
     return ok({
       role,
-      can: { edit: can },
+      can: {
+        edit: role === "TEACHER" && open && !!model && editable,
+        submit: role === "TEACHER" && open && !!model && editable,
+        validate: open && validator && term?.status === "SUBMITTED",
+        return: open && validator && (term?.status === "SUBMITTED" || term?.status === "VALIDATED"),
+        publish: open && !!viewer.canPublish && term?.status === "VALIDATED",
+        reopen: open && !!viewer.canRectify && term?.status === "PUBLISHED",
+      },
+      /** o estado das classificações deste período (null = em preparação) */
+      term: {
+        status: term?.status ?? "DRAFT",
+        label: termLabel(term),
+        revision: term?.revision ?? 0,
+        note: term?.note ?? null,
+        submittedAt: term?.submittedAt?.toISOString() ?? null,
+        submittedBy: term?.submittedBy ?? null,
+        validatedAt: term?.validatedAt?.toISOString() ?? null,
+        validatedBy: term?.validatedBy ?? null,
+        publishedAt: term?.publishedAt?.toISOString() ?? null,
+        publishedBy: term?.publishedBy ?? null,
+        publications: publications.map((p) => ({ number: p.number, at: p.publishedAt.toISOString(), by: p.publishedBy, reason: p.reason })),
+      },
       year: { id: book.yearId, name: book.yearName, status: book.yearStatus, periodKind: kind },
       group: { id: book.groupId, name: book.groupName, classLabel: gradeName(book.grade, book.courseName), shift: book.shift },
       subject: { id: book.subjectId, name: book.subjectName, code: book.subjectCode, color: book.subjectColor },
@@ -278,6 +300,36 @@ export class Gradebook {
     });
   }
 
+  /** As notas e a média de cada aluno num período, com o motor oficial (a vista e a submissão usam o mesmo). */
+  private async compute(books: Books, book: BookRow, period: number, model: Model | null, types: { id: string; name: string }[]) {
+    const [students, assessments, notes] = await Promise.all([books.students(book.groupId), books.assessments(book.groupId, book.subjectId, period), books.notes(book.groupId, book.subjectId, period)]);
+    const typeNames = new Map(types.map((t) => [t.id, t.name]));
+    const marks = await books.marks(assessments.map((a) => a.id));
+    const d = model?.definition ?? null;
+    const noteOf = new Map(notes.map((n) => [n.studentId, n]));
+    const rows = students.map((s) => {
+      const mine = new Map(marks.filter((m) => m.studentId === s.id).map((m) => [m.assessmentId, m]));
+      const note = noteOf.get(s.id) ?? null;
+      let result: PeriodOutcome | null = null;
+      if (d) {
+        const input: MarkInput[] = assessments.map((a) => {
+          const m = mine.get(a.id);
+          return { component: a.componentKey, typeId: a.typeId, weight: a.weight, outOf: a.outOf, label: a.name, score: m?.score ?? null, state: m?.state ?? "GRADED" };
+        });
+        result = periodResult(d, { marks: input, level: note?.level ?? null, comment: note?.comment ?? null }, typeNames);
+      }
+      return {
+        id: s.id,
+        name: s.name,
+        number: s.number,
+        marks: Object.fromEntries([...mine.values()].map((m) => [m.assessmentId, { state: m.state, score: m.score, note: m.note }])),
+        note: note ? { level: note.level, comment: note.comment } : null,
+        result,
+      };
+    });
+    return { assessments, rows, typeNames };
+  }
+
   async history(books: Books, viewer: GradebookViewer, groupId: string, subjectId: string, period: number) {
     const book = await books.book(groupId, subjectId);
     if (!book) return missing();
@@ -288,8 +340,16 @@ export class Gradebook {
     return ok({
       changes: rows.map((h) => {
         const what = h.assessmentId ? (names.get(h.assessmentId) ?? (h.before?.name as string | undefined) ?? (h.after?.name as string | undefined) ?? "avaliação") : null;
-        const text =
-          h.kind === "ASSESSMENT_CREATED"
+        const TERM: Record<string, string> = {
+          TERM_SUBMITTED: "Submeteu as classificações para validação",
+          TERM_RETURNED: "Devolveu as classificações ao professor",
+          TERM_VALIDATED: "Validou as classificações",
+          TERM_PUBLISHED: `Publicou as classificações${Number(h.after?.publication) > 1 ? ` (retificação ${Number(h.after?.publication) - 1})` : ""}`,
+          TERM_REOPENED: "Reabriu as classificações para retificação",
+        };
+        const text = TERM[h.kind]
+          ? TERM[h.kind]
+          : h.kind === "ASSESSMENT_CREATED"
             ? `Criou “${String(h.after?.name ?? what)}”`
             : h.kind === "ASSESSMENT_UPDATED"
               ? `Alterou “${String(h.after?.name ?? what)}”`
@@ -391,6 +451,8 @@ export class Gradebook {
     if (!book) return missing();
     if ((await this.role(books, viewer, book)) !== "TEACHER") return forbidden();
     if (book.yearStatus === "CLOSED") return fail(gradingError("YEAR_CLOSED", "Este ano letivo está encerrado: a caderneta é só de leitura."));
+    const term = await books.term(a.groupId, a.subjectId, a.period);
+    if (!EDITABLE.includes(term?.status ?? null)) return fail(gradingError("INVALID_STATE", LOCKED[term!.status]));
     if (a.marks > 0 && !confirm) return fail(gradingError("NEEDS_CONFIRMATION", `Esta avaliação já tem ${a.marks} ${a.marks === 1 ? "nota lançada" : "notas lançadas"}: ao apagá-la, deixam de contar para a média (ficam no histórico).`));
     const actor = await this.actor(books, viewer);
     await books.locked(a.groupId, a.subjectId, (tx) => tx.deleteAssessment(a, actor, this.clock.now()));
@@ -465,5 +527,122 @@ export class Gradebook {
     const actor = await this.actor(books, viewer);
     const changed = await books.locked(groupId, subjectId, (tx) => tx.setNotes({ yearId: book.yearId, groupId, subjectId, period: input.period }, entries, actor, this.clock.now()));
     return ok({ changed });
+  }
+
+  // ================================================================ fecho dos períodos
+
+  /**
+   * O professor submete as classificações do período para validação. Só com todos os alunos com
+   * média (ou dispensados): o que se submete fica congelado e é isso que se valida e publica.
+   */
+  async submitTerm(books: Books, settings: Settings, viewer: GradebookViewer, groupId: string, subjectId: string, period: number): R<{ status: TermStatus }> {
+    const w = await this.writable(books, settings, viewer, await books.book(groupId, subjectId), period);
+    if (!w.ok) return w;
+    const { book, model } = w.value;
+    const types = await settings.types();
+    const actor = await this.actor(books, viewer);
+    return books.locked(groupId, subjectId, async (tx): R<{ status: TermStatus }> => {
+      const term = await tx.term(groupId, subjectId, period);
+      if (!EDITABLE.includes(term?.status ?? null)) return fail(gradingError("INVALID_STATE", LOCKED[term!.status]));
+      const { rows } = await this.compute(tx, book, period, model, types);
+      if (!rows.length) return fail(gradingError("INVALID_STATE", "Esta turma não tem alunos: não há classificações a submeter."));
+      const open = rows.filter((r) => r.result?.status !== "DONE" && r.result?.status !== "EXEMPT");
+      if (open.length)
+        return fail(
+          gradingError("INCOMPLETE", `${open.length === 1 ? "Um aluno ainda não tem" : `${open.length} alunos ainda não têm`} a média do período: ${open.slice(0, 3).map((r) => r.name).join(", ")}${open.length > 3 ? "…" : ""}.`, {
+            students: open.map((r) => ({ id: r.id, name: r.name, status: r.result?.status ?? "MISSING", notes: [...(r.result?.notes ?? []), ...(r.result?.components.flatMap((c) => c.notes) ?? [])] })),
+          }),
+        );
+      const done = rows.filter((r) => r.result!.status === "DONE");
+      const valued = done.filter((r) => r.result!.value !== null);
+      const results: FrozenResults = {
+        students: rows.map((r) => ({ id: r.id, name: r.name, number: r.number, status: r.result!.status, value: r.result!.value, level: r.result!.level?.label ?? null, passed: r.result!.passed, comment: r.note?.comment ?? null })),
+        stats: { students: rows.length, done: done.length, passed: done.filter((r) => r.result!.passed).length, average: valued.length ? Math.round((valued.reduce((s, r) => s + r.result!.value!, 0) / valued.length) * 100) / 100 : null },
+      };
+      const k = { yearId: book.yearId, groupId, subjectId, period };
+      return (await tx.submitTerm(k, term, { modelId: model.id, modelVersion: model.version, results }, actor, this.clock.now()))
+        ? ok({ status: "SUBMITTED" as const })
+        : fail(gradingError("CHANGED", "As classificações foram alteradas entretanto. Atualize a página."));
+    });
+  }
+
+  /** Validar, devolver ao professor (com motivo) ou reabrir para retificação (com motivo). */
+  async moveTerm(books: Books, viewer: GradebookViewer, groupId: string, subjectId: string, input: { period: number; revision: number; action: "validate" | "return" | "reopen"; reason?: string | null }): R<{ status: TermStatus }> {
+    const book = await books.book(groupId, subjectId);
+    if (!book) return missing();
+    const role = await this.role(books, viewer, book);
+    if (book.yearStatus === "CLOSED") return fail(gradingError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
+    const term = await books.term(groupId, subjectId, input.period);
+    if (input.action === "reopen") {
+      if (!viewer.canRectify) return fail(gradingError("FORBIDDEN", "Reabrir classificações publicadas exige a permissão “Abrir retificações”."));
+    } else {
+      // o professor da disciplina não valida as suas próprias classificações
+      if (role === "TEACHER" || !(role === "COORDINATOR" || viewer.canValidate)) return fail(gradingError("FORBIDDEN", "Validar exige ser o diretor desta turma ou ter a permissão “Validar as classificações” (e não ser o professor da disciplina)."));
+    }
+    const reason = clean(input.reason) || null;
+    if (input.action !== "validate" && (!reason || reason.length < 3)) return fail(gradingError("INVALID_INPUT", input.action === "return" ? "Diga ao professor porque devolve as classificações (fica no histórico)." : "Indique o motivo da retificação (fica no histórico e na publicação)."));
+    if (reason && reason.length > 300) return bad("O motivo tem no máximo 300 caracteres.");
+    const plan = {
+      validate: { from: ["SUBMITTED"] as TermStatus[], to: "VALIDATED" as TermStatus, kind: "TERM_VALIDATED" as const, wrong: "Só se validam classificações submetidas pelo professor." },
+      return: { from: ["SUBMITTED", "VALIDATED"] as TermStatus[], to: (term && term.publications > 0 ? "REOPENED" : "RETURNED") as TermStatus, kind: "TERM_RETURNED" as const, wrong: "Só se devolvem classificações submetidas ou validadas (ainda não publicadas)." },
+      reopen: { from: ["PUBLISHED"] as TermStatus[], to: "REOPENED" as TermStatus, kind: "TERM_REOPENED" as const, wrong: "Só se reabrem classificações publicadas." },
+    }[input.action];
+    if (!term || !plan.from.includes(term.status)) return fail(gradingError("INVALID_STATE", plan.wrong));
+    if (term.revision !== input.revision) return fail(gradingError("CHANGED", "As classificações mudaram de estado entretanto. Atualize a página."));
+    const actor = await this.actor(books, viewer);
+    const k = { yearId: book.yearId, groupId, subjectId, period: input.period };
+    const done = await books.locked(groupId, subjectId, (tx) => tx.moveTerm(k, plan.from, plan.to, input.revision, plan.kind, reason, actor, this.clock.now()));
+    return done ? ok({ status: plan.to }) : fail(gradingError("CHANGED", "As classificações mudaram de estado entretanto. Atualize a página."));
+  }
+
+  /** A direção publica as classificações validadas de uma turma num período (todas, ou só as disciplinas indicadas). */
+  async publishGroup(books: Books, viewer: GradebookViewer, input: { groupId: string; period: number; subjectIds?: string[] | null }): R<{ published: number; notReady: string[]; subjects: { id: string; name: string; number: number }[] }> {
+    if (!viewer.canPublish) return fail(gradingError("FORBIDDEN", "Publicar exige a permissão “Publicar as classificações”."));
+    const group = await books.groupInfo(input.groupId);
+    if (!group) return fail(gradingError("NOT_FOUND", "Turma não encontrada."));
+    if (group.yearStatus === "CLOSED") return fail(gradingError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
+    const [terms, subjects] = await Promise.all([books.terms(group.yearId, input.period), books.groupSubjects(input.groupId)]);
+    const wanted = subjects.filter((s) => !input.subjectIds?.length || input.subjectIds.includes(s.id));
+    const ready = wanted.filter((s) => terms.some((t) => t.groupId === input.groupId && t.subjectId === s.id && t.status === "VALIDATED"));
+    const notReady = wanted.filter((s) => !terms.some((t) => t.groupId === input.groupId && t.subjectId === s.id && (t.status === "VALIDATED" || t.status === "PUBLISHED"))).map((s) => s.name);
+    if (!ready.length) return fail(gradingError("INVALID_STATE", "Não há classificações validadas por publicar nesta turma e período."));
+    const actor = await this.actor(books, viewer);
+    const done: { id: string; name: string; number: number }[] = [];
+    for (const s of ready) {
+      const t = terms.find((x) => x.groupId === input.groupId && x.subjectId === s.id)!;
+      const n = await books.locked(input.groupId, s.id, (tx) => tx.publishTerm({ yearId: group.yearId, groupId: input.groupId, subjectId: s.id, period: input.period }, t.revision, actor, this.clock.now()));
+      if (n !== null) done.push({ id: s.id, name: s.name, number: n });
+    }
+    return ok({ published: done.length, notReady, subjects: done });
+  }
+
+  /** O estado das classificações de todas as turmas e disciplinas de um período (validação e publicação). */
+  async termsOverview(books: Books, viewer: GradebookViewer, yearId?: string, wanted?: number) {
+    const years = await books.years();
+    const year = (yearId ? years.find((y) => y.id === yearId) : null) ?? (await books.currentYear(today(this.clock.now()))) ?? years[0] ?? null;
+    if (!year) return { years: [], year: null, periods: [], period: 1, can: { validate: false, publish: false, rectify: false }, classes: [] };
+    const periods = await books.periods(year.id);
+    const day = today(this.clock.now());
+    const period = wanted && periods.some((p) => p.position === wanted) ? wanted : (periods.find((p) => p.startsOn <= day && day <= p.endsOn)?.position ?? [...periods].reverse().find((p) => p.startsOn <= day)?.position ?? 1);
+    const [rows, terms] = await Promise.all([books.allBooks(year.id), books.terms(year.id, period)]);
+    const kind = year.periodKind as PeriodKind;
+    type Subject = { id: string; name: string; code: string; color: string; teacherName: string | null; assessments: number; status: TermStatus | "DRAFT"; label: string; revision: number; note: string | null };
+    const classes = new Map<string, { id: string; grade: number; level: string; courseId: string | null; courseName: string | null; label: string; groups: Map<string, { id: string; name: string; students: number; subjects: Subject[] }> }>();
+    for (const r of rows) {
+      const t = terms.find((x) => x.groupId === r.groupId && x.subjectId === r.subjectId) ?? null;
+      const c = classes.get(r.classId) ?? { id: r.classId, grade: r.grade, level: levelOf(r.grade), courseId: r.courseId, courseName: r.courseName, label: gradeName(r.grade, r.courseName), groups: new Map() };
+      const g = c.groups.get(r.groupId) ?? { id: r.groupId, name: r.groupName, students: r.students, subjects: [] };
+      g.subjects.push({ id: r.subjectId, name: r.subjectName, code: r.subjectCode, color: r.subjectColor, teacherName: r.teacherName, assessments: r.assessments, status: t?.status ?? "DRAFT", label: termLabel(t), revision: t?.revision ?? 0, note: t?.note ?? null });
+      c.groups.set(r.groupId, g);
+      classes.set(r.classId, c);
+    }
+    return {
+      years: years.map((y) => ({ id: y.id, name: y.name, status: y.status })),
+      year: { id: year.id, name: year.name, status: year.status },
+      periods: periods.map((p) => ({ position: p.position, name: periodName(kind, p.position) })),
+      period,
+      can: { validate: !!viewer.canValidate && year.status !== "CLOSED", publish: !!viewer.canPublish && year.status !== "CLOSED", rectify: !!viewer.canRectify && year.status !== "CLOSED" },
+      classes: [...classes.values()].map((c) => ({ ...c, groups: [...c.groups.values()] })),
+    };
   }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Logger, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
@@ -9,7 +9,9 @@ import type { SchoolAccess } from "../../identity/application/ports";
 import { NoTeachersGuard, permissionsOf, RequirePermission, TeacherMay } from "../../identity/presentation/http/permissions";
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { Gradebook, type GradebookViewer, MAX_MARKS_PER_SAVE } from "../application/Gradebook";
+import { GradingNotices } from "../application/GradingNotices";
 import { PrismaGradebookRepository } from "../infrastructure/prisma-gradebook";
+import { Notifier, type StaffNotify } from "../../notifications/infrastructure/notifier";
 import { PrismaGradingSettingsRepository } from "../infrastructure/prisma-grading-settings";
 import { GRADING_HTTP } from "./grading-settings.controller";
 
@@ -38,6 +40,11 @@ const notesBody = z
   .object({ period, notes: z.array(z.object({ studentId: z.uuid(), level: z.string().max(40).nullish(), comment: z.string().max(2000).nullish() })).max(MAX_MARKS_PER_SAVE) })
   .meta({ title: "GradebookNotes", description: "Menção do período (modelos qualitativos) e apreciação escrita, por aluno." });
 
+const termsQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional(), periodo: z.coerce.number().int().min(1).max(3).optional() }));
+const submitBody = z.object({ period }).meta({ title: "GradebookTermSubmit" });
+const moveBody = z.object({ period, revision: z.number().int().min(1), reason: z.string().max(600).nullish() }).meta({ title: "GradebookTermMove", description: "revision = a do estado que se está a ver (duas pessoas não se pisam); motivo obrigatório ao devolver e ao reabrir." });
+const publishBody = z.object({ groupId: z.uuid(), period, subjectIds: z.array(z.uuid()).max(60).nullish() }).meta({ title: "GradingTermsPublish" });
+
 /**
  * CADERNETA DIGITAL. O professor da disciplina na turma lança (rotas `@TeacherMay`); o diretor de
  * turma e quem tem grading.access consultam. O school-api decide quem pode o quê em cada pedido.
@@ -48,7 +55,20 @@ const notesBody = z
 @Controller("v1/grading")
 @UseGuards(TenantGuard, SchoolAuthGuard, NoTeachersGuard)
 export class GradebookController {
-  constructor(private readonly gradebook: Gradebook) {}
+  private readonly logger = new Logger("GradingNotices");
+  constructor(
+    private readonly gradebook: Gradebook,
+    private readonly notices: GradingNotices,
+    private readonly notifier: Notifier,
+  ) {}
+  /** Depois de submeter, validar, devolver, reabrir ou publicar: os avisos (um erro aqui não desfaz nada). */
+  private async notice(t: TenantContext, work: (books: PrismaGradebookRepository, notify: StaffNotify) => Promise<unknown>) {
+    try {
+      await work(this.books(t), this.notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName }));
+    } catch (e) {
+      this.logger.warn(`${t.entry.slug}: aviso do fecho do período falhou (${(e as Error).message})`);
+    }
+  }
   private books(t: TenantContext) {
     return PrismaGradebookRepository.for(t.db);
   }
@@ -56,7 +76,58 @@ export class GradebookController {
     return PrismaGradingSettingsRepository.for(t.db);
   }
   private async viewer(t: TenantContext, u: SchoolAccess): Promise<GradebookViewer> {
-    return { userId: u.id, support: !!u.support, canView: (await permissionsOf(t.db, u)).includes("grading.access") };
+    const p = await permissionsOf(t.db, u);
+    return { userId: u.id, support: !!u.support, canView: p.includes("grading.access"), canValidate: p.includes("grading.results.validate"), canPublish: p.includes("grading.results.publish"), canRectify: p.includes("grading.results.rectify") };
+  }
+
+  // ---------------------------------------------------------------- fecho dos períodos
+
+  @Get("terms")
+  @RequirePermission("grading.access")
+  @ApiOperation({ summary: "O estado das classificações de todas as turmas e disciplinas num período (?ano=&periodo=): em preparação, pendentes, validadas, publicadas" })
+  async terms(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(termsQuery) q: { ano?: string; periodo?: number }) {
+    return this.gradebook.termsOverview(this.books(t), await this.viewer(t, u), q.ano, q.periodo);
+  }
+
+  @Post("gradebooks/:groupId/:subjectId/term/submit")
+  @HttpCode(HttpStatus.OK)
+  @TeacherMay()
+  @ApiOperation({ summary: "O professor submete as classificações do período para validação (todos os alunos com média; ficam congeladas)" })
+  @ApiBody({ schema: openApi(submitBody) })
+  async submit(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("groupId", id) groupId: string, @Param("subjectId", id) subjectId: string, @Body(new ZodValidationPipe(submitBody)) body: { period: number }) {
+    const r = unwrap(await this.gradebook.submitTerm(this.books(t), this.settings(t), await this.viewer(t, u), groupId, subjectId, body.period), GRADING_HTTP);
+    await this.notice(t, (books, notify) => this.notices.submitted(books, notify, { yearId: "", groupId, subjectId, period: body.period }));
+    return r;
+  }
+
+  @Post("gradebooks/:groupId/:subjectId/term/:action")
+  @HttpCode(HttpStatus.OK)
+  @TeacherMay()
+  @ApiOperation({ summary: "Validar (diretor de turma ou grading.results.validate), devolver ao professor (com motivo) ou reabrir para retificação (grading.results.rectify, com motivo)" })
+  @ApiBody({ schema: openApi(moveBody) })
+  async move(
+    @CurrentTenant() t: TenantContext,
+    @CurrentUser() u: SchoolAccess,
+    @Param("groupId", id) groupId: string,
+    @Param("subjectId", id) subjectId: string,
+    @Param("action", new ZodValidationPipe(z.enum(["validate", "return", "reopen"], { error: "Ação inválida." }))) action: "validate" | "return" | "reopen",
+    @Body(new ZodValidationPipe(moveBody)) body: z.infer<typeof moveBody>,
+  ) {
+    const r = unwrap(await this.gradebook.moveTerm(this.books(t), await this.viewer(t, u), groupId, subjectId, { ...body, action }), GRADING_HTTP);
+    const k = { yearId: "", groupId, subjectId, period: body.period };
+    await this.notice(t, (books, notify) => (action === "validate" ? this.notices.validated(books, notify, k) : this.notices.returned(books, notify, k, action === "reopen", body.reason?.trim() || null)));
+    return r;
+  }
+
+  @Post("terms/publish")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("grading.results.publish")
+  @ApiOperation({ summary: "Publicar as classificações validadas de uma turma num período (todas ou só as disciplinas indicadas): as famílias passam a vê-las" })
+  @ApiBody({ schema: openApi(publishBody) })
+  async publish(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(publishBody)) body: z.infer<typeof publishBody>) {
+    const r = unwrap(await this.gradebook.publishGroup(this.books(t), await this.viewer(t, u), body), GRADING_HTTP);
+    await this.notice(t, (books) => this.notices.published(books, body.groupId, body.period, r.subjects));
+    return r;
   }
 
   @Get("me/gradebooks")
