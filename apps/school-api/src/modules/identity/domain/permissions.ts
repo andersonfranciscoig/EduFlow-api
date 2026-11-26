@@ -55,8 +55,11 @@ export const PERMISSIONS = {
   "attendance.exams.generate": { group: "attendance", label: "Gerar o calendário automaticamente", hint: "Pedir ao sistema uma proposta de calendário e usá-la (fica em preparação, para rever e publicar)." },
   "attendance.exams.publish": { group: "attendance", label: "Publicar o calendário de provas", hint: "Publicar para professores e famílias; com a gestão, também alterar ou cancelar o que já está publicado." },
   // ---- Avaliação e pautas: critérios (as restantes chegam com cada fase)
-  "grading.access": { group: "grading", label: "Aceder à avaliação e pautas", hint: "Consultar os critérios de avaliação. Sem esta, nenhuma das outras da avaliação funciona." },
+  "grading.access": { group: "grading", label: "Aceder à avaliação e pautas", hint: "Consultar os critérios de avaliação, as cadernetas e o estado das classificações. Sem esta, nenhuma das outras da avaliação funciona." },
   "grading.settings.manage": { group: "grading", label: "Configurar os critérios de avaliação", hint: "Modelos, componentes e pesos, elementos de avaliação e a que classes e disciplinas se aplicam." },
+  "grading.results.validate": { group: "grading", label: "Validar as classificações", hint: "Validar ou devolver ao professor as classificações submetidas (o diretor de turma valida as da sua turma sem esta permissão)." },
+  "grading.results.publish": { group: "grading", label: "Publicar as classificações", hint: "Publicar as classificações validadas de cada turma e período: só então as famílias as veem." },
+  "grading.results.rectify": { group: "grading", label: "Abrir retificações", hint: "Reabrir classificações já publicadas para o professor as corrigir, com o motivo; voltam a ser validadas e publicadas." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -1890,6 +1890,53 @@ model GradingPeriodNote {
   @@map("grading_period_notes")
 }
 
+/// Estado das classificações de uma disciplina numa turma e período (sem linha = em preparação). Lê-se e escreve-se em SQL.
+model GradingTerm {
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  groupId        String    @map("group_id") @db.Uuid
+  subjectId      String    @map("subject_id") @db.Uuid
+  periodPosition Int       @map("period_position")
+  /// RETURNED | SUBMITTED | VALIDATED | PUBLISHED | REOPENED
+  status         String
+  revision       Int       @default(1)
+  modelId        String?   @map("model_id") @db.Uuid
+  modelVersion   Int?      @map("model_version")
+  results        Json?
+  publications   Int       @default(0)
+  note           String?
+  submittedAt    DateTime? @map("submitted_at")
+  submittedById  String?   @map("submitted_by_id") @db.Uuid
+  validatedAt    DateTime? @map("validated_at")
+  validatedById  String?   @map("validated_by_id") @db.Uuid
+  publishedAt    DateTime? @map("published_at")
+  publishedById  String?   @map("published_by_id") @db.Uuid
+  updatedAt      DateTime  @map("updated_at")
+
+  @@id([groupId, subjectId, periodPosition])
+  @@index([academicYearId, periodPosition, status], map: "grading_terms_year_idx")
+  @@map("grading_terms")
+}
+
+/// Cada publicação das classificações, tal como foi (só de acrescentar): o que as famílias veem.
+model GradingPublication {
+  id              String   @id @db.Uuid
+  academicYearId  String   @map("academic_year_id") @db.Uuid
+  groupId         String   @map("group_id") @db.Uuid
+  subjectId       String   @map("subject_id") @db.Uuid
+  periodPosition  Int      @map("period_position")
+  number          Int
+  modelId         String?  @map("model_id") @db.Uuid
+  modelVersion    Int?     @map("model_version")
+  results         Json
+  reason          String?
+  publishedById   String?  @map("published_by_id") @db.Uuid
+  publishedByName String?  @map("published_by_name")
+  publishedAt     DateTime @map("published_at")
+
+  @@unique([groupId, subjectId, periodPosition, number], map: "grading_publications_number_key")
+  @@map("grading_publications")
+}
+
 /// Histórico da caderneta, só de acrescentar (um trigger impede alterar ou apagar).
 model GradingChange {
   id             String   @id @db.Uuid

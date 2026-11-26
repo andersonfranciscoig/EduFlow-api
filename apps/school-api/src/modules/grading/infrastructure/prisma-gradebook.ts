@@ -117,6 +117,38 @@ export interface Actor {
   id: string | null;
   name: string | null;
 }
+export type TermStatus = "RETURNED" | "SUBMITTED" | "VALIDATED" | "PUBLISHED" | "REOPENED";
+/** O estado das classificações de uma disciplina numa turma e período (sem linha = em preparação). */
+export interface TermRow {
+  yearId: string;
+  groupId: string;
+  subjectId: string;
+  period: number;
+  status: TermStatus;
+  revision: number;
+  modelId: string | null;
+  modelVersion: number | null;
+  results: FrozenResults | null;
+  publications: number;
+  note: string | null;
+  submittedAt: Date | null;
+  submittedBy: string | null;
+  validatedAt: Date | null;
+  validatedBy: string | null;
+  publishedAt: Date | null;
+  publishedBy: string | null;
+}
+/** As classificações congeladas na submissão (o que se valida e publica). */
+export interface FrozenResults {
+  students: { id: string; name: string; number: number | null; status: string; value: number | null; level: string | null; passed: boolean | null; comment: string | null }[];
+  stats: { students: number; done: number; passed: number; average: number | null };
+}
+export interface TermKey {
+  yearId: string;
+  groupId: string;
+  subjectId: string;
+  period: number;
+}
 export interface AssessmentInput {
   period: number;
   componentKey: string;
@@ -269,6 +301,80 @@ export class PrismaGradebookRepository {
       SELECT h.at, h.kind, h.by_name AS "byName", h.assessment_id AS "assessmentId", h.student_id AS "studentId", st.full_name AS "studentName", h.before, h.after, h.reason
         FROM grading_changes h LEFT JOIN students st ON st.id = h.student_id
        WHERE h.group_id = ${groupId}::uuid AND h.subject_id = ${subjectId}::uuid AND h.period_position = ${period} ORDER BY h.at DESC, h.id LIMIT ${limit}`;
+  }
+
+  // ================================================================ fecho dos períodos
+
+  async term(groupId: string, subjectId: string, period: number): Promise<TermRow | null> {
+    const r = await this.db.$queryRaw<TermRow[]>`
+      SELECT t.academic_year_id AS "yearId", t.group_id AS "groupId", t.subject_id AS "subjectId", t.period_position AS period, t.status, t.revision, t.model_id AS "modelId", t.model_version AS "modelVersion",
+             t.results, t.publications, t.note, t.submitted_at AS "submittedAt", us.full_name AS "submittedBy", t.validated_at AS "validatedAt", uv.full_name AS "validatedBy", t.published_at AS "publishedAt", up.full_name AS "publishedBy"
+        FROM grading_terms t LEFT JOIN school_users us ON us.id = t.submitted_by_id LEFT JOIN school_users uv ON uv.id = t.validated_by_id LEFT JOIN school_users up ON up.id = t.published_by_id
+       WHERE t.group_id = ${groupId}::uuid AND t.subject_id = ${subjectId}::uuid AND t.period_position = ${period}`;
+    return r[0] ?? null;
+  }
+  /** O estado de todas as disciplinas de um ano e período (para a validação e a publicação). */
+  terms(yearId: string, period: number) {
+    return this.db.$queryRaw<{ groupId: string; subjectId: string; status: TermStatus; revision: number; publications: number; note: string | null; submittedAt: Date | null }[]>`
+      SELECT group_id AS "groupId", subject_id AS "subjectId", status, revision, publications, note, submitted_at AS "submittedAt" FROM grading_terms WHERE academic_year_id = ${yearId}::uuid AND period_position = ${period}`;
+  }
+  /** Submete (ou volta a submeter): congela as classificações. false = mudou entretanto. */
+  async submitTerm(k: TermKey, expected: TermRow | null, data: { modelId: string; modelVersion: number; results: FrozenResults }, actor: Actor, now: Date) {
+    const results = JSON.stringify(data.results);
+    const n = expected
+      ? await this.db.$executeRaw`
+          UPDATE grading_terms SET status = 'SUBMITTED', revision = revision + 1, model_id = ${data.modelId}::uuid, model_version = ${data.modelVersion}, results = ${results}::jsonb,
+                 submitted_at = ${now}, submitted_by_id = ${actor.id}::uuid, validated_at = NULL, validated_by_id = NULL, updated_at = ${now}
+           WHERE group_id = ${k.groupId}::uuid AND subject_id = ${k.subjectId}::uuid AND period_position = ${k.period} AND status IN ('RETURNED', 'REOPENED') AND revision = ${expected.revision}`
+      : await this.db.$executeRaw`
+          INSERT INTO grading_terms (academic_year_id, group_id, subject_id, period_position, status, model_id, model_version, results, submitted_at, submitted_by_id, updated_at)
+          VALUES (${k.yearId}::uuid, ${k.groupId}::uuid, ${k.subjectId}::uuid, ${k.period}, 'SUBMITTED', ${data.modelId}::uuid, ${data.modelVersion}, ${results}::jsonb, ${now}, ${actor.id}::uuid, ${now})
+          ON CONFLICT DO NOTHING`;
+    if (n !== 1) return false;
+    await this.change(k, "TERM_SUBMITTED", { after: { status: "SUBMITTED", modelVersion: data.modelVersion, stats: data.results.stats } }, actor, now);
+    return true;
+  }
+  /** Muda de estado (validar, devolver, reabrir). false = já não estava no estado esperado. */
+  async moveTerm(k: TermKey, from: TermStatus[], to: TermStatus, revision: number, kind: "TERM_VALIDATED" | "TERM_RETURNED" | "TERM_REOPENED", reason: string | null, actor: Actor, now: Date) {
+    const validated = to === "VALIDATED";
+    const n = await this.db.$executeRaw`
+      UPDATE grading_terms SET status = ${to}, revision = revision + 1, note = CASE WHEN ${reason}::text IS NULL THEN note ELSE ${reason} END,
+             validated_at = CASE WHEN ${validated} THEN ${now} ELSE NULL END, validated_by_id = CASE WHEN ${validated} THEN ${actor.id}::uuid ELSE NULL END, updated_at = ${now}
+       WHERE group_id = ${k.groupId}::uuid AND subject_id = ${k.subjectId}::uuid AND period_position = ${k.period} AND status = ANY(${from}) AND revision = ${revision}`;
+    if (n !== 1) return false;
+    await this.change(k, kind, { before: { status: from }, after: { status: to }, reason }, actor, now);
+    return true;
+  }
+  /** Publica: o que foi validado fica numa publicação imutável. Devolve o número da publicação, ou null. */
+  async publishTerm(k: TermKey, revision: number, actor: Actor, now: Date): Promise<number | null> {
+    const r = await this.db.$queryRaw<{ publications: number; results: FrozenResults; modelId: string | null; modelVersion: number | null; note: string | null }[]>`
+      UPDATE grading_terms SET status = 'PUBLISHED', revision = revision + 1, publications = publications + 1, published_at = ${now}, published_by_id = ${actor.id}::uuid, updated_at = ${now}
+       WHERE group_id = ${k.groupId}::uuid AND subject_id = ${k.subjectId}::uuid AND period_position = ${k.period} AND status = 'VALIDATED' AND revision = ${revision}
+       RETURNING publications, results, model_id AS "modelId", model_version AS "modelVersion", note`;
+    if (!r[0]) return null;
+    const p = r[0];
+    // da 2.ª em diante é uma retificação: o motivo é o da reabertura
+    const reason = p.publications > 1 ? p.note : null;
+    await this.db.$executeRaw`
+      INSERT INTO grading_publications (id, academic_year_id, group_id, subject_id, period_position, number, model_id, model_version, results, reason, published_by_id, published_by_name, published_at)
+      VALUES (${randomUUID()}::uuid, ${k.yearId}::uuid, ${k.groupId}::uuid, ${k.subjectId}::uuid, ${k.period}, ${p.publications}, ${p.modelId}::uuid, ${p.modelVersion}, ${JSON.stringify(p.results)}::jsonb, ${reason}, ${actor.id}::uuid, ${actor.name}, ${now})`;
+    await this.change(k, "TERM_PUBLISHED", { after: { status: "PUBLISHED", publication: p.publications }, reason }, actor, now);
+    return p.publications;
+  }
+  async groupInfo(groupId: string) {
+    const r = await this.db.$queryRaw<{ yearId: string; yearStatus: string }[]>`
+      SELECT y.id AS "yearId", y.status AS "yearStatus" FROM class_groups g JOIN academic_years y ON y.id = g.academic_year_id WHERE g.id = ${groupId}::uuid`;
+    return r[0] ?? null;
+  }
+  /** As disciplinas do plano curricular da classe da turma. */
+  groupSubjects(groupId: string) {
+    return this.db.$queryRaw<{ id: string; name: string }[]>`
+      SELECT s.id, s.name FROM class_groups g JOIN class_subjects cs ON cs.class_id = g.class_id JOIN subjects s ON s.id = cs.subject_id WHERE g.id = ${groupId}::uuid ORDER BY cs.position, s.name`;
+  }
+  publications(groupId: string, subjectId: string, period: number) {
+    return this.db.$queryRaw<{ number: number; reason: string | null; publishedAt: Date; publishedBy: string | null; modelVersion: number | null }[]>`
+      SELECT number, reason, published_at AS "publishedAt", published_by_name AS "publishedBy", model_version AS "modelVersion" FROM grading_publications
+       WHERE group_id = ${groupId}::uuid AND subject_id = ${subjectId}::uuid AND period_position = ${period} ORDER BY number DESC`;
   }
 
   // ================================================================ escrever (dentro de `locked`)
