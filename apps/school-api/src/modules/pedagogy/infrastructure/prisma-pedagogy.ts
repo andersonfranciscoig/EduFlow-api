@@ -314,6 +314,12 @@ export class PrismaPedagogyRepository implements PedagogyRepository {
     }
   }
 
+  async groupHasGrades(id: string) {
+    const r = await this.db.$queryRaw<{ x: boolean }[]>`
+      SELECT EXISTS (SELECT 1 FROM grading_assessments WHERE group_id = ${id}::uuid) OR EXISTS (SELECT 1 FROM grading_period_notes WHERE group_id = ${id}::uuid) AS x`;
+    return r[0].x;
+  }
+
   async removeGroup(id: string): Promise<SeatOutcome<void>> {
     const now = new Date();
     return this.db.$transaction(async (tx) => {

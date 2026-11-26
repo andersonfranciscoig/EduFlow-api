@@ -108,6 +108,8 @@ export interface PedagogyRepository {
   updateGroup(id: string, input: { name: string; shift: Shift; room: string | null; capacity: number | null; now: Date }): Promise<SeatOutcome<GroupRow>>;
   /** Só se a turma não tiver alunos e as vagas tomadas couberem nas restantes turmas. */
   removeGroup(id: string): Promise<SeatOutcome<void>>;
+  /** A turma já tem avaliações ou menções na caderneta? (então não se apaga) */
+  groupHasGrades(id: string): Promise<boolean>;
 
   // ---- vagas (todas com a linha da classe bloqueada: nunca acima do limite)
   setVacancies(classId: string, value: number | null, now: Date): Promise<SeatOutcome<void>>;

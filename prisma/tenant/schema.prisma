@@ -1832,5 +1832,83 @@ model GradingType {
   @@map("grading_types")
 }
 
+/// Caderneta: uma avaliação de uma turma, disciplina e período, num componente do modelo (lê-se e escreve-se em SQL).
+model GradingAssessment {
+  id             String    @id @db.Uuid
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  groupId        String    @map("group_id") @db.Uuid
+  subjectId      String    @map("subject_id") @db.Uuid
+  periodPosition Int       @map("period_position")
+  componentKey   String    @map("component_key")
+  typeId         String?   @map("type_id") @db.Uuid
+  name           String
+  heldOn         DateTime? @map("held_on") @db.Date
+  outOf          Decimal?  @map("out_of") @db.Decimal(7, 2)
+  weight         Decimal?  @db.Decimal(5, 2)
+  revision       Int       @default(1)
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @map("created_at")
+  updatedById    String?   @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime  @map("updated_at")
+
+  @@index([groupId, subjectId, periodPosition], map: "grading_assessments_book_idx")
+  @@index([academicYearId], map: "grading_assessments_year_idx")
+  @@map("grading_assessments")
+}
+
+/// A nota de um aluno numa avaliação (sem linha = por lançar).
+model GradingMark {
+  assessmentId String   @map("assessment_id") @db.Uuid
+  studentId    String   @map("student_id") @db.Uuid
+  /// GRADED | ABSENT | ABSENT_JUSTIFIED | EXEMPT
+  state        String
+  score        Decimal? @db.Decimal(7, 2)
+  note         String?
+  updatedById  String?  @map("updated_by_id") @db.Uuid
+  updatedAt    DateTime @map("updated_at")
+
+  @@id([assessmentId, studentId])
+  @@index([studentId], map: "grading_marks_student_idx")
+  @@map("grading_marks")
+}
+
+/// Menção (modelos qualitativos) e apreciação do professor, por aluno, disciplina e período.
+model GradingPeriodNote {
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  subjectId      String   @map("subject_id") @db.Uuid
+  periodPosition Int      @map("period_position")
+  studentId      String   @map("student_id") @db.Uuid
+  levelKey       String?  @map("level_key")
+  comment        String?
+  updatedById    String?  @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime @map("updated_at")
+
+  @@id([groupId, subjectId, periodPosition, studentId])
+  @@map("grading_period_notes")
+}
+
+/// Histórico da caderneta, só de acrescentar (um trigger impede alterar ou apagar).
+model GradingChange {
+  id             String   @id @db.Uuid
+  academicYearId String   @map("academic_year_id") @db.Uuid
+  groupId        String   @map("group_id") @db.Uuid
+  subjectId      String   @map("subject_id") @db.Uuid
+  periodPosition Int      @map("period_position")
+  assessmentId   String?  @map("assessment_id") @db.Uuid
+  studentId      String?  @map("student_id") @db.Uuid
+  kind           String
+  before         Json?
+  after          Json?
+  reason         String?
+  byId           String?  @map("by_id") @db.Uuid
+  byName         String?  @map("by_name")
+  at             DateTime
+
+  @@index([groupId, subjectId, periodPosition, at(sort: Desc)], map: "grading_changes_book_idx")
+  @@index([studentId, at(sort: Desc)], map: "grading_changes_student_idx")
+  @@map("grading_changes")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

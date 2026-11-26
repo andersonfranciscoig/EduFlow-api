@@ -376,6 +376,7 @@ export class Pedagogy {
     const existing = await repo.findGroup(id);
     if (!existing) return fail(pedagogyError("GROUP_NOT_FOUND", "Turma não encontrada."));
     if (existing.yearStatus === "CLOSED") return fail(pedagogyError("YEAR_CLOSED", "Este ano letivo está encerrado: só de leitura."));
+    if (await repo.groupHasGrades(id)) return fail(pedagogyError("INVALID_STATE", "Esta turma já tem avaliações na caderneta: não pode ser removida."));
     const removed = await repo.removeGroup(id);
     if (!removed.ok) return fail(seatError(removed, { cls: await repo.findClass(existing.classId) ?? undefined, what: "group", removing: true }));
     return ok({ deleted: true });
