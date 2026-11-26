@@ -10,6 +10,7 @@ import { NoTeachersGuard, permissionsOf, RequirePermission } from "../../identit
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { type GradingActor, GradingModels } from "../application/GradingModels";
 import { GradingRules, MAX_SCOPES } from "../application/GradingRules";
+import { GradingSimulator, MAX_SIMULATED_MARKS, type SimulationInput } from "../application/GradingSimulator";
 import type { GradingErrorCode } from "../domain/model";
 import { PrismaGradingSettingsRepository } from "../infrastructure/prisma-grading-settings";
 
@@ -72,6 +73,39 @@ const scope = z.object({
 });
 const rulesBody = z.object({ modelId: z.uuid().nullable(), scopes: z.array(scope).min(1).max(MAX_SCOPES) }).meta({ title: "GradingRules", description: "Onde se aplica um modelo (todo o colégio, ensino, curso ou classe; com ou sem disciplina e período). modelId null = volta a herdar." });
 const copyBody = z.object({ fromYearId: z.uuid() }).meta({ title: "GradingRulesCopy" });
+const mark = num.nullable();
+const simulateBody = z
+  .object({
+    source: z.union([z.enum(["draft", "current"]), z.number().int().min(1)]),
+    period: z.object({
+      marks: z
+        .array(
+          z.object({
+            component: key,
+            label: z.string().max(60).nullish(),
+            typeId: z.uuid().nullish(),
+            weight: num.nullish(),
+            score: mark,
+            outOf: num.nullish(),
+            state: z.enum(["GRADED", "ABSENT", "ABSENT_JUSTIFIED", "EXEMPT"]),
+          }),
+        )
+        .max(MAX_SIMULATED_MARKS),
+      level: key.nullish(),
+      comment: z.string().max(2000).nullish(),
+    }),
+    year: z
+      .object({
+        count: z.number().int().min(2).max(3),
+        position: z.number().int().min(1).max(3),
+        others: z.array(z.object({ value: mark, level: key.nullish(), exempt: z.boolean().nullish().transform((v) => !!v) })).max(2),
+        level: key.nullish(),
+        exam: z.object({ state: z.enum(["GRADED", "ABSENT", "ABSENT_JUSTIFIED"]), value: mark, parts: z.array(z.object({ key, value: mark })).max(4).optional() }).nullish(),
+        recovery: mark.optional(),
+      })
+      .nullish(),
+  })
+  .meta({ title: "GradingSimulation", description: "Notas de exemplo de um período (e, opcionalmente, dos outros períodos, exame e recuperação). Não grava nada." });
 const yearQuery = new ZodValidationPipe(z.object({ ano: z.uuid().optional() }));
 const revisionQuery = new ZodValidationPipe(z.object({ revision: z.coerce.number().int().min(1) }));
 
@@ -85,6 +119,7 @@ export class GradingSettingsController {
   constructor(
     private readonly models: GradingModels,
     private readonly rules: GradingRules,
+    private readonly simulator: GradingSimulator,
   ) {}
   private repo(t: TenantContext) {
     return PrismaGradingSettingsRepository.for(t.db);
@@ -139,6 +174,15 @@ export class GradingSettingsController {
   @ApiBody({ schema: openApi(publishBody) })
   async publish(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) modelId: string, @Body(new ZodValidationPipe(publishBody)) body: z.infer<typeof publishBody>) {
     return unwrap(await this.models.publish(this.repo(t), await this.actor(t, u), modelId, body), GRADING_HTTP);
+  }
+
+  @Post("models/:id/simulate")
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission("grading.access")
+  @ApiOperation({ summary: "Simular: o motor de cálculo oficial com notas de exemplo, passo a passo (não grava nada)" })
+  @ApiBody({ schema: openApi(simulateBody) })
+  async simulate(@CurrentTenant() t: TenantContext, @Param("id", id) modelId: string, @Body(new ZodValidationPipe(simulateBody)) body: z.infer<typeof simulateBody>) {
+    return unwrap(await this.simulator.simulate(this.repo(t), modelId, body as SimulationInput), GRADING_HTTP);
   }
 
   @Delete("models/:id")

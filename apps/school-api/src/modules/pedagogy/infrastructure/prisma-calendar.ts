@@ -36,6 +36,12 @@ export class PrismaCalendarRepository implements CalendarRepository {
     ]);
   }
 
+  async yearHasGrades(yearId: string) {
+    const r = await this.db.$queryRaw<{ x: boolean }[]>`
+      SELECT EXISTS (SELECT 1 FROM grading_assessments WHERE academic_year_id = ${yearId}::uuid) OR EXISTS (SELECT 1 FROM grading_period_notes WHERE academic_year_id = ${yearId}::uuid) AS x`;
+    return r[0].x;
+  }
+
   async addClosure(input: Omit<ClosureRow, "createdAt"> & { createdById: string | null; now: Date }) {
     // insere só se não se sobrepuser a outro intervalo do ano (uma instrução: sem corridas entre duas janelas)
     const n = await this.db.$executeRaw`

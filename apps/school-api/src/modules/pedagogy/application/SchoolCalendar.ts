@@ -62,6 +62,8 @@ export class SchoolCalendar {
     const year = await this.editable(repo, actor, yearId);
     if (!year.ok) return year;
     if (!isPeriodKind(input.kind)) return fail(pedagogyError("INVALID_INPUT", "Escolha trimestres ou semestres."));
+    if (input.kind !== year.value.periodKind && (await repo.yearHasGrades(yearId)))
+      return fail(pedagogyError("INVALID_STATE", "Já há avaliações lançadas neste ano letivo: pode mudar as datas dos períodos, mas não passar de trimestres a semestres (ou ao contrário)."));
     const checked = checkPeriods(input.kind, year.value, input.items);
     if (!checked.ok) return checked;
     const before = await repo.periods(yearId);

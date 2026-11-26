@@ -32,6 +32,8 @@ export interface CalendarRepository {
   findClosure(id: string): Promise<(ClosureRow & { yearStatus: YearStatus }) | null>;
   /** Substitui os períodos do ano e o tipo (trimestres/semestres) — numa transação. */
   setPeriods(yearId: string, kind: PeriodKind, items: PeriodRow[], now: Date): Promise<void>;
+  /** O ano já tem avaliações na caderneta? (então não se muda de trimestres para semestres) */
+  yearHasGrades(yearId: string): Promise<boolean>;
   /** Acrescenta, se não se sobrepuser a outro intervalo do mesmo ano (false = sobrepõe-se). */
   addClosure(input: Omit<ClosureRow, "createdAt"> & { createdById: string | null; now: Date }): Promise<boolean>;
   removeClosure(id: string): Promise<void>;
