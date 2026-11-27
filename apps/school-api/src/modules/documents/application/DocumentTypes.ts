@@ -1,6 +1,6 @@
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
-import { AUDIENCES, type Audience, CATEGORIES, checkFields, type Department, DEPARTMENTS, type DocumentsError, documentsError, FIELD_KINDS, type Method, METHODS } from "../domain/documents";
+import { AUDIENCES, type Audience, CATEGORIES, checkFields, type Department, DEPARTMENTS, type DocumentsError, documentsError, FEE_POLICIES, type FeePolicy, FIELD_KINDS, type Method, METHODS } from "../domain/documents";
 import type { PrismaDocumentsRepository, TypeInput, TypeRow } from "../infrastructure/prisma-documents";
 
 type R<T> = Promise<Result<T, DocumentsError>>;
@@ -72,6 +72,7 @@ export interface TypeBody {
   pickup: boolean;
   download: boolean;
   fee?: number | null;
+  feePolicy?: FeePolicy | null;
   slaDays: number;
   requiresApproval: boolean;
   fields: unknown[];
@@ -100,6 +101,7 @@ export class DocumentTypes {
         suggestions: SUGGESTIONS[a].filter((s) => !types.some((t) => t.audience === a && t.name.toLowerCase() === s.name.toLowerCase())),
       })),
       methods: Object.entries(METHODS).map(([key, m]) => ({ key, ...m })),
+      feePolicies: Object.entries(FEE_POLICIES).map(([key, p]) => ({ key, ...p })),
       fieldKinds: Object.entries(FIELD_KINDS).map(([key, label]) => ({ key, label })),
       types: types.map((t) => this.view(t)),
     };
@@ -116,14 +118,18 @@ export class DocumentTypes {
     if ((body.audience === "EMPLOYEE") !== (body.department === "RH")) return bad(body.audience === "EMPLOYEE" ? "Os documentos dos funcionários são tratados pelo RH." : "Os documentos dos alunos são tratados pela secretaria ou pela área pedagógica.");
     if (!(body.method in METHODS)) return bad("Método de emissão desconhecido.");
     if (!body.pickup && !body.download) return bad("Escolha pelo menos uma forma de entrega: levantamento no colégio ou download.");
-    if (body.fee !== null && body.fee !== undefined) return bad("As taxas dos documentos chegam com a ligação às Finanças (numa próxima fase): por agora os documentos não têm taxa.");
+    const fee = body.fee ?? null;
+    if (fee !== null && (!Number.isInteger(fee) || fee < 1 || fee > 1_000_000)) return bad("A taxa é um valor em kwanzas, de 1 a 1 000 000 (vazio = gratuito).");
+    if (fee !== null && body.audience === "EMPLOYEE") return bad("Os documentos dos funcionários não têm taxa.");
+    const feePolicy = body.feePolicy ?? "BEFORE";
+    if (!(feePolicy in FEE_POLICIES)) return bad("Escolha quando se paga a taxa.");
     if (!Number.isInteger(body.slaDays) || body.slaDays < 0 || body.slaDays > 90) return bad("O prazo é um número de dias, de 0 a 90.");
     const description = text(body.description, 1000);
     const requirements = text(body.requirements, 1000);
     if ((description?.length ?? 0) > 1000 || (requirements?.length ?? 0) > 1000) return bad("A descrição e as informações complementares têm no máximo 1000 caracteres.");
     const f = checkFields(body.fields ?? []);
     if (!f.ok) return bad(f.message);
-    return ok({ audience: body.audience, department: body.department, category, name, description, requirements, method: body.method, pickup: !!body.pickup, download: !!body.download, fee: null, slaDays: body.slaDays, requiresApproval: !!body.requiresApproval, fields: f.fields, active: !!body.active });
+    return ok({ audience: body.audience, department: body.department, category, name, description, requirements, method: body.method, pickup: !!body.pickup, download: !!body.download, fee, feePolicy, slaDays: body.slaDays, requiresApproval: !!body.requiresApproval, fields: f.fields, active: !!body.active });
   }
 
   async create(repo: Repo, v: DocumentsViewer, body: TypeBody): R<{ id: string }> {
@@ -142,7 +148,7 @@ export class DocumentTypes {
       const s = SUGGESTIONS[audience].find((x) => x.name === n);
       if (!s || (await repo.nameTaken(audience, s.name, null))) continue;
       await repo.createType(
-        { audience, department: audience === "EMPLOYEE" ? "RH" : "SECRETARIA", category: s.category, name: s.name, description: null, requirements: null, method: "EXTERNAL", pickup: true, download: false, fee: null, slaDays: 3, requiresApproval: false, fields: [], active: true },
+        { audience, department: audience === "EMPLOYEE" ? "RH" : "SECRETARIA", category: s.category, name: s.name, description: null, requirements: null, method: "EXTERNAL", pickup: true, download: false, fee: null, feePolicy: "BEFORE", slaDays: 3, requiresApproval: false, fields: [], active: true },
         v.support ? null : v.userId,
         this.clock.now(),
       );

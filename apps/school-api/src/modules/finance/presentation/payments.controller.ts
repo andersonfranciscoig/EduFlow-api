@@ -9,6 +9,7 @@ import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-ht
 import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi";
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
+import { syncDocumentFees } from "../../documents/presentation/documents.controller";
 import { luandaToday } from "../../family/domain/family";
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
@@ -212,7 +213,10 @@ export class PaymentsController {
   @ApiOperation({ summary: "Isentar uma cobrança, com motivo" })
   @ApiBody({ schema: openApi(reasonBody) })
   async waive(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) chargeId: string, @Body(new ZodValidationPipe(reasonBody)) body: z.infer<typeof reasonBody>) {
-    return unwrap(await this.payments.waive(repo(t), await paymentActor(t, u), chargeId, body.reason, t), PAYMENTS_HTTP);
+    const r = unwrap(await this.payments.waive(repo(t), await paymentActor(t, u), chargeId, body.reason, t), PAYMENTS_HTTP);
+    // a taxa de um documento isentada: o pedido à espera do pagamento avança
+    await syncDocumentFees(t, this.notifier);
+    return r;
   }
 
   @Post("charges/:id/reopen")
@@ -267,7 +271,10 @@ export class PaymentsController {
   @RequirePermission("finance.payments.view", "finance.payments.validate")
   @ApiOperation({ summary: "Validar: as cobranças ficam pagas; a família, a secretaria e as Finanças são avisadas" })
   async validate(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) paymentId: string) {
-    return unwrap(await this.payments.validate(repo(t), await paymentActor(t, u), paymentId, paymentChannels(this.notifier, t), t), PAYMENTS_HTTP);
+    const r = unwrap(await this.payments.validate(repo(t), await paymentActor(t, u), paymentId, paymentChannels(this.notifier, t), t), PAYMENTS_HTTP);
+    // as taxas de documentos pagas: os pedidos à espera do pagamento avançam
+    await syncDocumentFees(t, this.notifier);
+    return r;
   }
 
   @Post(":id/reject")

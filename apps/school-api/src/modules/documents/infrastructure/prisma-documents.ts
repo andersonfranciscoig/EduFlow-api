@@ -19,16 +19,20 @@ export interface TypeRow {
   pickup: boolean;
   download: boolean;
   fee: number | null;
+  feePolicy: FeePolicy;
   slaDays: number;
   requiresApproval: boolean;
   fields: ExtraField[];
   active: boolean;
   position: number;
+  /** a versão mais recente do modelo (null = sem modelo) */
+  templateVersion: number | null;
   requests: number;
   openRequests: number;
   updatedAt: Date;
 }
-export type TypeInput = Omit<TypeRow, "id" | "requests" | "openRequests" | "updatedAt" | "position">;
+export type TypeInput = Omit<TypeRow, "id" | "requests" | "openRequests" | "updatedAt" | "position" | "templateVersion">;
+export type FeePolicy = "BEFORE" | "ON_DELIVERY";
 
 /** O beneficiário no momento do pedido (o pedido guarda esta cópia). */
 export interface StudentSnapshot {
@@ -85,10 +89,42 @@ export interface RequestRow {
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
+  feePolicy: FeePolicy | null;
+  chargeId: string | null;
+  /** OPEN | PAID | WAIVED | VOID (null = sem taxa) */
+  chargeStatus: string | null;
+  /** há um pagamento desta cobrança à espera das Finanças */
+  chargeInValidation: boolean;
+}
+export interface TemplateRow {
+  id: string;
+  version: number;
+  title: string;
+  body: string;
+  signerName: string | null;
+  signerRole: string | null;
+  showLogo: boolean;
+  createdByName: string | null;
+  createdAt: Date;
+}
+export interface IssuedRow {
+  id: string;
+  version: number;
+  method: "AUTO" | "EXTERNAL";
+  templateVersion: number | null;
+  fileKey: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  status: "ACTIVE" | "REPLACED";
+  reason: string | null;
+  createdByName: string | null;
+  createdAt: Date;
 }
 export interface EventRow {
   id: string;
-  kind: "STATUS" | "NOTE";
+  kind: "STATUS" | "NOTE" | "FILE" | "PAYMENT";
   fromStatus: RequestStatus | null;
   toStatus: RequestStatus | null;
   note: string | null;
@@ -127,8 +163,9 @@ export interface ListFilter {
 }
 
 const TYPE_SQL = Prisma.sql`
-  SELECT t.id, t.audience, t.department, t.category, t.name, t.description, t.requirements, t.method, t.pickup, t.download, t.fee,
+  SELECT t.id, t.audience, t.department, t.category, t.name, t.description, t.requirements, t.method, t.pickup, t.download, t.fee, t.fee_policy AS "feePolicy",
          t.sla_days AS "slaDays", t.requires_approval AS "requiresApproval", t.fields, t.active, t.position, t.updated_at AS "updatedAt",
+         (SELECT max(v.version) FROM document_templates v WHERE v.type_id = t.id) AS "templateVersion",
          (SELECT count(*)::int FROM document_requests r WHERE r.type_id = t.id) AS requests,
          (SELECT count(*)::int FROM document_requests r WHERE r.type_id = t.id AND r.status IN ('PENDING','IN_REVIEW','AWAITING_PAYMENT','PROCESSING','READY_PICKUP','READY_DOWNLOAD')) AS "openRequests"
     FROM document_types t`;
@@ -137,8 +174,10 @@ const REQUEST_SQL = Prisma.sql`
          r.requires_approval AS "requiresApproval", r.fee, r.student_id AS "studentId", r.employee_id AS "employeeId", r.beneficiary,
          r.requester_kind AS "requesterKind", r.requester_account_id AS "requesterAccountId", r.requester_user_id AS "requesterUserId", r.requester_name AS "requesterName",
          r.relationship, r.answers, r.notes, r.status, r.revision, to_char(r.due_on, 'YYYY-MM-DD') AS "dueOn", r.reject_reason AS "rejectReason", r.cancel_reason AS "cancelReason",
-         r.handled_by_name AS "handledByName", r.created_at AS "createdAt", r.updated_at AS "updatedAt", r.completed_at AS "completedAt"
-    FROM document_requests r`;
+         r.handled_by_name AS "handledByName", r.created_at AS "createdAt", r.updated_at AS "updatedAt", r.completed_at AS "completedAt",
+         r.fee_policy AS "feePolicy", r.charge_id AS "chargeId", c.status AS "chargeStatus",
+         coalesce((SELECT bool_or(p.status = 'SUBMITTED') FROM payment_items pi JOIN payments p ON p.id = pi.payment_id WHERE pi.charge_id = r.charge_id), false) AS "chargeInValidation"
+    FROM document_requests r LEFT JOIN charges c ON c.id = r.charge_id`;
 
 /** Documentos: tipos, pedidos, histórico e entregas (BD do colégio). */
 export class PrismaDocumentsRepository {
@@ -167,15 +206,15 @@ export class PrismaDocumentsRepository {
   async createType(t: TypeInput, actorId: string | null, now: Date) {
     const id = randomUUID();
     await this.db.$executeRaw`
-      INSERT INTO document_types (id, audience, department, category, name, description, requirements, method, pickup, download, fee, sla_days, requires_approval, fields, active, position, created_by_id, created_at, updated_at)
-      VALUES (${id}::uuid, ${t.audience}, ${t.department}, ${t.category}, ${t.name}, ${t.description}, ${t.requirements}, ${t.method}, ${t.pickup}, ${t.download}, ${t.fee}, ${t.slaDays}, ${t.requiresApproval}, ${json(t.fields)}::jsonb, ${t.active},
+      INSERT INTO document_types (id, audience, department, category, name, description, requirements, method, pickup, download, fee, fee_policy, sla_days, requires_approval, fields, active, position, created_by_id, created_at, updated_at)
+      VALUES (${id}::uuid, ${t.audience}, ${t.department}, ${t.category}, ${t.name}, ${t.description}, ${t.requirements}, ${t.method}, ${t.pickup}, ${t.download}, ${t.fee}, ${t.feePolicy}, ${t.slaDays}, ${t.requiresApproval}, ${json(t.fields)}::jsonb, ${t.active},
               (SELECT coalesce(max(position), 0) + 1 FROM document_types WHERE audience = ${t.audience}), ${actorId}::uuid, ${now}, ${now})`;
     return id;
   }
   async updateType(id: string, t: TypeInput, now: Date) {
     await this.db.$executeRaw`
       UPDATE document_types SET department = ${t.department}, category = ${t.category}, name = ${t.name}, description = ${t.description}, requirements = ${t.requirements}, method = ${t.method},
-             pickup = ${t.pickup}, download = ${t.download}, fee = ${t.fee}, sla_days = ${t.slaDays}, requires_approval = ${t.requiresApproval}, fields = ${json(t.fields)}::jsonb, active = ${t.active}, updated_at = ${now}
+             pickup = ${t.pickup}, download = ${t.download}, fee = ${t.fee}, fee_policy = ${t.feePolicy}, sla_days = ${t.slaDays}, requires_approval = ${t.requiresApproval}, fields = ${json(t.fields)}::jsonb, active = ${t.active}, updated_at = ${now}
        WHERE id = ${id}::uuid`;
   }
   async setActive(id: string, active: boolean, now: Date) {
@@ -250,12 +289,11 @@ export class PrismaDocumentsRepository {
 
   // ================================================================ pedidos
 
-  async createRequest(r: Omit<RequestRow, "id" | "number" | "revision" | "status" | "rejectReason" | "cancelReason" | "handledByName" | "createdAt" | "updatedAt" | "completedAt">, actor: Actor, now: Date) {
-    const id = randomUUID();
+  async createRequest(r: Omit<RequestRow, "id" | "number" | "revision" | "status" | "rejectReason" | "cancelReason" | "handledByName" | "createdAt" | "updatedAt" | "completedAt" | "chargeStatus" | "chargeInValidation">, actor: Actor, now: Date, id = randomUUID()) {
     const [row] = await this.db.$queryRaw<{ number: number }[]>`
-      INSERT INTO document_requests (id, year, type_id, type_name, category, audience, department, method, pickup, download, requires_approval, fee, student_id, employee_id, beneficiary,
+      INSERT INTO document_requests (id, year, type_id, type_name, category, audience, department, method, pickup, download, requires_approval, fee, fee_policy, charge_id, student_id, employee_id, beneficiary,
                                      requester_kind, requester_account_id, requester_user_id, requester_name, relationship, answers, notes, status, due_on, created_at, updated_at)
-      VALUES (${id}::uuid, ${r.year}, ${r.typeId}::uuid, ${r.typeName}, ${r.category}, ${r.audience}, ${r.department}, ${r.method}, ${r.pickup}, ${r.download}, ${r.requiresApproval}, ${r.fee},
+      VALUES (${id}::uuid, ${r.year}, ${r.typeId}::uuid, ${r.typeName}, ${r.category}, ${r.audience}, ${r.department}, ${r.method}, ${r.pickup}, ${r.download}, ${r.requiresApproval}, ${r.fee}, ${r.feePolicy}, ${r.chargeId}::uuid,
               ${r.studentId}::uuid, ${r.employeeId}::uuid, ${json(r.beneficiary)}::jsonb, ${r.requesterKind}, ${r.requesterAccountId}::uuid, ${r.requesterUserId}::uuid, ${r.requesterName}, ${r.relationship},
               ${json(r.answers)}::jsonb, ${r.notes}, 'PENDING', ${r.dueOn}::date, ${now}, ${now})
       RETURNING number`;
@@ -306,7 +344,7 @@ export class PrismaDocumentsRepository {
       SELECT id, kind, from_status AS "fromStatus", to_status AS "toStatus", note, internal, actor_kind AS "actorKind", actor_name AS "actorName", at
         FROM document_request_events WHERE request_id = ${requestId}::uuid ORDER BY at, id`;
   }
-  async event(requestId: string, e: { kind: "STATUS" | "NOTE"; from: RequestStatus | null; to: RequestStatus | null; note: string | null; internal: boolean }, actor: Actor, now: Date) {
+  async event(requestId: string, e: { kind: "STATUS" | "NOTE" | "FILE" | "PAYMENT"; from: RequestStatus | null; to: RequestStatus | null; note: string | null; internal: boolean }, actor: Actor, now: Date) {
     await this.db.$executeRaw`
       INSERT INTO document_request_events (id, request_id, kind, from_status, to_status, note, internal, actor_kind, actor_id, actor_name, at)
       VALUES (${randomUUID()}::uuid, ${requestId}::uuid, ${e.kind}, ${e.from}, ${e.to}, ${e.note}, ${e.internal}, ${actor.kind}, ${actor.id}::uuid, ${actor.name}, ${now})`;
@@ -333,6 +371,75 @@ export class PrismaDocumentsRepository {
       SELECT received_by AS "receivedBy", received_by_document AS "receivedByDocument", relationship, delivered_by_name AS "deliveredByName", delivered_at AS "deliveredAt", notes
         FROM document_deliveries WHERE request_id = ${requestId}::uuid`;
     return r ?? null;
+  }
+
+  // ================================================================ taxas (cobranças das Finanças)
+
+  /** O ano letivo da cobrança: o da matrícula ativa do aluno, ou o ano em curso. */
+  async chargeYear(studentId: string, today: string) {
+    const [r] = await this.db.$queryRaw<{ yearId: string | null; enrollmentId: string | null }[]>`
+      SELECT coalesce(e.academic_year_id, y.id) AS "yearId", e.id AS "enrollmentId"
+        FROM (SELECT 1) one
+        LEFT JOIN LATERAL (SELECT id, academic_year_id FROM enrollments WHERE student_id = ${studentId}::uuid AND status = 'ACTIVE' ORDER BY enrolled_at DESC LIMIT 1) e ON true
+        LEFT JOIN LATERAL (SELECT id FROM academic_years WHERE status = 'ACTIVE' OR (status <> 'CLOSED' AND ends_on >= ${today}::date) ORDER BY (status = 'ACTIVE') DESC, starts_on LIMIT 1) y ON true`;
+    return r?.yearId ? { yearId: r.yearId, enrollmentId: r.enrollmentId } : null;
+  }
+  /** A cobrança da taxa (kind DOCUMENTO): aparece nos pagamentos da família e paga-se pelo fluxo das Finanças. */
+  async createCharge(c: { id: string; label: string; amount: number; yearId: string; enrollmentId: string | null; studentId: string; dueOn: string }, now: Date) {
+    await this.db.$executeRaw`
+      INSERT INTO charges (id, kind, label, amount, academic_year_id, student_id, enrollment_id, due_on, status, created_at, updated_at)
+      VALUES (${c.id}::uuid, 'DOCUMENTO', ${c.label}, ${c.amount}, ${c.yearId}::uuid, ${c.studentId}::uuid, ${c.enrollmentId}::uuid, ${c.dueOn}::date, 'OPEN', ${now}, ${now})`;
+  }
+  renameCharge(chargeId: string, label: string, now: Date) {
+    return this.db.$executeRaw`UPDATE charges SET label = ${label}, updated_at = ${now} WHERE id = ${chargeId}::uuid`;
+  }
+  /** Anula a cobrança ainda por pagar (pedido cancelado ou rejeitado). */
+  voidCharge(chargeId: string, now: Date) {
+    return this.db.$executeRaw`UPDATE charges SET status = 'VOID', updated_at = ${now} WHERE id = ${chargeId}::uuid AND status = 'OPEN'`;
+  }
+  /** Os pedidos à espera do pagamento cuja cobrança já está paga ou isenta. */
+  paidWhileWaiting() {
+    return this.db.$queryRaw<{ id: string }[]>`
+      SELECT r.id FROM document_requests r JOIN charges c ON c.id = r.charge_id WHERE r.status = 'AWAITING_PAYMENT' AND c.status IN ('PAID', 'WAIVED')`;
+  }
+
+  // ================================================================ modelos e documentos emitidos
+
+  templates(typeId: string) {
+    return this.db.$queryRaw<TemplateRow[]>`
+      SELECT id, version, title, body, signer_name AS "signerName", signer_role AS "signerRole", show_logo AS "showLogo", created_by_name AS "createdByName", created_at AS "createdAt"
+        FROM document_templates WHERE type_id = ${typeId}::uuid ORDER BY version DESC`;
+  }
+  async latestTemplate(typeId: string): Promise<TemplateRow | null> {
+    return (await this.templates(typeId))[0] ?? null;
+  }
+  /** Nova versão do modelo (as anteriores ficam, para o histórico e as versões emitidas). */
+  async addTemplate(typeId: string, t: { title: string; body: string; signerName: string | null; signerRole: string | null; showLogo: boolean }, actor: Actor, now: Date) {
+    const [r] = await this.db.$queryRaw<{ version: number }[]>`
+      INSERT INTO document_templates (id, type_id, version, title, body, signer_name, signer_role, show_logo, created_by_id, created_by_name, created_at)
+      VALUES (${randomUUID()}::uuid, ${typeId}::uuid, (SELECT coalesce(max(version), 0) + 1 FROM document_templates WHERE type_id = ${typeId}::uuid),
+              ${t.title}, ${t.body}, ${t.signerName}, ${t.signerRole}, ${t.showLogo}, ${actor.id}::uuid, ${actor.name}, ${now})
+      RETURNING version`;
+    return r.version;
+  }
+  issued(requestId: string) {
+    return this.db.$queryRaw<IssuedRow[]>`
+      SELECT id, version, method, template_version AS "templateVersion", file_key AS "fileKey", file_name AS "fileName", mime_type AS "mimeType", size, sha256, status, reason,
+             created_by_name AS "createdByName", created_at AS "createdAt"
+        FROM issued_documents WHERE request_id = ${requestId}::uuid ORDER BY version DESC`;
+  }
+  async activeIssued(requestId: string): Promise<IssuedRow | null> {
+    return (await this.issued(requestId)).find((d) => d.status === "ACTIVE") ?? null;
+  }
+  /** Guarda a nova versão emitida (a ativa anterior fica substituída). */
+  async addIssued(requestId: string, d: { method: "AUTO" | "EXTERNAL"; templateVersion: number | null; fileKey: string; fileName: string; mimeType: string; size: number; sha256: string; reason: string | null }, actor: Actor, now: Date) {
+    await this.db.$executeRaw`UPDATE issued_documents SET status = 'REPLACED', replaced_at = ${now} WHERE request_id = ${requestId}::uuid AND status = 'ACTIVE'`;
+    const [r] = await this.db.$queryRaw<{ version: number }[]>`
+      INSERT INTO issued_documents (id, request_id, version, method, template_version, file_key, file_name, mime_type, size, sha256, status, reason, created_by_id, created_by_name, created_at)
+      VALUES (${randomUUID()}::uuid, ${requestId}::uuid, (SELECT coalesce(max(version), 0) + 1 FROM issued_documents WHERE request_id = ${requestId}::uuid), ${d.method}, ${d.templateVersion},
+              ${d.fileKey}, ${d.fileName}, ${d.mimeType}, ${d.size}, ${d.sha256}, 'ACTIVE', ${d.reason}, ${actor.id}::uuid, ${actor.name}, ${now})
+      RETURNING version`;
+    return r.version;
   }
 
   // ================================================================ a quem avisar
