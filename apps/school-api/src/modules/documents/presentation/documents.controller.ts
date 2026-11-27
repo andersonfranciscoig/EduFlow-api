@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Logger, Param, Post, Put, Query, Res, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Logger, Param, Post, Put, Query, Res, StreamableFile, UnprocessableEntityException, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { AnyFilesInterceptor, FileInterceptor } from "@nestjs/platform-express";
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
 import { z } from "zod";
@@ -8,6 +8,7 @@ import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi"
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
 import { notifyFamily } from "../../family/infrastructure/family-notify";
+import type { HrFileStore } from "../../hr/application/employee-ports";
 import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
 import { systemClock } from "../../../../../../libs/kernel/src/infrastructure/system";
 import type { SchoolAccess } from "../../identity/application/ports";
@@ -15,9 +16,11 @@ import { HrMay, NoTeachersGuard, permissionsOf, TeacherMay } from "../../identit
 import { CurrentUser, SchoolAuthGuard } from "../../identity/presentation/http/school-auth";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { type FileOut, DocumentIssuing, type School } from "../application/DocumentIssuing";
-import { DocumentRequests, type Notices } from "../application/DocumentRequests";
+import { DocumentRequests, type Notices, type Uploads } from "../application/DocumentRequests";
 import { audiencesFor, DocumentTypes, type DocumentsViewer } from "../application/DocumentTypes";
 import type { DocumentsErrorCode, RequestStatus, StaffAction } from "../domain/documents";
+import { DocumentReports } from "../application/DocumentReports";
+import { PrismaDocumentReports } from "../infrastructure/prisma-document-reports";
 import { PrismaDocumentsRepository } from "../infrastructure/prisma-documents";
 
 export const DOCUMENTS_HTTP: Partial<Record<DocumentsErrorCode, HttpStatus>> = {
@@ -49,9 +52,10 @@ export async function syncDocumentFees(t: TenantContext, notifier: Notifier) {
 const logos = new Map<string, { at: number; logo: Buffer | null }>();
 export async function schoolOf(t: TenantContext): Promise<School> {
   const url = t.entry.logoUrl;
-  if (!url || !/^https?:\/\//.test(url)) return { name: t.entry.schoolName, logo: null };
+  const base = { name: t.entry.schoolName, slug: t.entry.slug };
+  if (!url || !/^https?:\/\//.test(url)) return { ...base, logo: null };
   const hit = logos.get(url);
-  if (hit && Date.now() - hit.at < 10 * 60_000) return { name: t.entry.schoolName, logo: hit.logo };
+  if (hit && Date.now() - hit.at < 10 * 60_000) return { ...base, logo: hit.logo };
   let logo: Buffer | null = null;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -61,7 +65,7 @@ export async function schoolOf(t: TenantContext): Promise<School> {
     logo = null;
   }
   logos.set(url, { at: Date.now(), logo });
-  return { name: t.entry.schoolName, logo };
+  return { ...base, logo };
 }
 /** Entrega um ficheiro: PDF e imagens abrem no navegador; nunca há URL pública. */
 export function sendDocument(res: Response, f: FileOut, attachment = false) {
@@ -77,6 +81,25 @@ export function sendDocument(res: Response, f: FileOut, attachment = false) {
   return new StreamableFile(f.content);
 }
 type Upload = { originalname: string; mimetype: string; buffer: Buffer } | undefined;
+export type MultiFile = { fieldname: string; originalname: string; mimetype: string; buffer: Buffer };
+/** Pedido com documentos juntos: multipart com `payload` (o JSON do pedido) e um ficheiro `anexo.<documento>` por documento. */
+export const CREATE_FILES = AnyFilesInterceptor({ limits: { fileSize: 10 * 1024 * 1024 + 1, files: 5, fields: 2 } });
+export function createInput<T>(schema: z.ZodType<T>, raw: unknown, files: MultiFile[] | undefined, store: HrFileStore): { body: T; uploads: Uploads | null } {
+  const payload = raw && typeof (raw as { payload?: unknown }).payload === "string" ? (raw as { payload: string }).payload : null;
+  let parsed: unknown = raw;
+  if (payload !== null) {
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      throw new UnprocessableEntityException({ code: "INVALID_INPUT", message: "Pedido inválido." });
+    }
+  }
+  const body = new ZodValidationPipe(schema).transform(parsed) as T;
+  const list = (files ?? []).filter((f) => f.fieldname.startsWith("anexo.")).map((f) => ({ itemKey: f.fieldname.slice("anexo.".length), file: f }));
+  if ((files ?? []).length !== list.length) throw new UnprocessableEntityException({ code: "INVALID_INPUT", message: "Ficheiro inesperado no pedido." });
+  return { body, uploads: list.length ? { store, files: list } : null };
+}
+export const attachBody = z.object({ itemKey: z.string().min(1).max(60) });
 const templateBody = z
   .object({ title: z.string().max(400), body: z.string().max(12000), signerName: z.string().max(240).nullish(), signerRole: z.string().max(240).nullish(), showLogo: z.boolean() })
   .meta({ title: "DocumentTemplate", description: "O modelo: título, texto (parágrafos separados por linha em branco) com campos {{...}}, quem assina e se leva o logótipo." });
@@ -102,6 +125,7 @@ export const typeBody = z
     slaDays: z.number().int(),
     requiresApproval: z.boolean(),
     fields: z.array(field).max(20),
+    attachments: z.array(z.object({ key: z.string().max(40).nullish(), label: z.string().max(200), required: z.boolean(), hint: z.string().max(400).nullish() })).max(10).nullish(),
     active: z.boolean(),
   })
   .meta({ title: "DocumentType", description: "Um documento que se pode pedir: público, departamento, categoria, método de emissão, levantamento/download, prazo (dias), aprovação e campos extra." });
@@ -132,7 +156,8 @@ const listQuery = new ZodValidationPipe(
 );
 const mineQuery = new ZodValidationPipe(z.object({ estado: statusEnum.optional(), q: z.string().max(120).optional(), pagina: z.coerce.number().int().min(1).max(1000).optional() }));
 const actionPipe = new ZodValidationPipe(z.enum(["review", "process", "ready-pickup", "ready-download", "reject", "cancel"], { error: "Ação inválida." }));
-const beneficiaryQuery = new ZodValidationPipe(z.object({ publico: z.enum(["STUDENT", "EMPLOYEE"]), q: z.string().min(2).max(80) }));
+const reportQuery = new ZodValidationPipe(z.object({ publico: z.enum(["STUDENT", "EMPLOYEE"]).optional(), de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }));
+const beneficiaryQuery =new ZodValidationPipe(z.object({ publico: z.enum(["STUDENT", "EMPLOYEE"]), q: z.string().min(2).max(80) }));
 
 /**
  * DOCUMENTOS — equipa e funcionários.
@@ -153,6 +178,7 @@ export class DocumentsController {
     private readonly issuing: DocumentIssuing,
     private readonly stores: HrFileStores,
     private readonly notifier: Notifier,
+    private readonly reports: DocumentReports,
   ) {}
 
   private repo(t: TenantContext) {
@@ -231,6 +257,14 @@ export class DocumentsController {
     return sendDocument(res, f);
   }
 
+  // ---------------------------------------------------------------- relatório
+
+  @Get("reports")
+  @ApiOperation({ summary: "O relatório dos documentos (?publico=STUDENT|EMPLOYEE&de=&ate=): por estado, tipo e mês, tempo médio, prazos, entregas, taxas e cartões" })
+  async reportView(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(reportQuery) q: { publico?: "STUDENT" | "EMPLOYEE"; de?: string; ate?: string }) {
+    return unwrap(await this.reports.report(PrismaDocumentReports.for(t.db), await this.viewer(t, u), { audience: q.publico ?? null, from: q.de ?? null, to: q.ate ?? null }), DOCUMENTS_HTTP);
+  }
+
   // ---------------------------------------------------------------- pedidos (equipa)
 
   @Get("requests")
@@ -257,10 +291,12 @@ export class DocumentsController {
   }
 
   @Post("requests")
-  @ApiOperation({ summary: "Registar um pedido ao balcão, em nome de um aluno ou de um funcionário" })
+  @UseInterceptors(CREATE_FILES)
+  @ApiOperation({ summary: "Registar um pedido ao balcão, em nome de um aluno ou de um funcionário (JSON, ou multipart com payload + anexo.<documento>)" })
   @ApiBody({ schema: openApi(staffRequestBody) })
-  async create(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(staffRequestBody)) body: z.infer<typeof staffRequestBody>) {
-    return unwrap(await this.requests.staffCreate(this.repo(t), this.notices(t), await this.staff(t, u), body), DOCUMENTS_HTTP);
+  async create(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body() raw: unknown, @UploadedFiles() files: MultiFile[] | undefined) {
+    const { body, uploads } = createInput(staffRequestBody, raw, files, this.stores.for(t.entry));
+    return unwrap(await this.requests.staffCreate(this.repo(t), this.notices(t), await this.staff(t, u), body, uploads), DOCUMENTS_HTTP);
   }
 
   @Get("requests/:id")
@@ -288,7 +324,7 @@ export class DocumentsController {
   @Get("requests/:id/preview")
   @ApiOperation({ summary: "Pré-visualizar o documento do pedido com o modelo e os dados atuais (não fica guardado)" })
   async previewRequest(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Res({ passthrough: true }) res: Response) {
-    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), await this.staff(t, u), requestId, await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), requestId, await schoolOf(t)), DOCUMENTS_HTTP));
   }
 
   @Post("requests/:id/generate")
@@ -314,6 +350,21 @@ export class DocumentsController {
     return sendDocument(res, unwrap(await this.issuing.staffFile(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), requestId, q.versao ?? null), DOCUMENTS_HTTP));
   }
 
+  @Post("requests/:id/attachments")
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 + 1, files: 1, fields: 1 } }))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "O balcão junta um documento que a pessoa trouxe (campos file e itemKey), enquanto o pedido está a ser tratado" })
+  async attach(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Body(new ZodValidationPipe(attachBody)) body: z.infer<typeof attachBody>, @UploadedFile() file: Upload) {
+    return unwrap(await this.requests.addAttachment(this.repo(t), this.stores.for(t.entry), this.notices(t), { kind: "STAFF", viewer: await this.staff(t, u) }, requestId, body.itemKey, file), DOCUMENTS_HTTP);
+  }
+
+  @Get("requests/:id/attachments/:fileId")
+  @ApiOperation({ summary: "Abrir um documento junto ao pedido (fica no histórico interno)" })
+  async attachment(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Param("fileId", id) fileId: string, @Res({ passthrough: true }) res: Response) {
+    return sendDocument(res, unwrap(await this.requests.attachmentFile(this.repo(t), this.stores.for(t.entry), { kind: "STAFF", viewer: await this.staff(t, u) }, requestId, fileId), DOCUMENTS_HTTP));
+  }
+
   @Post("requests/:id/:action")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Um passo do pedido: review (analisar), process (preparar), ready-pickup (pronto a levantar), reject e cancel (com motivo)" })
@@ -334,10 +385,31 @@ export class DocumentsController {
 
   @Post("me/requests")
   @TeacherMay()
-  @ApiOperation({ summary: "Pedir um documento profissional (para mim)" })
+  @UseInterceptors(CREATE_FILES)
+  @ApiOperation({ summary: "Pedir um documento profissional (para mim): JSON, ou multipart com payload + anexo.<documento>" })
   @ApiBody({ schema: openApi(requestBody) })
-  async mineCreate(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(requestBody)) body: z.infer<typeof requestBody>) {
-    return unwrap(await this.requests.mineCreate(this.repo(t), this.notices(t), await this.viewer(t, u), body), DOCUMENTS_HTTP);
+  async mineCreate(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body() raw: unknown, @UploadedFiles() files: MultiFile[] | undefined) {
+    const { body, uploads } = createInput(requestBody, raw, files, this.stores.for(t.entry));
+    return unwrap(await this.requests.mineCreate(this.repo(t), this.notices(t), await this.viewer(t, u), body, uploads), DOCUMENTS_HTTP);
+  }
+
+  @Post("me/requests/:id/attachments")
+  @HttpCode(HttpStatus.OK)
+  @TeacherMay()
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 + 1, files: 1, fields: 1 } }))
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({ summary: "Juntar um documento a um pedido meu (campos file e itemKey)" })
+  async mineAttach(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Body(new ZodValidationPipe(attachBody)) body: z.infer<typeof attachBody>, @UploadedFile() file: Upload) {
+    const v = await this.viewer(t, u);
+    return unwrap(await this.requests.addAttachment(this.repo(t), this.stores.for(t.entry), this.notices(t), { kind: "EMPLOYEE", userId: u.id, name: v.name }, requestId, body.itemKey, file), DOCUMENTS_HTTP);
+  }
+
+  @Get("me/requests/:id/attachments/:fileId")
+  @TeacherMay()
+  @ApiOperation({ summary: "Abrir um documento que juntei a um pedido meu" })
+  async mineAttachment(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Param("fileId", id) fileId: string, @Res({ passthrough: true }) res: Response) {
+    const v = await this.viewer(t, u);
+    return sendDocument(res, unwrap(await this.requests.attachmentFile(this.repo(t), this.stores.for(t.entry), { kind: "EMPLOYEE", userId: u.id, name: v.name }, requestId, fileId), DOCUMENTS_HTTP));
   }
 
   @Get("me/requests")

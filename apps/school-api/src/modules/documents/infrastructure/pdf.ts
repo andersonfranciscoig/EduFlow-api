@@ -24,7 +24,7 @@ const MUTED = rgb(0.32, 0.4, 0.38);
 const LINE = rgb(0.14, 0.33, 0.28);
 // caracteres acima de 255 que o WinAnsi tem
 const WIN_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
-const winAnsi = (s: string) =>
+export const winAnsi = (s: string) =>
   [...s.normalize("NFC")]
     .map((c) => {
       const code = c.codePointAt(0)!;
@@ -39,7 +39,7 @@ const winAnsi = (s: string) =>
     .join("");
 
 /** Parte um texto em linhas que cabem na largura. */
-function wrap(text: string, font: PDFFont, size: number, width: number) {
+export function wrap(text: string, font: PDFFont, size: number, width: number) {
   const lines: string[] = [];
   for (const raw of text.split("\n")) {
     const words = raw.split(/\s+/).filter(Boolean);
@@ -69,7 +69,7 @@ function wrap(text: string, font: PDFFont, size: number, width: number) {
   return lines;
 }
 
-async function embedLogo(doc: PDFDocument, logo: Buffer | null): Promise<PDFImage | null> {
+export async function embedLogo(doc: PDFDocument, logo: Buffer | null): Promise<PDFImage | null> {
   if (!logo) return null;
   try {
     if (logo[0] === 0x89 && logo[1] === 0x50) return await doc.embedPng(logo);

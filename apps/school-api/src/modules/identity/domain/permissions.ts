@@ -70,6 +70,7 @@ export const PERMISSIONS = {
   "documents.requests.view": { group: "documents", label: "Consultar os pedidos de documentos", hint: "Ver os pedidos dos alunos e encarregados e o seu histórico." },
   "documents.requests.process": { group: "documents", label: "Tratar os pedidos de documentos", hint: "Analisar, preparar, rejeitar (com motivo) e marcar como pronto; registar pedidos ao balcão." },
   "documents.requests.deliver": { group: "documents", label: "Entregar documentos", hint: "Confirmar o levantamento, com quem recebeu e a relação com o aluno." },
+  "documents.cards.manage": { group: "documents", label: "Gerir os cartões de estudante", hint: "Escolher o modelo do cartão e personalizá-lo, carregar fotografias, emitir cartões (um a um ou por turma), segundas vias, imprimir e anular." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

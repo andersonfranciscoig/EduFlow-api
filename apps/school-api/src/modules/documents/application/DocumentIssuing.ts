@@ -2,18 +2,22 @@ import { createHash } from "node:crypto";
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import type { HrFileStore } from "../../hr/application/employee-ports";
+import { isCardCategory } from "../domain/cards";
 import { canDownload, canIssue, type DocumentsError, documentsError, STATUS_LABELS } from "../domain/documents";
 import { allowedFor, checkTemplate, fieldKey, fill, longDate, placeholderLabel, SHIFTS, type TemplateInput, checkUpload } from "../domain/issuing";
 import { renderDocumentPdf } from "../infrastructure/pdf";
 import type { Actor, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
 import { type DocumentRequests, type Notices, snapshotOf, today } from "./DocumentRequests";
 import { can, type DocumentsViewer } from "./DocumentTypes";
+import type { StudentCards } from "./StudentCards";
 
 type R<T> = Promise<Result<T, DocumentsError>>;
 type Repo = PrismaDocumentsRepository;
 export interface School {
   name: string;
   logo: Buffer | null;
+  /** o colégio no endereço do portal (o QR dos cartões aponta para lá) */
+  slug: string;
 }
 export interface FileOut {
   fileName: string;
@@ -45,6 +49,7 @@ export class DocumentIssuing {
   constructor(
     private readonly clock: Clock,
     private readonly requests: DocumentRequests,
+    private readonly cards: StudentCards,
   ) {}
 
   // ================================================================ modelos
@@ -139,9 +144,11 @@ export class DocumentIssuing {
   }
 
   /** Pré-visualizar o documento do pedido (não fica guardado). */
-  async previewRequest(repo: Repo, v: DocumentsViewer, id: string, school: School): R<FileOut> {
+  async previewRequest(repo: Repo, store: HrFileStore, v: DocumentsViewer, id: string, school: School): R<FileOut> {
     const r = await this.load(repo, v, id);
     if (!r) return fail(documentsError("NOT_FOUND", "Pedido não encontrado."));
+    // um cartão de estudante pré-visualiza-se com o modelo do cartão
+    if (isCardCategory(r.category)) return r.studentId ? this.cards.previewForRequest(repo.cards(), store, r.studentId, school) : fail(documentsError("INVALID_STATE", "Os cartões são só de alunos."));
     const type = await repo.type(r.typeId);
     if (!type) return fail(documentsError("NOT_FOUND", "Documento não encontrado."));
     const c = await this.compose(repo, r, type, school);
@@ -169,6 +176,7 @@ export class DocumentIssuing {
     const blocked = this.replaceCheck(r, !!active, reason);
     if (blocked) return fail(documentsError("INVALID_STATE", blocked));
     if (!store.ready) return fail(documentsError("NOT_AVAILABLE", "O armazenamento de ficheiros deste colégio ainda não está configurado: fale com a EduFlow."));
+    if (isCardCategory(r.category)) return this.generateCard(repo, store, v, r, reason, school, active?.version ?? (await repo.issued(id)).length);
     const c = await this.compose(repo, r, type, school);
     if (!c.ok) return c;
     const version = (active?.version ?? (await repo.issued(id)).length) + 1;
@@ -183,6 +191,16 @@ export class DocumentIssuing {
     });
     const fileName = `${slug(r.typeName)}-${this.requests.ref(r)}-v${version}.pdf`;
     return this.store(repo, store, v, r, { method: "AUTO", templateVersion: c.value.tpl.version, fileName, mimeType: "application/pdf", content: pdf, reason: reason || null }, `Documento emitido com o modelo (versão ${version} do documento, modelo v${c.value.tpl.version})`);
+  }
+
+  /** Um pedido de cartão: emite o cartão (com o modelo escolhido pelo colégio) e junta o PDF ao pedido. */
+  private async generateCard(repo: Repo, store: HrFileStore, v: DocumentsViewer, r: RequestRow, reason: string, school: School, last: number): R<{ version: number }> {
+    if (r.audience !== "STUDENT" || !r.studentId) return fail(documentsError("INVALID_STATE", "Os cartões são só de alunos."));
+    const ref = this.requests.ref(r);
+    const res = await this.cards.forRequest(repo.cards(), store, r.studentId, { id: r.id, ref, reason: reason || null }, this.requests.actor(v), school);
+    if (!res.ok) return res;
+    const c = res.value;
+    return this.store(repo, store, v, r, { method: "AUTO", templateVersion: null, fileName: `cartao-${slug(c.name)}-${ref}-v${last + 1}.pdf`, mimeType: "application/pdf", content: c.pdf, reason: reason || null }, `Cartão de estudante emitido (n.º ${c.cardNumber}${c.version > 1 ? `, ${c.version}.ª via` : ""})`);
   }
 
   /** Junta o documento preparado fora (PDF, JPG ou PNG até 10 MB, com o tipo real verificado). */

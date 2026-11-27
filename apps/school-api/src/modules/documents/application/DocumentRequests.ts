@@ -1,11 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Logger } from "@nestjs/common";
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import { canAccessStudent, isAdult } from "../../family/domain/family";
 import type { StaffNotify } from "../../notifications/infrastructure/notifier";
+import type { HrFileStore } from "../../hr/application/employee-ports";
+import { isCardCategory } from "../domain/cards";
+import { checkAttachments } from "../domain/issuing";
 import {
+  type AttachmentItem,
   type Audience,
+  canAttach,
   canDeliver,
   canDownload,
   canIssue,
@@ -28,7 +33,7 @@ import {
   staffTransition,
   STATUS_LABELS,
 } from "../domain/documents";
-import type { Actor, Beneficiary, IssuedRow, ListFilter, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
+import type { Actor, AttachmentRow, Beneficiary, IssuedRow, ListFilter, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
 import { audiencesFor, can, type DocumentsViewer } from "./DocumentTypes";
 
 type R<T> = Promise<Result<T, DocumentsError>>;
@@ -49,6 +54,14 @@ export interface FamilyNotify {
 export interface Notices {
   staff: StaffNotify;
   family: FamilyNotify;
+}
+type UploadFile = { originalname: string; mimetype: string; buffer: Buffer };
+/** Os documentos que quem pede junta ao pedido (um ficheiro por documento pedido pelo tipo). */
+/** Quem junta ou abre um documento do pedido. */
+export type Who = { kind: "FAMILY"; accountId: string } | { kind: "EMPLOYEE"; userId: string; name: string } | { kind: "STAFF"; viewer: DocumentsViewer };
+export interface Uploads {
+  store: HrFileStore;
+  files: { itemKey: string; file: UploadFile }[];
 }
 
 /** Quem levanta: o próprio, o encarregado (só para alunos) ou uma pessoa autorizada (com documento de identificação). */
@@ -104,9 +117,20 @@ export class DocumentRequests {
   }
 
   /** O pedido tal como a família ou o funcionário o vê (sem as notas internas). */
-  private publicView(r: RequestRow, events: Awaited<ReturnType<Repo["events"]>>, delivery: Awaited<ReturnType<Repo["delivery"]>>, fields: ExtraField[], file: IssuedRow | null) {
+  /** Os documentos juntos: por documento pedido, o ficheiro mais recente (os anteriores ficam no histórico). */
+  attachmentsView(r: RequestRow, items: AttachmentItem[], rows: AttachmentRow[]) {
+    const view = (a: AttachmentRow) => ({ id: a.id, itemKey: a.itemKey, label: a.label, name: a.fileName, size: a.size, mimeType: a.mimeType, by: a.uploadedByName, byKind: a.uploadedByKind, at: a.createdAt.toISOString() });
+    const known = items.map((i) => ({ ...i, file: rows.find((a) => a.itemKey === i.key) ? view(rows.find((a) => a.itemKey === i.key)!) : null }));
+    // ficheiros de documentos que o tipo já não pede (o tipo mudou depois do pedido)
+    const others = rows.filter((a) => !items.some((i) => i.key === a.itemKey) && rows.find((x) => x.itemKey === a.itemKey) === a).map((a) => ({ key: a.itemKey, label: a.label, required: false, hint: null, file: view(a) }));
+    return { attachmentItems: [...known, ...others], attachmentsCount: rows.length, canAttach: canAttach(r.status) && items.length > 0 };
+  }
+
+  private publicView(r: RequestRow, events: Awaited<ReturnType<Repo["events"]>>, delivery: Awaited<ReturnType<Repo["delivery"]>>, type: TypeRow | null, file: IssuedRow | null, attachments: AttachmentRow[]) {
+    const fields: ExtraField[] = type?.fields ?? [];
     const snap = snapshotOf(r, file);
     return {
+      ...this.attachmentsView(r, type?.attachments ?? [], attachments),
       id: r.id,
       reference: this.ref(r),
       typeName: r.typeName,
@@ -240,11 +264,15 @@ export class DocumentRequests {
 
   // ================================================================ criar (comum)
 
-  private async create(repo: Repo, notices: Notices, input: { type: TypeRow; beneficiary: Beneficiary; studentId: string | null; employeeId: string | null; requester: { kind: "FAMILY" | "EMPLOYEE" | "STAFF"; accountId: string | null; userId: string | null; name: string; relationship: "SELF" | "GUARDIAN" | "STAFF" }; answers: Record<string, unknown> | null | undefined; notes: string | null | undefined }, actor: Actor): R<{ id: string; reference: string }> {
+  private async create(repo: Repo, notices: Notices, input: { type: TypeRow; beneficiary: Beneficiary; studentId: string | null; employeeId: string | null; requester: { kind: "FAMILY" | "EMPLOYEE" | "STAFF"; accountId: string | null; userId: string | null; name: string; relationship: "SELF" | "GUARDIAN" | "STAFF" }; answers: Record<string, unknown> | null | undefined; notes: string | null | undefined; uploads?: Uploads | null }, actor: Actor): R<{ id: string; reference: string }> {
     const t = input.type;
     if (!t.active) return fail(documentsError("NOT_AVAILABLE", "Este documento já não se pode pedir."));
     const a = checkAnswers(t.fields, input.answers);
     if (!a.ok) return fail(documentsError("INVALID_INPUT", a.message));
+    // os documentos a juntar (ao balcão o colégio vê-os em papel: os obrigatórios não se exigem)
+    const att = checkAttachments(t.attachments ?? [], input.uploads?.files ?? [], input.requester.kind !== "STAFF");
+    if (!att.ok) return fail(documentsError("INVALID_INPUT", att.message));
+    if (att.files.length && !input.uploads?.store.ready) return fail(documentsError("NOT_AVAILABLE", "O armazenamento de ficheiros deste colégio ainda não está configurado: fale com a EduFlow."));
     const notes = clean(input.notes, 600) || null;
     const now = this.clock.now();
     const day = today(now);
@@ -257,6 +285,12 @@ export class DocumentRequests {
     const due = dueOn(day, t.slaDays);
     const chargeId = t.fee ? randomUUID() : null;
     const id = randomUUID();
+    // os ficheiros guardam-se (cifrados) só depois de tudo validado
+    const stored: { itemKey: string; label: string; fileName: string; mimeType: string; size: number; sha256: string; storageKey: string }[] = [];
+    for (const f of att.files) {
+      const saved = await input.uploads!.store.save(`documents/${id}/anexos`, { fileName: f.name, mimeType: f.mime, content: f.content });
+      stored.push({ itemKey: f.item.key, label: f.item.label, fileName: f.name, mimeType: f.mime, size: f.content.length, sha256: createHash("sha256").update(f.content).digest("hex"), storageKey: saved.key });
+    }
     const { number } = await repo.transaction(async (tx) => {
       if (chargeId && year && input.studentId) await tx.createCharge({ id: chargeId, label: `Documento: ${t.name}`, amount: t.fee!, yearId: year.yearId, enrollmentId: year.enrollmentId, studentId: input.studentId, dueOn: day }, now);
       const created = await tx.createRequest(
@@ -291,6 +325,7 @@ export class DocumentRequests {
         id,
       );
       if (chargeId) await tx.renameCharge(chargeId, `Documento: ${t.name} (${requestNumber(Number(day.slice(0, 4)), created.number)})`, now);
+      for (const s of stored) await tx.addAttachment(id, s, actor, now);
       return created;
     });
     await this.afterCreate(repo, notices, id, input.requester.kind === "STAFF");
@@ -312,10 +347,10 @@ export class DocumentRequests {
     return { students, types: types.map((t) => this.catalogType(t)) };
   }
   private catalogType(t: TypeRow) {
-    return { id: t.id, name: t.name, category: t.category, description: t.description, requirements: t.requirements, methodLabel: METHODS[t.method].label, pickup: t.pickup, download: t.download, fee: t.fee, feePolicyLabel: t.fee ? FEE_POLICIES[t.feePolicy].hint : null, slaDays: t.slaDays, requiresApproval: t.requiresApproval, fields: t.fields, departmentLabel: DEPARTMENTS[t.department] };
+    return { id: t.id, name: t.name, category: t.category, description: t.description, requirements: t.requirements, methodLabel: METHODS[t.method].label, pickup: t.pickup, download: t.download, fee: t.fee, feePolicyLabel: t.fee ? FEE_POLICIES[t.feePolicy].hint : null, slaDays: t.slaDays, requiresApproval: t.requiresApproval, fields: t.fields, attachments: t.attachments ?? [], departmentLabel: DEPARTMENTS[t.department] };
   }
 
-  async familyCreate(repo: Repo, notices: Notices, accountId: string, body: { studentId: string; typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }): R<{ id: string; reference: string }> {
+  async familyCreate(repo: Repo, notices: Notices, accountId: string, body: { studentId: string; typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }, uploads?: Uploads | null): R<{ id: string; reference: string }> {
     const link = await repo.familyLink(accountId, body.studentId);
     // o aluno tem de ser da conta: o próprio (maior) ou um menor que o encarregado gere
     if (!link || !canAccessStudent({ self: link.self, managingGuardian: link.managing }, link.birthDate, today(this.clock.now()))) return fail(documentsError("NOT_FOUND", "Aluno não encontrado."));
@@ -327,7 +362,7 @@ export class DocumentRequests {
     return this.create(
       repo,
       notices,
-      { type, beneficiary, studentId: body.studentId, employeeId: null, requester: { kind: "FAMILY", accountId, userId: null, name, relationship: link.self ? "SELF" : "GUARDIAN" }, answers: body.answers, notes: body.notes },
+      { type, beneficiary, studentId: body.studentId, employeeId: null, requester: { kind: "FAMILY", accountId, userId: null, name, relationship: link.self ? "SELF" : "GUARDIAN" }, answers: body.answers, notes: body.notes, uploads },
       { kind: "FAMILY", id: accountId, name },
     );
   }
@@ -350,8 +385,8 @@ export class DocumentRequests {
     await this.syncPayments(repo, notices);
     const r = await this.familyOwned(repo, accountId, id);
     if (!r) return notFound();
-    const [events, delivery, type, file] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id)]);
-    return ok(this.publicView(r, events, delivery, type?.fields ?? [], file));
+    const [events, delivery, type, file, attachments] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id), repo.attachments(id)]);
+    return ok(this.publicView(r, events, delivery, type, file, attachments));
   }
   async familyCancel(repo: Repo, notices: Notices, accountId: string, id: string, reason: string | null): R<{ status: RequestStatus }> {
     const r = await this.familyOwned(repo, accountId, id);
@@ -388,7 +423,7 @@ export class DocumentRequests {
     const [types, snap] = await Promise.all([repo.types(["EMPLOYEE"], true), repo.employeeSnapshot(e.id)]);
     return ok({ employee: snap && { id: e.id, name: snap.name, number: snap.number, jobTitle: snap.jobTitle, department: snap.department }, types: types.map((t) => this.catalogType(t)) });
   }
-  async mineCreate(repo: Repo, notices: Notices, v: DocumentsViewer, body: { typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }): R<{ id: string; reference: string }> {
+  async mineCreate(repo: Repo, notices: Notices, v: DocumentsViewer, body: { typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }, uploads?: Uploads | null): R<{ id: string; reference: string }> {
     const e = await this.me(repo, v.userId);
     if (!e) return fail(documentsError("FORBIDDEN", "Só os funcionários com a ficha no RH podem pedir documentos profissionais."));
     const type = await repo.type(body.typeId);
@@ -396,7 +431,7 @@ export class DocumentRequests {
     const snap = await repo.employeeSnapshot(e.id);
     if (!snap) return fail(documentsError("NOT_FOUND", "Funcionário não encontrado."));
     const { status: _s, userId: _u, ...beneficiary } = snap;
-    return this.create(repo, notices, { type, beneficiary, studentId: null, employeeId: e.id, requester: { kind: "EMPLOYEE", accountId: null, userId: v.userId, name: snap.name, relationship: "SELF" }, answers: body.answers, notes: body.notes }, { kind: "EMPLOYEE", id: v.userId, name: snap.name });
+    return this.create(repo, notices, { type, beneficiary, studentId: null, employeeId: e.id, requester: { kind: "EMPLOYEE", accountId: null, userId: v.userId, name: snap.name, relationship: "SELF" }, answers: body.answers, notes: body.notes, uploads }, { kind: "EMPLOYEE", id: v.userId, name: snap.name });
   }
   async mineList(repo: Repo, userId: string, f: { status?: RequestStatus | "OPEN"; q?: string; page?: number }) {
     const e = await repo.employeeOfUser(userId);
@@ -412,8 +447,8 @@ export class DocumentRequests {
   async mineDetail(repo: Repo, userId: string, id: string) {
     const r = await this.mineOwned(repo, userId, id);
     if (!r) return notFound();
-    const [events, delivery, type, file] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id)]);
-    return ok(this.publicView(r, events, delivery, type?.fields ?? [], file));
+    const [events, delivery, type, file, attachments] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id), repo.attachments(id)]);
+    return ok(this.publicView(r, events, delivery, type, file, attachments));
   }
   async mineCancel(repo: Repo, notices: Notices, v: DocumentsViewer, id: string, reason: string | null): R<{ status: RequestStatus }> {
     const r = await this.mineOwned(repo, v.userId, id);
@@ -447,9 +482,9 @@ export class DocumentRequests {
     await this.syncPayments(repo, notices);
     const r = await repo.request(id);
     if (!r || !can(v, r.audience, "view")) return notFound();
-    const [events, delivery, type, files] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.issued(id)]);
+    const [events, delivery, type, files, attachments] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.issued(id), repo.attachments(id)]);
     const file = files.find((f) => f.status === "ACTIVE") ?? null;
-    const base = this.publicView(r, events, delivery, type?.fields ?? [], file);
+    const base = this.publicView(r, events, delivery, type, file, attachments);
     const snap = snapshotOf(r, file);
     const adult = r.beneficiary.kind === "STUDENT" ? isAdult(r.beneficiary.birthDate, today(this.clock.now())) : true;
     const process = can(v, r.audience, "process");
@@ -462,7 +497,9 @@ export class DocumentRequests {
       fields: type?.fields ?? [],
       adult,
       templateVersion: type?.templateVersion ?? null,
-      files: files.map((f) => ({ id: f.id, version: f.version, method: f.method, methodLabel: f.method === "AUTO" ? "Gerado com o modelo" : "Carregado", templateVersion: f.templateVersion, name: f.fileName, size: f.size, mimeType: f.mimeType, status: f.status, reason: f.reason, by: f.createdByName, at: f.createdAt.toISOString() })),
+      /** um cartão de estudante: emite-se com o modelo do cartão (Documentos › Cartões de estudante) */
+      isCard: isCardCategory(r.category),
+      files: files.map((f) => ({ id: f.id, version: f.version, method: f.method, methodLabel: f.method === "AUTO" ? (isCardCategory(r.category) ? "Cartão gerado" : "Gerado com o modelo") : "Carregado", templateVersion: f.templateVersion, name: f.fileName, size: f.size, mimeType: f.mimeType, status: f.status, reason: f.reason, by: f.createdByName, at: f.createdAt.toISOString() })),
       receiverOptions: (Object.keys(RECEIVER_RELATIONSHIPS) as ReceiverRelationship[])
         .filter((k) => (r.audience === "EMPLOYEE" ? k !== "GUARDIAN" : adult ? k !== "GUARDIAN" : k !== "SELF"))
         .map((k) => ({ key: k, label: RECEIVER_RELATIONSHIPS[k] })),
@@ -478,8 +515,10 @@ export class DocumentRequests {
         deliver: can(v, r.audience, "deliver") && canDeliver(r.status) && releaseAllowed(r),
         note: process || can(v, r.audience, "deliver"),
         // emitir com o modelo (só documentos automáticos com modelo) ou carregar o ficheiro preparado fora
-        generate: process && canIssue(r.status) && r.method === "AUTO" && !!type?.templateVersion,
+        generate: process && canIssue(r.status) && r.method === "AUTO" && (!!type?.templateVersion || isCardCategory(r.category)),
         upload: process && canIssue(r.status),
+        // o balcão junta os documentos que a pessoa trouxe em papel
+        attach: process && canAttach(r.status) && (type?.attachments.length ?? 0) > 0,
       },
       deliverBlocked: canDeliver(r.status) && !releaseAllowed(r) ? "A taxa ainda não foi paga: só se entrega depois de as Finanças confirmarem o pagamento." : null,
     });
@@ -571,8 +610,57 @@ export class DocumentRequests {
     return ok({ status: "COMPLETED" as RequestStatus });
   }
 
+  // ================================================================ documentos juntos (depois de pedir)
+
+  /** O pedido, se quem está a ver o pode ver: a família (os seus alunos), o funcionário (os seus) ou a equipa. */
+  private async reach(repo: Repo, who: Who, id: string) {
+    if (who.kind === "FAMILY") return this.familyOwned(repo, who.accountId, id);
+    if (who.kind === "EMPLOYEE") return this.mineOwned(repo, who.userId, id);
+    const r = await repo.request(id);
+    return r && can(who.viewer, r.audience, "view") ? r : null;
+  }
+  private async whoActor(repo: Repo, who: Who): Promise<Actor> {
+    if (who.kind === "FAMILY") return { kind: "FAMILY", id: who.accountId, name: await repo.familyName(who.accountId) };
+    if (who.kind === "EMPLOYEE") return { kind: "EMPLOYEE", id: who.userId, name: who.name };
+    return this.actor(who.viewer);
+  }
+
+  /** Juntar um documento ao pedido (quem pediu, ou o balcão) enquanto o colégio ainda o está a tratar. */
+  async addAttachment(repo: Repo, store: HrFileStore, notices: Notices, who: Who, id: string, itemKey: string, file: UploadFile | undefined): R<{ saved: true }> {
+    const r = await this.reach(repo, who, id);
+    if (!r) return notFound();
+    if (who.kind === "STAFF" && !can(who.viewer, r.audience, "process")) return fail(documentsError("FORBIDDEN", "Juntar documentos exige a permissão de tratar os pedidos."));
+    if (!canAttach(r.status)) return fail(documentsError("INVALID_STATE", `Já não se juntam documentos: o pedido está “${STATUS_LABELS[r.status]}”.`));
+    const type = await repo.type(r.typeId);
+    if (!file) return fail(documentsError("INVALID_INPUT", "Escolha o ficheiro (PDF, JPG ou PNG)."));
+    const c = checkAttachments(type?.attachments ?? [], [{ itemKey, file }], false);
+    if (!c.ok) return fail(documentsError("INVALID_INPUT", c.message));
+    if (!store.ready) return fail(documentsError("NOT_AVAILABLE", "O armazenamento de ficheiros deste colégio ainda não está configurado: fale com a EduFlow."));
+    const f = c.files[0];
+    const saved = await store.save(`documents/${r.id}/anexos`, { fileName: f.name, mimeType: f.mime, content: f.content });
+    const actor = await this.whoActor(repo, who);
+    const now = this.clock.now();
+    await repo.transaction(async (tx) => {
+      await tx.addAttachment(r.id, { itemKey: f.item.key, label: f.item.label, fileName: f.name, mimeType: f.mime, size: f.content.length, sha256: createHash("sha256").update(f.content).digest("hex"), storageKey: saved.key }, actor, now);
+      await tx.event(r.id, { kind: "FILE", from: null, to: null, note: `Documento junto: ${f.item.label}`, internal: false }, actor, now);
+    });
+    if (who.kind !== "STAFF") await this.quietly("documento junto", () => this.tellStaff(repo, notices, r, `Documento junto ao pedido: ${r.typeName}`, `${this.ref(r)} · ${r.beneficiary.name}: ${f.item.label}`, `att:${now.getTime()}`));
+    return ok({ saved: true as const });
+  }
+
+  /** Abrir um documento junto (quem pediu ou a equipa); quando a equipa o abre, fica no histórico interno. */
+  async attachmentFile(repo: Repo, store: HrFileStore, who: Who, id: string, fileId: string): R<{ fileName: string; mimeType: string; content: Buffer }> {
+    const r = await this.reach(repo, who, id);
+    if (!r) return notFound();
+    const a = (await repo.attachments(id)).find((x) => x.id === fileId);
+    if (!a) return fail(documentsError("NOT_FOUND", "Ficheiro não encontrado."));
+    const content = await store.read(a.storageKey);
+    if (who.kind === "STAFF") await repo.event(id, { kind: "FILE", from: null, to: null, note: `Documento junto aberto pela equipa: ${a.label}`, internal: true }, this.actor(who.viewer), this.clock.now());
+    return ok({ fileName: a.fileName, mimeType: a.mimeType, content });
+  }
+
   /** Ao balcão: a equipa regista um pedido em nome de um aluno (secretaria) ou de um funcionário (RH). */
-  async staffCreate(repo: Repo, notices: Notices, v: DocumentsViewer, body: { typeId: string; studentId?: string | null; employeeId?: string | null; answers?: Record<string, unknown> | null; notes?: string | null }): R<{ id: string; reference: string }> {
+  async staffCreate(repo: Repo, notices: Notices, v: DocumentsViewer, body: { typeId: string; studentId?: string | null; employeeId?: string | null; answers?: Record<string, unknown> | null; notes?: string | null }, uploads?: Uploads | null): R<{ id: string; reference: string }> {
     const type = await repo.type(body.typeId);
     if (!type) return fail(documentsError("NOT_FOUND", "Documento não encontrado."));
     if (!can(v, type.audience, "process")) return fail(documentsError("FORBIDDEN", "Não tem permissão para registar pedidos deste documento."));
@@ -581,12 +669,12 @@ export class DocumentRequests {
       if (!body.studentId) return fail(documentsError("INVALID_INPUT", "Escolha o aluno."));
       const s = await repo.studentSnapshot(body.studentId);
       if (!s) return fail(documentsError("NOT_FOUND", "Aluno não encontrado."));
-      return this.create(repo, notices, { type, beneficiary: s, studentId: body.studentId, employeeId: null, requester, answers: body.answers, notes: body.notes }, this.actor(v));
+      return this.create(repo, notices, { type, beneficiary: s, studentId: body.studentId, employeeId: null, requester, answers: body.answers, notes: body.notes, uploads }, this.actor(v));
     }
     if (!body.employeeId) return fail(documentsError("INVALID_INPUT", "Escolha o funcionário."));
     const e = await repo.employeeSnapshot(body.employeeId);
     if (!e || !["APPROVED", "ACTIVE", "SUSPENDED", "TERMINATED"].includes(e.status)) return fail(documentsError("NOT_FOUND", "Funcionário não encontrado."));
     const { status: _s, userId: _u, ...beneficiary } = e;
-    return this.create(repo, notices, { type, beneficiary, studentId: null, employeeId: body.employeeId, requester, answers: body.answers, notes: body.notes }, this.actor(v));
+    return this.create(repo, notices, { type, beneficiary, studentId: null, employeeId: body.employeeId, requester, answers: body.answers, notes: body.notes, uploads }, this.actor(v));
   }
 }

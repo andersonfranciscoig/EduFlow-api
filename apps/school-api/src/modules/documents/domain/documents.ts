@@ -67,6 +67,29 @@ export function checkFields(list: unknown[]): { ok: true; fields: ExtraField[] }
   return { ok: true, fields: out };
 }
 
+/** Um documento que quem pede junta (ex.: cópia do BI, declaração do banco). */
+export interface AttachmentItem {
+  key: string;
+  label: string;
+  required: boolean;
+  hint: string | null;
+}
+/** Os documentos a juntar de um tipo: até 5, com nome e se são obrigatórios. */
+export function checkAttachmentItems(list: unknown[]): { ok: true; items: AttachmentItem[] } | { ok: false; message: string } {
+  if (!Array.isArray(list) || list.length > 5) return { ok: false, message: "No máximo 5 documentos a juntar." };
+  const out: AttachmentItem[] = [];
+  for (const raw of list as Record<string, unknown>[]) {
+    const label = clean(raw?.label, 80);
+    if (label.length < 2) return { ok: false, message: "Cada documento a juntar precisa de um nome (2 a 80 caracteres)." };
+    let key = slug(String(raw?.key ?? "") || label) || "anexo";
+    while (out.some((f) => f.key === key)) key = `${key}-${out.length + 1}`;
+    out.push({ key, label, required: !!raw?.required, hint: clean(raw?.hint, 200) || null });
+  }
+  return { ok: true, items: out };
+}
+/** Quem pede pode juntar documentos enquanto o colégio ainda não o deu como pronto. */
+export const canAttach = (s: RequestStatus) => s === "PENDING" || s === "IN_REVIEW" || s === "AWAITING_PAYMENT" || s === "PROCESSING";
+
 /** As respostas aos campos extra: só os campos do tipo; os obrigatórios preenchidos; formatos certos. */
 export function checkAnswers(fields: ExtraField[], answers: Record<string, unknown> | null | undefined): { ok: true; answers: Record<string, string> } | { ok: false; message: string } {
   const out: Record<string, string> = {};
