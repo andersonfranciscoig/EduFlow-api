@@ -1,0 +1,23 @@
+---
+description: Regras para desenvolvimento Backend
+alwaysApply: true
+---
+
+
+# Regras de desenvolvimento
+
+
+Analisa apenas os ficheiros relevantes para a tarefa.
+Não analises o projecto inteiro sem necessidade.
+Respeita rigorosamente a arquitectura existente.
+Reutiliza componentes, serviços, funções e padrões existentes.
+Não cries novas abstrações sem necessidade.
+Não alteres ficheiros que não estejam relacionados com a tarefa.
+Não reescrevas código que já funciona.
+Evita dependências desnecessárias.
+Não apresentes explicações extensas antes de executar tarefas.
+Antes de alterar código, identifica os ficheiros afectados.
+Implementa apenas o escopo solicitado.
+Executa testes específicos da funcionalidade alterada.
+No final, apresenta um resumo curto das alterações.
+Se faltar informação, pergunta antes de assumir.
