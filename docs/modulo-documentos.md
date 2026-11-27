@@ -63,6 +63,7 @@ Famílias: o encarregado só vê os educandos que gere (`student_guardians.can_m
 ## 5. Regras importantes
 
 - Transições validadas no backend; cada passo fica no histórico com o estado anterior, o novo, quem, quando e o motivo.
+- Campos dos modelos com o BI: `{{student_id_number}}` (da ficha do aluno, dados da inscrição) e `{{employee_id_number}}` (dos dados pessoais do RH). Leem-se na emissão e não ficam na cópia do pedido; sem BI na ficha, o documento não se emite e o sistema diz que falta.
 - Um documento automático não fica pronto sem ser emitido; com dados em falta não se emite e o sistema diz quais faltam. Nunca se inventam dados.
 - Ficheiros (documentos, fotografias) cifrados no armazenamento do próprio colégio; downloads só pela API, com a sessão.
 - Documentos juntos: só os que o tipo pede, um ficheiro por documento (PDF, JPG ou PNG até 10 MB, tipo real verificado). Os obrigatórios vêm com o pedido (ao balcão não se exigem: a equipa vê-os em papel). Juntam-se mais enquanto o pedido está a ser tratado (até ficar pronto); o anterior fica no histórico.

@@ -361,6 +361,14 @@ export class PrismaDocumentsRepository {
     if (!r) return null;
     return { kind: "EMPLOYEE", name: r.name, number: r.number ? String(r.number).padStart(4, "0") : null, jobTitle: r.jobTitle, department: r.department, status: r.status, userId: r.userId };
   }
+  /** O n.º do Bilhete de Identidade da ficha (aluno: dados da inscrição; funcionário: dados pessoais do RH). Não fica na cópia do pedido. */
+  async idNumber(kind: "STUDENT" | "EMPLOYEE", id: string): Promise<string | null> {
+    const [r] =
+      kind === "STUDENT"
+        ? await this.db.$queryRaw<{ v: string | null }[]>`SELECT nullif(btrim(data->>'idNumber'), '') AS v FROM students WHERE id = ${id}::uuid`
+        : await this.db.$queryRaw<{ v: string | null }[]>`SELECT nullif(btrim(personal->>'idNumber'), '') AS v FROM employees WHERE id = ${id}::uuid`;
+    return r?.v ?? null;
+  }
   async userName(userId: string) {
     const [r] = await this.db.$queryRaw<{ name: string }[]>`SELECT full_name AS name FROM school_users WHERE id = ${userId}::uuid`;
     return r?.name ?? "Equipa do colégio";
