@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import { formatStudentNumber } from "../../admissions/domain/enrollment";
 import { gradeLabel } from "../../pedagogy/domain/academic";
 import type { Audience, Department, ExtraField, Method, RequestStatus } from "../domain/documents";
+import { PrismaCardsRepository } from "./prisma-cards";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 const json = (v: unknown) => JSON.stringify(v ?? null);
@@ -187,6 +188,10 @@ export class PrismaDocumentsRepository {
   }
   async transaction<T>(fn: (repo: PrismaDocumentsRepository) => Promise<T>): Promise<T> {
     return (this.db as PrismaClient).$transaction((tx) => fn(new PrismaDocumentsRepository(tx)), { timeout: 30_000 });
+  }
+  /** Os cartões de estudante, na mesma ligação (os pedidos de cartão emitem-nos). */
+  cards() {
+    return new PrismaCardsRepository(this.db);
   }
 
   // ================================================================ tipos

@@ -49,9 +49,10 @@ export async function syncDocumentFees(t: TenantContext, notifier: Notifier) {
 const logos = new Map<string, { at: number; logo: Buffer | null }>();
 export async function schoolOf(t: TenantContext): Promise<School> {
   const url = t.entry.logoUrl;
-  if (!url || !/^https?:\/\//.test(url)) return { name: t.entry.schoolName, logo: null };
+  const base = { name: t.entry.schoolName, slug: t.entry.slug };
+  if (!url || !/^https?:\/\//.test(url)) return { ...base, logo: null };
   const hit = logos.get(url);
-  if (hit && Date.now() - hit.at < 10 * 60_000) return { name: t.entry.schoolName, logo: hit.logo };
+  if (hit && Date.now() - hit.at < 10 * 60_000) return { ...base, logo: hit.logo };
   let logo: Buffer | null = null;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -61,7 +62,7 @@ export async function schoolOf(t: TenantContext): Promise<School> {
     logo = null;
   }
   logos.set(url, { at: Date.now(), logo });
-  return { name: t.entry.schoolName, logo };
+  return { ...base, logo };
 }
 /** Entrega um ficheiro: PDF e imagens abrem no navegador; nunca há URL pública. */
 export function sendDocument(res: Response, f: FileOut, attachment = false) {
@@ -288,7 +289,7 @@ export class DocumentsController {
   @Get("requests/:id/preview")
   @ApiOperation({ summary: "Pré-visualizar o documento do pedido com o modelo e os dados atuais (não fica guardado)" })
   async previewRequest(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Res({ passthrough: true }) res: Response) {
-    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), await this.staff(t, u), requestId, await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), requestId, await schoolOf(t)), DOCUMENTS_HTTP));
   }
 
   @Post("requests/:id/generate")

@@ -4,6 +4,7 @@ import type { Clock } from "../../../../../../libs/kernel/src/application/ports"
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import { canAccessStudent, isAdult } from "../../family/domain/family";
 import type { StaffNotify } from "../../notifications/infrastructure/notifier";
+import { isCardCategory } from "../domain/cards";
 import {
   type Audience,
   canDeliver,
@@ -462,7 +463,9 @@ export class DocumentRequests {
       fields: type?.fields ?? [],
       adult,
       templateVersion: type?.templateVersion ?? null,
-      files: files.map((f) => ({ id: f.id, version: f.version, method: f.method, methodLabel: f.method === "AUTO" ? "Gerado com o modelo" : "Carregado", templateVersion: f.templateVersion, name: f.fileName, size: f.size, mimeType: f.mimeType, status: f.status, reason: f.reason, by: f.createdByName, at: f.createdAt.toISOString() })),
+      /** um cartão de estudante: emite-se com o modelo do cartão (Documentos › Cartões de estudante) */
+      isCard: isCardCategory(r.category),
+      files: files.map((f) => ({ id: f.id, version: f.version, method: f.method, methodLabel: f.method === "AUTO" ? (isCardCategory(r.category) ? "Cartão gerado" : "Gerado com o modelo") : "Carregado", templateVersion: f.templateVersion, name: f.fileName, size: f.size, mimeType: f.mimeType, status: f.status, reason: f.reason, by: f.createdByName, at: f.createdAt.toISOString() })),
       receiverOptions: (Object.keys(RECEIVER_RELATIONSHIPS) as ReceiverRelationship[])
         .filter((k) => (r.audience === "EMPLOYEE" ? k !== "GUARDIAN" : adult ? k !== "GUARDIAN" : k !== "SELF"))
         .map((k) => ({ key: k, label: RECEIVER_RELATIONSHIPS[k] })),
@@ -478,7 +481,7 @@ export class DocumentRequests {
         deliver: can(v, r.audience, "deliver") && canDeliver(r.status) && releaseAllowed(r),
         note: process || can(v, r.audience, "deliver"),
         // emitir com o modelo (só documentos automáticos com modelo) ou carregar o ficheiro preparado fora
-        generate: process && canIssue(r.status) && r.method === "AUTO" && !!type?.templateVersion,
+        generate: process && canIssue(r.status) && r.method === "AUTO" && (!!type?.templateVersion || isCardCategory(r.category)),
         upload: process && canIssue(r.status),
       },
       deliverBlocked: canDeliver(r.status) && !releaseAllowed(r) ? "A taxa ainda não foi paga: só se entrega depois de as Finanças confirmarem o pagamento." : null,

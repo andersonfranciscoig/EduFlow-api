@@ -2177,5 +2177,69 @@ model DocumentDelivery {
   @@map("document_deliveries")
 }
 
+/// Cartões de estudante: o modelo escolhido pelo colégio (um dos três da plataforma) e a personalização. Uma linha.
+model StudentCardSettings {
+  id            Int       @id @default(1) @db.SmallInt
+  /// CLASSICO | MODERNO | CONTEMPORANEO
+  model         String    @default("CLASSICO")
+  primaryColor  String    @default("#0f3d33") @map("primary_color")
+  accentColor   String    @default("#c9a227") @map("accent_color")
+  address       String?
+  phone         String?
+  email         String?
+  showQr        Boolean   @default(true) @map("show_qr")
+  backNote      String?   @map("back_note")
+  updatedById   String?   @map("updated_by_id") @db.Uuid
+  updatedByName String?   @map("updated_by_name")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("student_card_settings")
+}
+
+/// A fotografia do aluno carregada pela secretaria (cifrada no armazenamento do colégio).
+model StudentPhoto {
+  id             String   @id @db.Uuid
+  studentId      String   @map("student_id") @db.Uuid
+  fileName       String   @map("file_name")
+  mimeType       String   @map("mime_type")
+  size           Int
+  sha256         String
+  storageKey     String   @map("storage_key")
+  uploadedById   String?  @map("uploaded_by_id") @db.Uuid
+  uploadedByName String?  @map("uploaded_by_name")
+  createdAt      DateTime @map("created_at")
+
+  @@index([studentId, createdAt], map: "student_photos_student_idx")
+  @@map("student_photos")
+}
+
+/// Um cartão de estudante emitido (por aluno e ano letivo, com versões; a segunda via substitui a anterior).
+model StudentCard {
+  id             String    @id @db.Uuid
+  number         Int       @unique(map: "student_cards_number_key") @default(autoincrement())
+  studentId      String    @map("student_id") @db.Uuid
+  academicYearId String    @map("academic_year_id") @db.Uuid
+  version        Int
+  code           String    @unique(map: "student_cards_code_key")
+  /// CLASSICO | MODERNO | CONTEMPORANEO
+  model          String
+  /// a cópia do que foi impresso
+  data           Json
+  validUntil     DateTime  @map("valid_until") @db.Date
+  /// ACTIVE | REPLACED | REVOKED
+  status         String    @default("ACTIVE")
+  reason         String?
+  revokeReason   String?   @map("revoke_reason")
+  requestId      String?   @map("request_id") @db.Uuid
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdByName  String?   @map("created_by_name")
+  createdAt      DateTime  @map("created_at")
+  endedAt        DateTime? @map("ended_at")
+
+  @@unique([studentId, academicYearId, version], map: "student_cards_version_key")
+  @@index([academicYearId, status], map: "student_cards_year_idx")
+  @@map("student_cards")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.
