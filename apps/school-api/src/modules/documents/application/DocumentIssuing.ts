@@ -116,11 +116,11 @@ export class DocumentIssuing {
     };
     if (r.studentId) {
       const s = await repo.studentSnapshot(r.studentId);
-      Object.assign(v, { student_name: s?.name ?? null, student_number: s?.number ?? null, birth_date: dmy(s?.birthDate), class_name: s?.classLabel ?? null, group_name: s?.groupName ?? null, academic_year: s?.yearName ?? null, shift: s?.shift ? (SHIFTS[s.shift] ?? s.shift) : null });
+      Object.assign(v, { student_name: s?.name ?? null, student_number: s?.number ?? null, student_id_number: await repo.idNumber("STUDENT", r.studentId), birth_date: dmy(s?.birthDate), class_name: s?.classLabel ?? null, group_name: s?.groupName ?? null, academic_year: s?.yearName ?? null, shift: s?.shift ? (SHIFTS[s.shift] ?? s.shift) : null });
     }
     if (r.employeeId) {
       const e = await repo.employeeSnapshot(r.employeeId);
-      Object.assign(v, { employee_name: e?.name ?? null, employee_number: e?.number ?? null, employee_position: e?.jobTitle ?? null, employee_department: e?.department ?? null });
+      Object.assign(v, { employee_name: e?.name ?? null, employee_number: e?.number ?? null, employee_id_number: await repo.idNumber("EMPLOYEE", r.employeeId), employee_position: e?.jobTitle ?? null, employee_department: e?.department ?? null });
     }
     for (const [k, value] of Object.entries(r.answers)) v[fieldKey(k)] = value;
     return v;

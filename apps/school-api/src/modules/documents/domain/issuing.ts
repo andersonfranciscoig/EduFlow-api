@@ -18,6 +18,7 @@ export const PLACEHOLDERS: Placeholder[] = [
   { key: "requester_name", label: "Quem pediu", audience: "ALL", example: "Maria Exemplo" },
   { key: "student_name", label: "Nome do aluno", audience: "STUDENT", example: "Ana Exemplo da Silva" },
   { key: "student_number", label: "N.º de aluno", audience: "STUDENT", example: "00042" },
+  { key: "student_id_number", label: "N.º do Bilhete de Identidade do aluno", audience: "STUDENT", example: "004512345LA041" },
   { key: "birth_date", label: "Data de nascimento", audience: "STUDENT", example: "10/03/2012" },
   { key: "class_name", label: "Classe", audience: "STUDENT", example: "8.ª Classe" },
   { key: "group_name", label: "Turma", audience: "STUDENT", example: "8.ª A" },
@@ -25,6 +26,7 @@ export const PLACEHOLDERS: Placeholder[] = [
   { key: "shift", label: "Turno", audience: "STUDENT", example: "Manhã" },
   { key: "employee_name", label: "Nome do funcionário", audience: "EMPLOYEE", example: "João Exemplo" },
   { key: "employee_number", label: "N.º do funcionário", audience: "EMPLOYEE", example: "0007" },
+  { key: "employee_id_number", label: "N.º do Bilhete de Identidade do funcionário", audience: "EMPLOYEE", example: "001234567LA032" },
   { key: "employee_position", label: "Função", audience: "EMPLOYEE", example: "Professor" },
   { key: "employee_department", label: "Departamento", audience: "EMPLOYEE", example: "Ensino" },
 ];
