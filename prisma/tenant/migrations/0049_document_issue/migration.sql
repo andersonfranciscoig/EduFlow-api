@@ -19,6 +19,10 @@ ALTER TABLE "document_requests" ADD COLUMN "charge_id" UUID;
 ALTER TABLE "document_requests" ADD CONSTRAINT "document_requests_charge_fkey" FOREIGN KEY ("charge_id") REFERENCES "charges"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE INDEX "document_requests_charge_idx" ON "document_requests"("charge_id") WHERE "charge_id" IS NOT NULL;
 
+-- as cobranças ganham o tipo "Documento"
+ALTER TABLE "charges" DROP CONSTRAINT "charges_kind_check";
+ALTER TABLE "charges" ADD CONSTRAINT "charges_kind_check" CHECK ("kind" IN ('INSCRICAO', 'MATRICULA', 'PROPINA', 'DOCUMENTO', 'OUTRA'));
+
 -- o histórico ganha os ficheiros (emitido, carregado, descarregado)
 ALTER TABLE "document_request_events" DROP CONSTRAINT "document_request_events_kind_check";
 ALTER TABLE "document_request_events" ADD CONSTRAINT "document_request_events_kind_check" CHECK ("kind" IN ('STATUS', 'NOTE', 'FILE', 'PAYMENT'));
