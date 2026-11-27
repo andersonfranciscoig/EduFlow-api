@@ -82,7 +82,7 @@ export class CardsController {
   @ApiOperation({ summary: "Um cartão de exemplo (frente e verso, PDF) com a configuração enviada, mesmo por guardar" })
   @ApiBody({ schema: openApi(settingsBody) })
   async preview(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(settingsBody)) body: z.infer<typeof settingsBody>, @Res({ passthrough: true }) res: Response) {
-    return sendDocument(res, unwrap(await this.cards.preview(this.repo(t), await this.viewer(t, u), body, await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.cards.preview(this.repo(t), await this.viewer(t, u), body, await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP));
   }
 
   @Get("groups/:id")
@@ -94,7 +94,7 @@ export class CardsController {
   @Get("groups/:id/print")
   @ApiOperation({ summary: "Os cartões válidos da turma num PDF (?formato=cartao|folha)" })
   async groupPrint(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) groupId: string, @Query(printQuery) q: { formato?: string }, @Res({ passthrough: true }) res: Response) {
-    return sendDocument(res, unwrap(await this.cards.groupPdf(this.repo(t), this.stores.for(t.entry), await this.viewer(t, u), groupId, layoutOf(q.formato), await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.cards.groupPdf(this.repo(t), this.stores.for(t.entry), await this.viewer(t, u), groupId, layoutOf(q.formato), await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP));
   }
 
   @Get("students/:id")
@@ -125,7 +125,7 @@ export class CardsController {
   @ApiBody({ schema: openApi(issueBody) })
   async issue(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(issueBody)) body: z.infer<typeof issueBody>) {
     const v = await this.viewer(t, u);
-    return unwrap(await this.cards.issue(this.repo(t), this.stores.for(t.entry), v, this.requests.actor(v), body, await schoolOf(t)), DOCUMENTS_HTTP);
+    return unwrap(await this.cards.issue(this.repo(t), this.stores.for(t.entry), v, this.requests.actor(v), body, await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP);
   }
 
   @Get("print")
@@ -133,7 +133,7 @@ export class CardsController {
   async print(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Query(printQuery) q: { ids?: string; formato?: string }, @Res({ passthrough: true }) res: Response) {
     const ids = (q.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     if (ids.some((x) => !z.uuid().safeParse(x).success)) throw new UnprocessableEntityException({ code: "INVALID_INPUT", message: "Cartões inválidos." });
-    return sendDocument(res, unwrap(await this.cards.pdf(this.repo(t), this.stores.for(t.entry), await this.viewer(t, u), ids, layoutOf(q.formato), await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.cards.pdf(this.repo(t), this.stores.for(t.entry), await this.viewer(t, u), ids, layoutOf(q.formato), await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP));
   }
 
   @Post(":id/revoke")

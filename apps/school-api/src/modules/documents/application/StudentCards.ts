@@ -20,8 +20,7 @@ import {
 import { type DocumentsError, documentsError } from "../domain/documents";
 import { sniff } from "../domain/issuing";
 import { type CardPrint, renderCardsPdf } from "../infrastructure/card-pdf";
-import type { CardData, CardRow, CardTarget, PrismaCardsRepository } from "../infrastructure/prisma-cards";
-import type { Actor } from "../infrastructure/prisma-documents";
+import type { CardData, CardRow, CardTarget, PrismaCardsRepository } from "../infrastructure/prisma-cards";import type { Actor } from "../infrastructure/prisma-documents";
 import { today } from "./DocumentRequests";
 import type { FileOut, School } from "./DocumentIssuing";
 import type { DocumentsViewer } from "./DocumentTypes";
@@ -120,8 +119,8 @@ export class StudentCards {
     return ok({ fileName: `cartao-exemplo-${c.value.model.toLowerCase()}.pdf`, mimeType: "application/pdf", content: pdf });
   }
 
-  private print(s: Pick<CardSettings, "primaryColor" | "accentColor" | "address" | "phone" | "email" | "backNote">, school: School, x: Omit<CardPrint, "primary" | "accent" | "school" | "logo" | "backNote">): CardPrint {
-    return { ...x, primary: s.primaryColor, accent: s.accentColor, school: { name: school.name, address: s.address, phone: s.phone, email: s.email }, logo: school.logo, backNote: s.backNote || DEFAULT_BACK_NOTE };
+  private print(s: Pick<CardSettings, "primaryColor" | "accentColor" | "address" | "phone" | "email" | "backNote">, school: School, x: Omit<CardPrint, "primary" | "accent" | "school" | "logo" | "backNote" | "header">): CardPrint {
+    return { ...x, primary: s.primaryColor, accent: s.accentColor, school: { name: school.name, address: s.address, phone: s.phone, email: s.email }, logo: school.logo, header: school.header, backNote: s.backNote || DEFAULT_BACK_NOTE };
   }
 
   // ================================================================ turmas e alunos
@@ -251,6 +250,7 @@ export class StudentCards {
       backNote: settings.backNote || DEFAULT_BACK_NOTE,
       photoKey: photo.storageKey,
       logoKey,
+      header: school.header ? { country: school.header.country, ministry: school.header.ministry, emblemKey: school.header.emblemKey ?? null } : null,
     };
     return { target: t as CardTarget & { yearId: string; endsOn: string; yearName: string }, data, photo: bytes, replaces: active } as const;
   }
@@ -295,7 +295,7 @@ export class StudentCards {
     if ("skip" in p) return fail(documentsError("INCOMPLETE", `O cartão não se emite: ${p.skip}`, { missing: [p.skip] }));
     const saved = await this.save(repo, p, settings.model, p.replaces ? request.reason || `Segunda via pedida (${request.ref})` : null, request.id, actor);
     const card = (await repo.card(saved.id))!;
-    const pdf = await renderCardsPdf([this.fromRow(card, p.photo, school, school.logo)], "CARD", `Cartão de estudante — ${card.data.name}`);
+    const pdf = await renderCardsPdf([this.fromRow(card, p.photo, school, school.logo, school.header)], "CARD", `Cartão de estudante — ${card.data.name}`);
     return ok({ cardNumber: pad(saved.number), version: saved.version, pdf, name: card.data.name });
   }
 
@@ -319,7 +319,7 @@ export class StudentCards {
 
   // ================================================================ imprimir
 
-  private fromRow(c: CardRow, photo: Buffer, school: School, logo: Buffer | null): CardPrint {
+  private fromRow(c: CardRow, photo: Buffer, school: School, logo: Buffer | null, header: CardPrint["header"]): CardPrint {
     const d = c.data;
     return {
       model: c.model,
@@ -327,6 +327,7 @@ export class StudentCards {
       accent: d.accent,
       school: { ...d.school, name: d.school.name || school.name },
       logo,
+      header,
       student: { name: d.name, number: d.number, classLabel: d.classLabel, groupName: d.groupName, yearName: d.yearName },
       photo,
       validUntil: dmy(c.validUntil),
@@ -362,13 +363,22 @@ export class StudentCards {
 
   private async render(store: HrFileStore, rows: CardRow[], layout: CardsLayout, school: School, base?: string): R<FileOut> {
     const prints: CardPrint[] = [];
-    // o logótipo com que cada cartão foi emitido (os anteriores a guardar o logótipo usam o atual)
+    // o logótipo com que cada cartão foi emitido; sem ele (anteriores, ou emitidos quando o logótipo não se lia) usa-se o atual
     const logos = new Map<string, Buffer | null>();
     const logoOf = async (key: string | null | undefined) => {
-      if (key === undefined) return school.logo;
-      if (key === null) return null;
+      if (!key) return school.logo;
       if (!logos.has(key)) logos.set(key, await store.read(key).catch(() => school.logo));
       return logos.get(key) ?? null;
+    };
+    // o cabeçalho oficial com que foi emitido (a insígnia pela chave); os cartões anteriores usam o atual
+    const emblems = new Map<string, Buffer | null>();
+    const headerOf = async (h: CardData["header"]): Promise<CardPrint["header"]> => {
+      if (h === undefined) return school.header;
+      if (h === null) return null;
+      const key = h.emblemKey;
+      if (key && key === school.header?.emblemKey) return { ...h, emblem: school.header.emblem };
+      if (key && !emblems.has(key)) emblems.set(key, await store.read(key).catch(() => null));
+      return { country: h.country, ministry: h.ministry, emblem: key ? (emblems.get(key) ?? null) : null };
     };
     for (const c of rows) {
       let photo: Buffer;
@@ -377,7 +387,7 @@ export class StudentCards {
       } catch {
         return fail(documentsError("NOT_AVAILABLE", `A fotografia do cartão n.º ${pad(c.number)} (${c.data.name}) já não está disponível.`));
       }
-      prints.push(this.fromRow(c, photo, school, await logoOf(c.data.logoKey)));
+      prints.push(this.fromRow(c, photo, school, await logoOf(c.data.logoKey), await headerOf(c.data.header)));
     }
     const pdf = await renderCardsPdf(prints, layout, rows.length === 1 ? `Cartão de estudante — ${rows[0].data.name}` : "Cartões de estudante");
     const name = base ?? (rows.length === 1 ? `cartao-${slugOf(rows[0].data.name)}-${pad(rows[0].number)}` : `cartoes-${today(this.clock.now())}`);

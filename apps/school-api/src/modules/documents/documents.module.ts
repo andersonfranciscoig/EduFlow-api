@@ -7,6 +7,7 @@ import { HrModule } from "../hr/hr.module";
 import { IdentityModule } from "../identity/identity.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { DocumentIssuing } from "./application/DocumentIssuing";
+import { DocumentHeaders } from "./application/DocumentHeaders";
 import { DocumentReports } from "./application/DocumentReports";
 import { DocumentRequests } from "./application/DocumentRequests";
 import { DocumentTypes } from "./application/DocumentTypes";
@@ -28,6 +29,7 @@ import { FamilyDocumentsController } from "./presentation/family-documents.contr
   providers: [
     { provide: DocumentTypes, useFactory: () => new DocumentTypes(systemClock) },
     { provide: DocumentReports, useFactory: () => new DocumentReports(systemClock) },
+    { provide: DocumentHeaders, useFactory: () => new DocumentHeaders(systemClock) },
     { provide: DocumentRequests, useFactory: () => new DocumentRequests(systemClock) },
     { provide: StudentCards, inject: [ConfigService], useFactory: (config: ConfigService<Env, true>) => new StudentCards(systemClock, config.get("PORTAL_URL_TEMPLATE", { infer: true })) },
     { provide: DocumentIssuing, useFactory: (requests: DocumentRequests, cards: StudentCards) => new DocumentIssuing(systemClock, requests, cards), inject: [DocumentRequests, StudentCards] },

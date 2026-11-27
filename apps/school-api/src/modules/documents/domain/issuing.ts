@@ -95,6 +95,36 @@ export const placeholderLabel = (key: string, fields: ExtraField[]) =>
   key.startsWith(FIELD_PREFIX) ? (fields.find((f) => `${FIELD_PREFIX}${f.key}` === key)?.label ?? key) : (PLACEHOLDERS.find((p) => p.key === key)?.label ?? key);
 export const fieldKey = (k: string) => `${FIELD_PREFIX}${k}`;
 
+// ---------------------------------------------------------------- cabeçalho oficial
+
+/** O cabeçalho oficial dos documentos (como nos documentos escolares angolanos). */
+export interface HeaderSettings {
+  enabled: boolean;
+  countryLine: string;
+  ministryLine: string | null;
+  showEmblem: boolean;
+}
+export const DEFAULT_HEADER: HeaderSettings = { enabled: true, countryLine: "República de Angola", ministryLine: "Ministério da Educação", showEmblem: true };
+export const EMBLEM_MAX_BYTES = 2 * 1024 * 1024;
+
+export function checkHeader(input: { enabled: boolean; countryLine?: string | null; ministryLine?: string | null; showEmblem: boolean }): { ok: true; value: HeaderSettings } | { ok: false; message: string } {
+  const country = String(input.countryLine ?? "").replace(/\s+/g, " ").trim();
+  const ministry = String(input.ministryLine ?? "").replace(/\s+/g, " ").trim();
+  if (country.length < 3 || country.length > 80) return { ok: false, message: "Escreva a primeira linha do cabeçalho (3 a 80 caracteres), por exemplo “República de Angola”." };
+  if (ministry.length > 120) return { ok: false, message: "A linha do ministério tem no máximo 120 caracteres." };
+  return { ok: true, value: { enabled: input.enabled, countryLine: country, ministryLine: ministry || null, showEmblem: input.showEmblem } };
+}
+
+/** A insígnia: PNG ou JPG até 2 MB, com o tipo real verificado. */
+export function checkEmblem(f: { originalname: string; mimetype: string; buffer: Buffer } | undefined): { ok: true; mime: "image/jpeg" | "image/png"; name: string } | { ok: false; message: string } {
+  if (!f || !f.buffer?.length) return { ok: false, message: "Escolha a imagem da insígnia (PNG ou JPG)." };
+  if (f.buffer.length > EMBLEM_MAX_BYTES) return { ok: false, message: "A imagem tem mais de 2 MB." };
+  const real = sniff(f.buffer);
+  if (real !== "image/png" && real !== "image/jpeg") return { ok: false, message: "A insígnia tem de ser uma imagem PNG ou JPG válida." };
+  const base = f.originalname.replace(/\.[^.]+$/, "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9 _-]+/g, "").trim().slice(0, 80) || "insignia";
+  return { ok: true, mime: real, name: `${base}.${real === "image/png" ? "png" : "jpg"}` };
+}
+
 // ---------------------------------------------------------------- ficheiros carregados
 
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;

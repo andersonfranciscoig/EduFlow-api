@@ -2221,6 +2221,33 @@ model StudentCardSettings {
   @@map("student_card_settings")
 }
 
+/// O cabeçalho oficial dos documentos emitidos (uma linha): insígnia, "República de Angola", ministério e colégio.
+model DocumentHeaderSettings {
+  id               Int       @id @default(1) @db.SmallInt
+  enabled          Boolean   @default(true)
+  countryLine      String    @default("República de Angola") @map("country_line")
+  /// vazio = sem a linha do ministério
+  ministryLine     String?   @default("Ministério da Educação") @map("ministry_line")
+  showEmblem       Boolean   @default(true) @map("show_emblem")
+  /// a insígnia carregada pelo colégio (PNG ou JPG, cifrada no armazenamento do colégio)
+  emblemKey        String?   @map("emblem_key")
+  emblemName       String?   @map("emblem_name")
+  emblemMime       String?   @map("emblem_mime")
+  emblemSha256     String?   @map("emblem_sha256")
+  emblemUploadedAt DateTime? @map("emblem_uploaded_at")
+  /// o logótipo dos documentos e cartões (PNG ou JPG); sem ele, o do colégio na plataforma
+  logoKey          String?   @map("logo_key")
+  logoName         String?   @map("logo_name")
+  logoMime         String?   @map("logo_mime")
+  logoSha256       String?   @map("logo_sha256")
+  logoUploadedAt   DateTime? @map("logo_uploaded_at")
+  updatedById      String?   @map("updated_by_id") @db.Uuid
+  updatedByName    String?   @map("updated_by_name")
+  updatedAt        DateTime? @map("updated_at")
+
+  @@map("document_header_settings")
+}
+
 /// A fotografia do aluno carregada pela secretaria (cifrada no armazenamento do colégio).
 model StudentPhoto {
   id             String   @id @db.Uuid
