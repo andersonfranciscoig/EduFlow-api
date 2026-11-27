@@ -24,6 +24,8 @@ export interface CardData {
   photoKey: string;
   /** o logótipo com que foi emitido (cópia no armazenamento do colégio); null/ausente = sem logótipo */
   logoKey?: string | null;
+  /** o cabeçalho oficial com que foi emitido (a insígnia pela chave); null = sem; ausente = cartão anterior (usa o atual) */
+  header?: { country: string; ministry: string | null; emblemKey: string | null } | null;
 }
 export interface CardRow {
   id: string;

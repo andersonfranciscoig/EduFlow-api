@@ -5,7 +5,7 @@ import type { HrFileStore } from "../../hr/application/employee-ports";
 import { isCardCategory } from "../domain/cards";
 import { canDownload, canIssue, type DocumentsError, documentsError, STATUS_LABELS } from "../domain/documents";
 import { allowedFor, checkTemplate, fieldKey, fill, longDate, placeholderLabel, SHIFTS, type TemplateInput, checkUpload } from "../domain/issuing";
-import { renderDocumentPdf } from "../infrastructure/pdf";
+import { type OfficialHeader, renderDocumentPdf } from "../infrastructure/pdf";
 import type { Actor, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
 import { type DocumentRequests, type Notices, snapshotOf, today } from "./DocumentRequests";
 import { can, type DocumentsViewer } from "./DocumentTypes";
@@ -15,7 +15,10 @@ type R<T> = Promise<Result<T, DocumentsError>>;
 type Repo = PrismaDocumentsRepository;
 export interface School {
   name: string;
+  /** o logótipo que se imprime (PNG ou JPG) */
   logo: Buffer | null;
+  /** o cabeçalho oficial (null = o colégio retirou-o) */
+  header: OfficialHeader | null;
   /** o colégio no endereço do portal (o QR dos cartões aponta para lá) */
   slug: string;
 }
@@ -90,6 +93,7 @@ export class DocumentIssuing {
     const pdf = await renderDocumentPdf({
       school: school.name,
       logo: c.value.showLogo ? school.logo : null,
+      header: school.header,
       title: fill(c.value.title, example).text,
       body: fill(c.value.body, example).text,
       signerName: c.value.signerName,
@@ -153,7 +157,7 @@ export class DocumentIssuing {
     if (!type) return fail(documentsError("NOT_FOUND", "Documento não encontrado."));
     const c = await this.compose(repo, r, type, school);
     if (!c.ok) return c;
-    const pdf = await renderDocumentPdf({ school: school.name, logo: c.value.tpl.showLogo ? school.logo : null, title: c.value.title, body: c.value.body, signerName: c.value.tpl.signerName, signerRole: c.value.tpl.signerRole, footer: `Pré-visualização do pedido ${this.requests.ref(r)} · ainda não emitido`, watermark: "PRÉ-VISUALIZAÇÃO" });
+    const pdf = await renderDocumentPdf({ school: school.name, logo: c.value.tpl.showLogo ? school.logo : null, header: school.header, title: c.value.title, body: c.value.body, signerName: c.value.tpl.signerName, signerRole: c.value.tpl.signerRole, footer: `Pré-visualização do pedido ${this.requests.ref(r)} · ainda não emitido`, watermark: "PRÉ-VISUALIZAÇÃO" });
     return ok({ fileName: `previsualizacao-${this.requests.ref(r)}.pdf`, mimeType: "application/pdf", content: pdf });
   }
 
@@ -183,6 +187,7 @@ export class DocumentIssuing {
     const pdf = await renderDocumentPdf({
       school: school.name,
       logo: c.value.tpl.showLogo ? school.logo : null,
+      header: school.header,
       title: c.value.title,
       body: c.value.body,
       signerName: c.value.tpl.signerName,

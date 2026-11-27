@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Logger, Param, Post, Put, Query, Res, StreamableFile, UnprocessableEntityException, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Logger, NotFoundException, Param, Post, Put, Query, Res, StreamableFile, UnprocessableEntityException, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
 import { AnyFilesInterceptor, FileInterceptor } from "@nestjs/platform-express";
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
@@ -19,9 +19,11 @@ import { type FileOut, DocumentIssuing, type School } from "../application/Docum
 import { DocumentRequests, type Notices, type Uploads } from "../application/DocumentRequests";
 import { audiencesFor, DocumentTypes, type DocumentsViewer } from "../application/DocumentTypes";
 import type { DocumentsErrorCode, RequestStatus, StaffAction } from "../domain/documents";
+import { DocumentHeaders } from "../application/DocumentHeaders";
 import { DocumentReports } from "../application/DocumentReports";
+import { sniff } from "../domain/issuing";
 import { PrismaDocumentReports } from "../infrastructure/prisma-document-reports";
-import { PrismaDocumentsRepository } from "../infrastructure/prisma-documents";
+import { type HeaderImage, PrismaDocumentsRepository } from "../infrastructure/prisma-documents";
 
 export const DOCUMENTS_HTTP: Partial<Record<DocumentsErrorCode, HttpStatus>> = {
   INVALID_INPUT: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -48,14 +50,13 @@ export async function syncDocumentFees(t: TenantContext, notifier: Notifier) {
   }
 }
 
-/** O colégio para o cabeçalho dos documentos: o nome e o logótipo público (se se conseguir ler). */
+/** O logótipo público do colégio na plataforma (se se conseguir ler; pode ser WEBP). */
 const logos = new Map<string, { at: number; logo: Buffer | null }>();
-export async function schoolOf(t: TenantContext): Promise<School> {
+export async function platformLogoOf(t: TenantContext): Promise<Buffer | null> {
   const url = t.entry.logoUrl;
-  const base = { name: t.entry.schoolName, slug: t.entry.slug };
-  if (!url || !/^https?:\/\//.test(url)) return { ...base, logo: null };
+  if (!url || !/^https?:\/\//.test(url)) return null;
   const hit = logos.get(url);
-  if (hit && Date.now() - hit.at < 10 * 60_000) return { ...base, logo: hit.logo };
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.logo;
   let logo: Buffer | null = null;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -65,7 +66,11 @@ export async function schoolOf(t: TenantContext): Promise<School> {
     logo = null;
   }
   logos.set(url, { at: Date.now(), logo });
-  return { ...base, logo };
+  return logo;
+}
+/** O colégio para os PDFs: nome, logótipo que se imprime e cabeçalho oficial (ver DocumentHeaders). */
+export async function schoolOf(t: TenantContext, store: HrFileStore): Promise<School> {
+  return new DocumentHeaders(systemClock).school(PrismaDocumentsRepository.for(t.db), store, { name: t.entry.schoolName, slug: t.entry.slug, platformLogo: await platformLogoOf(t) });
 }
 /** Entrega um ficheiro: PDF e imagens abrem no navegador; nunca há URL pública. */
 export function sendDocument(res: Response, f: FileOut, attachment = false) {
@@ -103,6 +108,11 @@ export const attachBody = z.object({ itemKey: z.string().min(1).max(60) });
 const templateBody = z
   .object({ title: z.string().max(400), body: z.string().max(12000), signerName: z.string().max(240).nullish(), signerRole: z.string().max(240).nullish(), showLogo: z.boolean() })
   .meta({ title: "DocumentTemplate", description: "O modelo: título, texto (parágrafos separados por linha em branco) com campos {{...}}, quem assina e se leva o logótipo." });
+const headerBody = z
+  .object({ enabled: z.boolean(), countryLine: z.string().max(200).nullish(), ministryLine: z.string().max(300).nullish(), showEmblem: z.boolean() })
+  .meta({ title: "DocumentHeader", description: "O cabeçalho oficial: ligado (ou retirado), a primeira linha (“República de Angola”), a linha do ministério (vazia = sem ela) e se leva a insígnia." });
+/** na rota: insignia | logotipo */
+const imageParam = new ZodValidationPipe(z.enum(["insignia", "logotipo"], { error: "Imagem inválida." }).transform((x): HeaderImage => (x === "insignia" ? "EMBLEM" : "LOGO")));
 const reasonBody = z.object({ reason: z.string().max(600).nullish() }).meta({ title: "DocumentIssueReason", description: "Ao substituir o ficheiro (ou segunda via), o motivo." });
 const fileQuery = new ZodValidationPipe(z.object({ versao: z.uuid().optional() }));
 
@@ -179,6 +189,7 @@ export class DocumentsController {
     private readonly stores: HrFileStores,
     private readonly notifier: Notifier,
     private readonly reports: DocumentReports,
+    private readonly headers: DocumentHeaders,
   ) {}
 
   private repo(t: TenantContext) {
@@ -253,8 +264,64 @@ export class DocumentsController {
   @ApiOperation({ summary: "Pré-visualizar o modelo (mesmo por guardar) com dados de exemplo, em PDF" })
   @ApiBody({ schema: openApi(templateBody) })
   async previewTemplate(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) typeId: string, @Body(new ZodValidationPipe(templateBody)) body: z.infer<typeof templateBody>, @Res({ passthrough: true }) res: Response) {
-    const f = unwrap(await this.issuing.previewTemplate(this.repo(t), await this.staff(t, u), typeId, { title: body.title, body: body.body, signerName: body.signerName ?? null, signerRole: body.signerRole ?? null, showLogo: body.showLogo }, await schoolOf(t)), DOCUMENTS_HTTP);
+    const f = unwrap(await this.issuing.previewTemplate(this.repo(t), await this.staff(t, u), typeId, { title: body.title, body: body.body, signerName: body.signerName ?? null, signerRole: body.signerRole ?? null, showLogo: body.showLogo }, await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP);
     return sendDocument(res, f);
+  }
+
+  // ---------------------------------------------------------------- cabeçalho oficial (documentos e cartões)
+
+  @Get("header")
+  @ApiOperation({ summary: "O cabeçalho oficial dos documentos e cartões: insígnia, “República de Angola”, ministério, colégio e logótipo" })
+  async header(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess) {
+    return this.headers.view(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), await platformLogoOf(t));
+  }
+
+  @Put("header")
+  @ApiOperation({ summary: "Guardar o cabeçalho (ligado ou retirado, a primeira linha, a linha do ministério e se leva a insígnia)" })
+  @ApiBody({ schema: openApi(headerBody) })
+  async saveHeader(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(headerBody)) body: z.infer<typeof headerBody>) {
+    const v = await this.staff(t, u, "settings");
+    return unwrap(await this.headers.save(this.repo(t), v, this.requests.actor(v), body), DOCUMENTS_HTTP);
+  }
+
+  @Get("header/preview")
+  @ApiOperation({ summary: "Um documento de exemplo com o cabeçalho guardado (PDF)" })
+  async previewHeader(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Res({ passthrough: true }) res: Response) {
+    await this.staff(t, u);
+    return sendDocument(res, await this.headers.preview(await schoolOf(t, this.stores.for(t.entry))));
+  }
+
+  @Get("header/platform-logo")
+  @ApiOperation({ summary: "O logótipo do colégio na plataforma (para o converter para PNG no navegador quando é WEBP)" })
+  async platformLogo(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Res({ passthrough: true }) res: Response) {
+    await this.staff(t, u, "settings");
+    const logo = await platformLogoOf(t);
+    if (!logo) throw new NotFoundException({ code: "NOT_FOUND", message: "O colégio não tem logótipo na plataforma." });
+    const webp = logo.subarray(8, 12).toString("latin1") === "WEBP";
+    return sendDocument(res, { fileName: `logotipo.${webp ? "webp" : "png"}`, mimeType: webp ? "image/webp" : (sniff(logo) ?? "application/octet-stream"), content: logo });
+  }
+
+  @Get("header/:image")
+  @ApiOperation({ summary: "A insígnia (insignia) ou o logótipo (logotipo) carregados" })
+  async headerImage(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("image", imageParam) image: HeaderImage, @Res({ passthrough: true }) res: Response) {
+    await this.staff(t, u);
+    return sendDocument(res, unwrap(await this.headers.image(this.repo(t), this.stores.for(t.entry), image), DOCUMENTS_HTTP));
+  }
+
+  @Post("header/:image")
+  @ApiOperation({ summary: "Carregar a insígnia (insignia) ou o logótipo (logotipo): PNG ou JPG até 2 MB; o anterior fica guardado" })
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 2 * 1024 * 1024 + 1, files: 1, fields: 0 } }))
+  async uploadHeaderImage(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("image", imageParam) image: HeaderImage, @UploadedFile() file: Upload) {
+    const v = await this.staff(t, u, "settings");
+    return unwrap(await this.headers.upload(this.repo(t), this.stores.for(t.entry), v, this.requests.actor(v), image, file), DOCUMENTS_HTTP);
+  }
+
+  @Delete("header/:image")
+  @ApiOperation({ summary: "Retirar a insígnia ou o logótipo carregados (o ficheiro fica no armazenamento)" })
+  async removeHeaderImage(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("image", imageParam) image: HeaderImage) {
+    const v = await this.staff(t, u, "settings");
+    return unwrap(await this.headers.remove(this.repo(t), v, this.requests.actor(v), image), DOCUMENTS_HTTP);
   }
 
   // ---------------------------------------------------------------- relatório
@@ -324,7 +391,7 @@ export class DocumentsController {
   @Get("requests/:id/preview")
   @ApiOperation({ summary: "Pré-visualizar o documento do pedido com o modelo e os dados atuais (não fica guardado)" })
   async previewRequest(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Res({ passthrough: true }) res: Response) {
-    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), requestId, await schoolOf(t)), DOCUMENTS_HTTP));
+    return sendDocument(res, unwrap(await this.issuing.previewRequest(this.repo(t), this.stores.for(t.entry), await this.staff(t, u), requestId, await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP));
   }
 
   @Post("requests/:id/generate")
@@ -332,7 +399,7 @@ export class DocumentsController {
   @ApiOperation({ summary: "Emitir o documento com o modelo (PDF cifrado no armazenamento do colégio; nova versão substitui a anterior, com motivo)" })
   @ApiBody({ schema: openApi(reasonBody) })
   async generate(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Param("id", id) requestId: string, @Body(new ZodValidationPipe(reasonBody)) body: z.infer<typeof reasonBody>) {
-    return unwrap(await this.issuing.generate(this.repo(t), this.stores.for(t.entry), this.notices(t), await this.staff(t, u), requestId, body, await schoolOf(t)), DOCUMENTS_HTTP);
+    return unwrap(await this.issuing.generate(this.repo(t), this.stores.for(t.entry), this.notices(t), await this.staff(t, u), requestId, body, await schoolOf(t, this.stores.for(t.entry))), DOCUMENTS_HTTP);
   }
 
   @Post("requests/:id/upload")

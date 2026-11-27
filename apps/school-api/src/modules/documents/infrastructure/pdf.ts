@@ -15,6 +15,15 @@ export interface PdfInput {
   footer: string;
   /** marca de água (ex.: "PRÉ-VISUALIZAÇÃO") */
   watermark?: string | null;
+  /** o cabeçalho oficial (insígnia, "República de Angola", ministério e colégio); null = só logótipo e nome */
+  header?: OfficialHeader | null;
+}
+export interface OfficialHeader {
+  country: string;
+  ministry: string | null;
+  emblem: Buffer | null;
+  /** a chave da insígnia no armazenamento (os cartões guardam-na) */
+  emblemKey?: string | null;
 }
 
 const A4 = { w: 595.28, h: 841.89 };
@@ -88,8 +97,17 @@ export async function renderDocumentPdf(input: PdfInput): Promise<Buffer> {
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const logo = await embedLogo(doc, input.logo);
+  const official = input.header ?? null;
+  const emblem = official ? await embedLogo(doc, official.emblem) : null;
   const width = A4.w - M.x * 2;
   const pages: PDFPage[] = [];
+  const center = (p: PDFPage, text: string, y: number, size: number, font: PDFFont) => {
+    for (const line of wrap(winAnsi(text), font, size, width - 150)) {
+      p.drawText(line, { x: (A4.w - font.widthOfTextAtSize(line, size)) / 2, y, size, font, color: INK });
+      y -= size + 4;
+    }
+    return y;
+  };
 
   const newPage = (first: boolean) => {
     const p = doc.addPage([A4.w, A4.h]);
@@ -97,6 +115,27 @@ export async function renderDocumentPdf(input: PdfInput): Promise<Buffer> {
     let y = A4.h - M.top;
     if (input.watermark) {
       p.drawText(winAnsi(input.watermark), { x: 110, y: 360, size: 54, font: bold, color: rgb(0.85, 0.88, 0.86), rotate: degrees(35), opacity: 0.6 });
+    }
+    // primeira página com o cabeçalho oficial: logótipo à esquerda; ao centro a insígnia, a República, o ministério e o colégio
+    if (first && official) {
+      y = A4.h - 44;
+      if (logo) {
+        const h = 50;
+        const s = Math.min(h / logo.height, 90 / logo.width);
+        p.drawImage(logo, { x: M.x, y: y - logo.height * s, width: logo.width * s, height: logo.height * s });
+      }
+      if (emblem) {
+        const h = 48;
+        const s = Math.min(h / emblem.height, 70 / emblem.width);
+        p.drawImage(emblem, { x: (A4.w - emblem.width * s) / 2, y: y - emblem.height * s, width: emblem.width * s, height: emblem.height * s });
+        y -= emblem.height * s + 14;
+      } else y -= 10;
+      y = center(p, official.country.toUpperCase(), y, 11.5, bold);
+      if (official.ministry) y = center(p, official.ministry.toUpperCase(), y, 10.5, bold);
+      y = center(p, input.school.toUpperCase(), y - 1, 12, bold);
+      y -= 4;
+      p.drawLine({ start: { x: M.x, y }, end: { x: A4.w - M.x, y }, thickness: 1.4, color: LINE });
+      return { p, y: y - 34 };
     }
     // cabeçalho: logótipo + nome do colégio (em todas as páginas, mais pequeno nas seguintes)
     const h = first ? 46 : 30;

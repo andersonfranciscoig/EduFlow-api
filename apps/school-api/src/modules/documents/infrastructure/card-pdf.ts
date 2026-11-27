@@ -30,6 +30,8 @@ export interface CardPrint {
   /** ex.: "Cartão n.º 000012 · 2.ª via" */
   footer: string;
   watermark?: string | null;
+  /** o cabeçalho oficial (insígnia, "República de Angola", ministério); null = só o nome do colégio */
+  header?: { country: string; ministry: string | null; emblem: Buffer | null } | null;
 }
 
 const MM = 72 / 25.4;
@@ -54,6 +56,7 @@ interface Fonts {
 }
 interface Assets {
   logo: PDFImage | null;
+  emblem: PDFImage | null;
   photo: PDFImage | null;
 }
 type Face = (p: PDFPage, x: number, y: number, c: CardPrint, f: Fonts, a: Assets) => void;
@@ -153,22 +156,52 @@ function watermark(p: PDFPage, x: number, y: number, c: CardPrint, f: Fonts) {
   const t = winAnsi(c.watermark);
   p.drawText(t, { x: x + 34, y: y + 30, size: 30, font: f.bold, color: rgb(0.85, 0.2, 0.2), opacity: 0.22, rotate: degrees(20) });
 }
+/**
+ * O cabeçalho oficial na frente: o logótipo à esquerda, a insígnia à direita e, ao centro, a
+ * República, o ministério, o colégio e "CARTÃO DE ESTUDANTE". `top` = o topo da área; `h` = a altura.
+ */
+function officialHead(p: PDFPage, c: CardPrint, f: Fonts, a: Assets, x0: number, x1: number, top: number, h: number, color: RGB) {
+  const hd = c.header!;
+  const img = Math.min(h - 8, 24);
+  const lw = logoAt(p, a.logo, x0, top - 4 - img, img, 34);
+  let ew = 0;
+  if (a.emblem) {
+    const s = Math.min(img / a.emblem.height, 30 / a.emblem.width);
+    ew = a.emblem.width * s;
+    p.drawImage(a.emblem, { x: x1 - ew, y: top - 4 - img + (img - a.emblem.height * s) / 2, width: ew, height: a.emblem.height * s });
+  }
+  // o texto ao centro do cartão (com o mesmo espaço dos dois lados)
+  const side = Math.max(lw, ew) + (lw || ew ? 5 : 0);
+  const tx = x0 + side;
+  const mw = x1 - x0 - side * 2;
+  const rows: [string, number, PDFFont, number][] = [
+    [hd.country.toUpperCase(), 5, f.bold, 1],
+    ...(hd.ministry ? ([[hd.ministry.toUpperCase(), 4.3, f.regular, 0.9]] as [string, number, PDFFont, number][]) : []),
+    [c.school.name, 7, f.bold, 1],
+    ["CARTÃO DE ESTUDANTE", 4.3, f.regular, 0.85],
+  ];
+  const gap = (h - 6) / rows.length;
+  rows.forEach(([t, z, font, o], i) => line(p, t, tx, top - 3 - gap * (i + 1) + 1.5, z, font, color, mw, { min: 3.6, center: true, opacity: o }));
+}
 const contactLines = (c: CardPrint) => [c.school.address, c.school.phone ? `Tel. ${c.school.phone}` : null, c.school.email].filter((s): s is string => !!s);
 const { w: W, h: H } = CARD;
 
 // ====================================================================== Clássico
 
 const classicFront: Face = (p, x, y, c, f, a) => {
-  const band = 36;
+  const band = c.header ? 40 : 36;
   const onP = onColor(c.primary);
   p.drawRectangle({ x, y, width: W, height: H, color: WHITE });
   p.drawRectangle({ x, y: y + H - band, width: W, height: band, color: hex(c.primary) });
   p.drawRectangle({ x, y: y + H - band - 2.2, width: W, height: 2.2, color: hex(c.accent) });
-  let tx = x + 10;
-  const lw = logoAt(p, a.logo, x + 9, y + H - band + 7, 22, 44);
-  if (lw) tx += lw + 7;
-  line(p, c.school.name, tx, y + H - 17, 9, f.bold, onP, x + W - 10 - tx, { min: 5.5 });
-  line(p, "CARTÃO DE ESTUDANTE", tx, y + H - 27.5, 5.6, f.regular, onP, x + W - 10 - tx, { opacity: 0.85 });
+  if (c.header) officialHead(p, c, f, a, x + 8, x + W - 8, y + H, band, onP);
+  else {
+    let tx = x + 10;
+    const lw = logoAt(p, a.logo, x + 9, y + H - band + 7, 22, 44);
+    if (lw) tx += lw + 7;
+    line(p, c.school.name, tx, y + H - 17, 9, f.bold, onP, x + W - 10 - tx, { min: 5.5 });
+    line(p, "CARTÃO DE ESTUDANTE", tx, y + H - 27.5, 5.6, f.regular, onP, x + W - 10 - tx, { opacity: 0.85 });
+  }
   // a fotografia
   photo(p, a.photo, x + 10, y + 26, 48, 62, hex(c.accent));
   // os dados
@@ -227,9 +260,14 @@ const modernFront: Face = (p, x, y, c, f, a) => {
   line(p, c.student.number ? `N.º ${c.student.number}` : "N.º —", x + 6, y + 13, 7.2, f.bold, onP, pw - 12, { center: true });
   const x0 = x + pw + 13;
   const mw = W - pw - 2.6 - 13 - 10;
-  line(p, c.school.name, x0, y + H - 17, 7.2, f.bold, luminance(c.primary) < 0.6 ? hex(c.primary) : INK, mw, { min: 5 });
-  line(p, "CARTÃO DE ESTUDANTE", x0, y + H - 25.5, 5.2, f.regular, MUTED, mw);
-  const after = nameLines(p, c.student.name, x0, y + H - 43, 11, f.bold, INK, mw, 12);
+  const brand = luminance(c.primary) < 0.6 ? hex(c.primary) : INK;
+  // com o cabeçalho oficial: o logótipo já está na coluna; a insígnia fica à direita
+  if (c.header) officialHead(p, c, f, { ...a, logo: null }, x0 - 4, x + W - 8, y + H, 34, brand);
+  else {
+    line(p, c.school.name, x0, y + H - 17, 7.2, f.bold, brand, mw, { min: 5 });
+    line(p, "CARTÃO DE ESTUDANTE", x0, y + H - 25.5, 5.2, f.regular, MUTED, mw);
+  }
+  const after = nameLines(p, c.student.name, x0, y + H - (c.header ? 46 : 43), c.header ? 10.4 : 11, f.bold, INK, mw, 11.4);
   p.drawRectangle({ x: x0, y: after + 4, width: 20, height: 2, color: hex(c.accent) });
   field(p, f, "Classe", c.student.classLabel, x0, y + 56, mw);
   field(p, f, "Turma", c.student.groupName, x0, y + 35, mw / 2 - 4);
@@ -270,11 +308,14 @@ const contemporaryFront: Face = (p, x, y, c, f, a) => {
   p.drawCircle({ x: x + W - 34, y: y + H - 6, size: 26, color: WHITE, opacity: 0.08 });
   p.drawCircle({ x: x + 14, y: y - 18, size: 40, color: WHITE, opacity: 0.07 });
   p.pushOperators(popGraphicsState());
-  let tx = x + 10;
-  const lw = logoAt(p, a.logo, x + 10, y + H - 27, 18, 36);
-  if (lw) tx += lw + 6;
-  line(p, c.school.name, tx, y + H - 16, 7.4, f.bold, onP, x + W - 58 - tx, { min: 5 });
-  line(p, "CARTÃO DE ESTUDANTE", tx, y + H - 24.5, 5, f.regular, onP, x + W - 58 - tx, { opacity: 0.85 });
+  if (c.header) officialHead(p, c, f, a, x + 9, x + W - 9, y + H, 38, onP);
+  else {
+    let tx = x + 10;
+    const lw = logoAt(p, a.logo, x + 10, y + H - 27, 18, 36);
+    if (lw) tx += lw + 6;
+    line(p, c.school.name, tx, y + H - 16, 7.4, f.bold, onP, x + W - 58 - tx, { min: 5 });
+    line(p, "CARTÃO DE ESTUDANTE", tx, y + H - 24.5, 5, f.regular, onP, x + W - 58 - tx, { opacity: 0.85 });
+  }
   // o cartão branco
   const panel = { x: x + 7, y: y + 7, w: W - 14, h: 108 };
   roundRect(p, panel.x, panel.y, panel.w, panel.h, 7, WHITE);
@@ -343,8 +384,9 @@ export async function renderCardsPdf(cards: CardPrint[], layout: "CARD" | "SHEET
   const logos = new Map<Buffer, PDFImage | null>();
   const assets: Assets[] = [];
   for (const c of cards) {
-    if (c.logo && !logos.has(c.logo)) logos.set(c.logo, await embedLogo(doc, c.logo));
-    assets.push({ logo: c.logo ? (logos.get(c.logo) ?? null) : null, photo: await embedPhoto(doc, c.photo) });
+    const em = c.header?.emblem ?? null;
+    for (const b of [c.logo, em]) if (b && !logos.has(b)) logos.set(b, await embedLogo(doc, b));
+    assets.push({ logo: c.logo ? (logos.get(c.logo) ?? null) : null, emblem: em ? (logos.get(em) ?? null) : null, photo: await embedPhoto(doc, c.photo) });
   }
   if (layout === "CARD") {
     cards.forEach((c, i) => {

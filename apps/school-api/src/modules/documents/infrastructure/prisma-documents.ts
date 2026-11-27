@@ -3,9 +3,12 @@ import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import { formatStudentNumber } from "../../admissions/domain/enrollment";
 import { gradeLabel } from "../../pedagogy/domain/academic";
 import type { AttachmentItem, Audience, Department, ExtraField, Method, RequestStatus } from "../domain/documents";
+import { DEFAULT_HEADER, type HeaderSettings } from "../domain/issuing";
 import { PrismaCardsRepository } from "./prisma-cards";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+/** o assunto das alterações ao cabeçalho oficial na atividade do colégio */
+const HEADER_SUBJECT = "00000000-0000-0000-0000-0000000000cb";
 const json = (v: unknown) => JSON.stringify(v ?? null);
 
 export interface TypeRow {
@@ -157,6 +160,18 @@ export interface DeliveryRow {
   deliveredAt: Date;
   notes: string | null;
 }
+export type HeaderImage = "EMBLEM" | "LOGO";
+export interface HeaderRow extends HeaderSettings {
+  emblemKey: string | null;
+  emblemName: string | null;
+  emblemMime: string | null;
+  emblemUploadedAt: Date | null;
+  logoKey: string | null;
+  logoName: string | null;
+  logoUploadedAt: Date | null;
+  updatedByName: string | null;
+  updatedAt: Date | null;
+}
 export interface Actor {
   kind: "FAMILY" | "EMPLOYEE" | "STAFF" | "SYSTEM";
   id: string | null;
@@ -207,6 +222,50 @@ export class PrismaDocumentsRepository {
   /** Os cartões de estudante, na mesma ligação (os pedidos de cartão emitem-nos). */
   cards() {
     return new PrismaCardsRepository(this.db);
+  }
+
+  // ================================================================ cabeçalho oficial
+
+  async header(): Promise<HeaderRow> {
+    const [r] = await this.db.$queryRaw<HeaderRow[]>`
+      SELECT enabled, country_line AS "countryLine", ministry_line AS "ministryLine", show_emblem AS "showEmblem",
+             emblem_key AS "emblemKey", emblem_name AS "emblemName", emblem_mime AS "emblemMime", emblem_uploaded_at AS "emblemUploadedAt",
+             logo_key AS "logoKey", logo_name AS "logoName", logo_uploaded_at AS "logoUploadedAt",
+             updated_by_name AS "updatedByName", updated_at AS "updatedAt"
+        FROM document_header_settings WHERE id = 1`;
+    return r ?? { ...DEFAULT_HEADER, emblemKey: null, emblemName: null, emblemMime: null, emblemUploadedAt: null, logoKey: null, logoName: null, logoUploadedAt: null, updatedByName: null, updatedAt: null };
+  }
+  async saveHeader(h: HeaderSettings, actor: Actor, now: Date) {
+    await this.db.$executeRaw`
+      INSERT INTO document_header_settings (id, enabled, country_line, ministry_line, show_emblem, updated_by_id, updated_by_name, updated_at)
+      VALUES (1, ${h.enabled}, ${h.countryLine}, ${h.ministryLine}, ${h.showEmblem}, ${actor.id}::uuid, ${actor.name}, ${now})
+      ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, country_line = EXCLUDED.country_line, ministry_line = EXCLUDED.ministry_line,
+        show_emblem = EXCLUDED.show_emblem, updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
+    await this.db.schoolActivity.create({ data: { id: randomUUID(), type: "documents.header.settings", subjectId: HEADER_SUBJECT, actorId: actor.id, details: { ...h } as Prisma.InputJsonValue, occurredAt: now } });
+  }
+  /** A insígnia ou o logótipo carregados (null = retirado; o ficheiro antigo fica no armazenamento). */
+  async setImage(slot: HeaderImage, e: { key: string; name: string; mime: string; sha256: string } | null, actor: Actor, now: Date) {
+    const k = e?.key ?? null;
+    const n = e?.name ?? null;
+    const m = e?.mime ?? null;
+    const s = e?.sha256 ?? null;
+    const at = e ? now : null;
+    if (slot === "EMBLEM")
+      await this.db.$executeRaw`
+        INSERT INTO document_header_settings (id, emblem_key, emblem_name, emblem_mime, emblem_sha256, emblem_uploaded_at, updated_by_id, updated_by_name, updated_at)
+        VALUES (1, ${k}, ${n}, ${m}, ${s}, ${at}, ${actor.id}::uuid, ${actor.name}, ${now})
+        ON CONFLICT (id) DO UPDATE SET emblem_key = EXCLUDED.emblem_key, emblem_name = EXCLUDED.emblem_name, emblem_mime = EXCLUDED.emblem_mime,
+          emblem_sha256 = EXCLUDED.emblem_sha256, emblem_uploaded_at = EXCLUDED.emblem_uploaded_at,
+          updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
+    else
+      await this.db.$executeRaw`
+        INSERT INTO document_header_settings (id, logo_key, logo_name, logo_mime, logo_sha256, logo_uploaded_at, updated_by_id, updated_by_name, updated_at)
+        VALUES (1, ${k}, ${n}, ${m}, ${s}, ${at}, ${actor.id}::uuid, ${actor.name}, ${now})
+        ON CONFLICT (id) DO UPDATE SET logo_key = EXCLUDED.logo_key, logo_name = EXCLUDED.logo_name, logo_mime = EXCLUDED.logo_mime,
+          logo_sha256 = EXCLUDED.logo_sha256, logo_uploaded_at = EXCLUDED.logo_uploaded_at,
+          updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
+    const what = slot === "EMBLEM" ? "emblem" : "logo";
+    await this.db.schoolActivity.create({ data: { id: randomUUID(), type: e ? `documents.header.${what}` : `documents.header.${what}_removed`, subjectId: HEADER_SUBJECT, actorId: actor.id, details: (e ? { name: e.name, sha256: e.sha256 } : {}) as Prisma.InputJsonValue, occurredAt: now } });
   }
 
   // ================================================================ tipos
