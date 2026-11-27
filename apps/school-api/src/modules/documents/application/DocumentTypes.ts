@@ -1,6 +1,6 @@
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
-import { AUDIENCES, type Audience, CATEGORIES, checkFields, type Department, DEPARTMENTS, type DocumentsError, documentsError, FEE_POLICIES, type FeePolicy, FIELD_KINDS, type Method, METHODS } from "../domain/documents";
+import { AUDIENCES, type Audience, CATEGORIES, checkAttachmentItems, checkFields, type Department, DEPARTMENTS, type DocumentsError, documentsError, FEE_POLICIES, type FeePolicy, FIELD_KINDS, type Method, METHODS } from "../domain/documents";
 import type { PrismaDocumentsRepository, TypeInput, TypeRow } from "../infrastructure/prisma-documents";
 
 type R<T> = Promise<Result<T, DocumentsError>>;
@@ -76,6 +76,7 @@ export interface TypeBody {
   slaDays: number;
   requiresApproval: boolean;
   fields: unknown[];
+  attachments?: unknown[] | null;
   active: boolean;
 }
 
@@ -129,7 +130,9 @@ export class DocumentTypes {
     if ((description?.length ?? 0) > 1000 || (requirements?.length ?? 0) > 1000) return bad("A descrição e as informações complementares têm no máximo 1000 caracteres.");
     const f = checkFields(body.fields ?? []);
     if (!f.ok) return bad(f.message);
-    return ok({ audience: body.audience, department: body.department, category, name, description, requirements, method: body.method, pickup: !!body.pickup, download: !!body.download, fee, feePolicy, slaDays: body.slaDays, requiresApproval: !!body.requiresApproval, fields: f.fields, active: !!body.active });
+    const at = checkAttachmentItems(body.attachments ?? []);
+    if (!at.ok) return bad(at.message);
+    return ok({ audience: body.audience, department: body.department, category, name, description, requirements, method: body.method, pickup: !!body.pickup, download: !!body.download, fee, feePolicy, slaDays: body.slaDays, requiresApproval: !!body.requiresApproval, fields: f.fields, attachments: at.items, active: !!body.active });
   }
 
   async create(repo: Repo, v: DocumentsViewer, body: TypeBody): R<{ id: string }> {
@@ -148,7 +151,7 @@ export class DocumentTypes {
       const s = SUGGESTIONS[audience].find((x) => x.name === n);
       if (!s || (await repo.nameTaken(audience, s.name, null))) continue;
       await repo.createType(
-        { audience, department: audience === "EMPLOYEE" ? "RH" : "SECRETARIA", category: s.category, name: s.name, description: null, requirements: null, method: "EXTERNAL", pickup: true, download: false, fee: null, feePolicy: "BEFORE", slaDays: 3, requiresApproval: false, fields: [], active: true },
+        { audience, department: audience === "EMPLOYEE" ? "RH" : "SECRETARIA", category: s.category, name: s.name, description: null, requirements: null, method: "EXTERNAL", pickup: true, download: false, fee: null, feePolicy: "BEFORE", slaDays: 3, requiresApproval: false, fields: [], attachments: [], active: true },
         v.support ? null : v.userId,
         this.clock.now(),
       );

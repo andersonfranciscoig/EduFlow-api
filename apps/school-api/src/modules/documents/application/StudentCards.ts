@@ -211,13 +211,25 @@ export class StudentCards {
    * Prepara um cartão: matrícula ativa, fotografia que se imprime, e não haver já um válido (salvo
    * segunda via, com motivo). Não grava nada: devolve o que falta ou o que se vai gravar.
    */
-  private async prepare(repo: Repo, store: HrFileStore, studentId: string, reason: string | null, settings: CardSettings, school: School, yearId: string | null = null) {
+  /** O logótipo dos cartões, copiado (uma vez, e outra vez só se mudar) para o armazenamento do colégio. */
+  private async logoKey(repo: Repo, store: HrFileStore, school: School): Promise<string | null> {
+    if (!school.logo) return null;
+    const sha = createHash("sha256").update(school.logo).digest("hex");
+    const cur = await repo.logo();
+    if (cur.key && cur.sha === sha) return cur.key;
+    const png = school.logo[0] === 0x89;
+    const saved = await store.save("cards/logo", { fileName: `logotipo.${png ? "png" : "jpg"}`, mimeType: png ? "image/png" : "image/jpeg", content: school.logo });
+    await repo.setLogo(saved.key, sha);
+    return saved.key;
+  }
+
+  private async prepare(repo: Repo, store: HrFileStore, studentId: string, reason: string | null, settings: CardSettings, school: School, yearId: string | null = null, logoKey: string | null = null) {
     const t = await repo.target(studentId, yearId);
     if (!t) return { skip: "Aluno não encontrado." } as const;
     if (!t.yearId || !t.endsOn || !t.yearName) return { skip: yearId ? "Sem matrícula ativa neste ano letivo." : "Sem matrícula ativa: o cartão é do ano letivo da matrícula." } as const;
     const photo = await repo.photo(studentId);
     if (!photo) return { skip: "Sem fotografia: carregue uma (JPG ou PNG)." } as const;
-    if (!PRINTABLE_PHOTO.includes(photo.mimeType)) return { skip: "A fotografia da inscrição está em WEBP, que não se imprime: carregue uma em JPG ou PNG." } as const;
+    if (!PRINTABLE_PHOTO.includes(photo.mimeType)) return { skip: "A fotografia da inscrição está em WEBP, que não se imprime: converta-a para JPG (botão “Converter”) ou carregue outra." } as const;
     let bytes: Buffer;
     try {
       bytes = await store.read(photo.storageKey);
@@ -238,6 +250,7 @@ export class StudentCards {
       showQr: settings.showQr,
       backNote: settings.backNote || DEFAULT_BACK_NOTE,
       photoKey: photo.storageKey,
+      logoKey,
     };
     return { target: t as CardTarget & { yearId: string; endsOn: string; yearName: string }, data, photo: bytes, replaces: active } as const;
   }
@@ -252,10 +265,11 @@ export class StudentCards {
     if (input.reason != null && input.reason !== "" && (!reason || reason.length < 3)) return fail(documentsError("INVALID_INPUT", "Indique o motivo da segunda via (3 a 300 caracteres)."));
     if (!store.ready) return fail(documentsError("NOT_AVAILABLE", "O armazenamento de ficheiros deste colégio ainda não está configurado: fale com a EduFlow."));
     const settings = await repo.settings();
+    const logoKey = await this.logoKey(repo, store, school);
     const issued: { cardId: string; studentId: string; name: string; version: number }[] = [];
     const skipped: Skip[] = [];
     for (const id of ids) {
-      const p = await this.prepare(repo, store, id, reason, settings, school, input.yearId ?? null);
+      const p = await this.prepare(repo, store, id, reason, settings, school, input.yearId ?? null, logoKey);
       if ("skip" in p) {
         skipped.push({ studentId: id, name: (await repo.target(id))?.name ?? "—", reason: p.skip! });
         continue;
@@ -277,11 +291,11 @@ export class StudentCards {
   async forRequest(repo: Repo, store: HrFileStore, studentId: string, request: { id: string; ref: string; reason: string | null }, actor: Actor, school: School): R<{ cardNumber: string; version: number; pdf: Buffer; name: string }> {
     if (!store.ready) return fail(documentsError("NOT_AVAILABLE", "O armazenamento de ficheiros deste colégio ainda não está configurado: fale com a EduFlow."));
     const settings = await repo.settings();
-    const p = await this.prepare(repo, store, studentId, request.reason || `Pedido ${request.ref}`, settings, school);
+    const p = await this.prepare(repo, store, studentId, request.reason || `Pedido ${request.ref}`, settings, school, null, await this.logoKey(repo, store, school));
     if ("skip" in p) return fail(documentsError("INCOMPLETE", `O cartão não se emite: ${p.skip}`, { missing: [p.skip] }));
     const saved = await this.save(repo, p, settings.model, p.replaces ? request.reason || `Segunda via pedida (${request.ref})` : null, request.id, actor);
     const card = (await repo.card(saved.id))!;
-    const pdf = await renderCardsPdf([this.fromRow(card, p.photo, school)], "CARD", `Cartão de estudante — ${card.data.name}`);
+    const pdf = await renderCardsPdf([this.fromRow(card, p.photo, school, school.logo)], "CARD", `Cartão de estudante — ${card.data.name}`);
     return ok({ cardNumber: pad(saved.number), version: saved.version, pdf, name: card.data.name });
   }
 
@@ -305,14 +319,14 @@ export class StudentCards {
 
   // ================================================================ imprimir
 
-  private fromRow(c: CardRow, photo: Buffer, school: School): CardPrint {
+  private fromRow(c: CardRow, photo: Buffer, school: School, logo: Buffer | null): CardPrint {
     const d = c.data;
     return {
       model: c.model,
       primary: d.primary,
       accent: d.accent,
       school: { ...d.school, name: d.school.name || school.name },
-      logo: school.logo,
+      logo,
       student: { name: d.name, number: d.number, classLabel: d.classLabel, groupName: d.groupName, yearName: d.yearName },
       photo,
       validUntil: dmy(c.validUntil),
@@ -348,6 +362,14 @@ export class StudentCards {
 
   private async render(store: HrFileStore, rows: CardRow[], layout: CardsLayout, school: School, base?: string): R<FileOut> {
     const prints: CardPrint[] = [];
+    // o logótipo com que cada cartão foi emitido (os anteriores a guardar o logótipo usam o atual)
+    const logos = new Map<string, Buffer | null>();
+    const logoOf = async (key: string | null | undefined) => {
+      if (key === undefined) return school.logo;
+      if (key === null) return null;
+      if (!logos.has(key)) logos.set(key, await store.read(key).catch(() => school.logo));
+      return logos.get(key) ?? null;
+    };
     for (const c of rows) {
       let photo: Buffer;
       try {
@@ -355,7 +377,7 @@ export class StudentCards {
       } catch {
         return fail(documentsError("NOT_AVAILABLE", `A fotografia do cartão n.º ${pad(c.number)} (${c.data.name}) já não está disponível.`));
       }
-      prints.push(this.fromRow(c, photo, school));
+      prints.push(this.fromRow(c, photo, school, await logoOf(c.data.logoKey)));
     }
     const pdf = await renderCardsPdf(prints, layout, rows.length === 1 ? `Cartão de estudante — ${rows[0].data.name}` : "Cartões de estudante");
     const name = base ?? (rows.length === 1 ? `cartao-${slugOf(rows[0].data.name)}-${pad(rows[0].number)}` : `cartoes-${today(this.clock.now())}`);

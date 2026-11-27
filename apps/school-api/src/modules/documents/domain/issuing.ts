@@ -1,4 +1,4 @@
-import type { Audience, ExtraField } from "./documents";
+import type { AttachmentItem, Audience, ExtraField } from "./documents";
 
 /**
  * EMISSÃO — os modelos (texto com campos {{...}}), o preenchimento com os dados que o colégio já tem
@@ -120,4 +120,32 @@ export function checkUpload(f: { originalname: string; mimetype: string; buffer:
   // o nome guardado: só caracteres seguros
   const base = f.originalname.replace(/\.[^.]+$/, "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9 _-]+/g, "").trim().slice(0, 80) || "documento";
   return { ok: true, mime: real, name: `${base}.${EXTENSIONS[real][0]}` };
+}
+
+type UploadFile = { originalname: string; mimetype: string; buffer: Buffer };
+export interface CheckedAttachment {
+  item: AttachmentItem;
+  name: string;
+  mime: "application/pdf" | "image/jpeg" | "image/png";
+  content: Buffer;
+}
+/**
+ * Os documentos que quem pede junta: só os que o tipo pede, um ficheiro por documento, cada um
+ * válido (PDF, JPG ou PNG até 10 MB). `requireAll`: os obrigatórios têm de vir todos.
+ */
+export function checkAttachments(items: AttachmentItem[], files: { itemKey: string; file: UploadFile }[], requireAll: boolean): { ok: true; files: CheckedAttachment[] } | { ok: false; message: string } {
+  const out: CheckedAttachment[] = [];
+  for (const f of files) {
+    const item = items.find((i) => i.key === f.itemKey);
+    if (!item) return { ok: false, message: "Este documento não pede esse ficheiro." };
+    if (out.some((o) => o.item.key === item.key)) return { ok: false, message: `Junte um só ficheiro para “${item.label}”.` };
+    const c = checkUpload(f.file);
+    if (!c.ok) return { ok: false, message: `“${item.label}”: ${c.message}` };
+    out.push({ item, name: c.name, mime: c.mime, content: f.file.buffer });
+  }
+  if (requireAll) {
+    const missing = items.find((i) => i.required && !out.some((o) => o.item.key === i.key));
+    if (missing) return { ok: false, message: `Junte “${missing.label}” (obrigatório).` };
+  }
+  return { ok: true, files: out };
 }

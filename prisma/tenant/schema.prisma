@@ -2046,6 +2046,8 @@ model DocumentType {
   slaDays          Int      @default(3) @map("sla_days")
   requiresApproval Boolean  @default(false) @map("requires_approval")
   fields           Json     @default("[]")
+  /// os documentos que quem pede junta: [{ key, label, required, hint }]
+  attachments      Json     @default("[]")
   active           Boolean  @default(true)
   position         Int      @default(0)
   createdById      String?  @map("created_by_id") @db.Uuid
@@ -2177,6 +2179,26 @@ model DocumentDelivery {
   @@map("document_deliveries")
 }
 
+/// Um documento junto ao pedido por quem pede (ou pelo balcão), cifrado no armazenamento do colégio.
+model DocumentRequestFile {
+  id             String   @id @db.Uuid
+  requestId      String   @map("request_id") @db.Uuid
+  itemKey        String   @map("item_key")
+  label          String
+  fileName       String   @map("file_name")
+  mimeType       String   @map("mime_type")
+  size           Int
+  sha256         String
+  storageKey     String   @map("storage_key")
+  /// FAMILY | EMPLOYEE | STAFF
+  uploadedByKind String   @map("uploaded_by_kind")
+  uploadedByName String?  @map("uploaded_by_name")
+  createdAt      DateTime @map("created_at")
+
+  @@index([requestId, createdAt], map: "document_request_files_request_idx")
+  @@map("document_request_files")
+}
+
 /// Cartões de estudante: o modelo escolhido pelo colégio (um dos três da plataforma) e a personalização. Uma linha.
 model StudentCardSettings {
   id            Int       @id @default(1) @db.SmallInt
@@ -2189,6 +2211,9 @@ model StudentCardSettings {
   email         String?
   showQr        Boolean   @default(true) @map("show_qr")
   backNote      String?   @map("back_note")
+  /// o logótipo dos cartões, copiado para o armazenamento do colégio (e o seu SHA-256)
+  logoKey       String?   @map("logo_key")
+  logoSha256    String?   @map("logo_sha256")
   updatedById   String?   @map("updated_by_id") @db.Uuid
   updatedByName String?   @map("updated_by_name")
   updatedAt     DateTime? @map("updated_at")

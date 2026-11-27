@@ -16,7 +16,7 @@ família ↔ aluno, ficheiros); o portal só mostra e envia.
 | D5 | Documento preparado fora: PDF, JPG ou PNG até 10 MB, com o tipo real verificado; guardado cifrado no armazenamento do próprio colégio; downloads só pela API, com registo no histórico. O primeiro download de um documento "para download" conclui o pedido. |
 | D6 | Taxas por tipo (só alunos): cobrança `DOCUMENTO` nas Finanças. "Paga antes" (o pedido aguarda o pagamento) ou "paga até à entrega" (prepara-se, mas só se entrega ou descarrega depois de pago). O pagamento validado ou a isenção pelas Finanças fazem o pedido avançar; cancelar ou rejeitar anula a cobrança por pagar. |
 | D7 | Cartões de estudante: três modelos da plataforma (Clássico, Moderno, Contemporâneo), escolha e personalização pelo colégio (cores, contactos, QR, texto do verso), fotografias (a da inscrição ou carregada pela secretaria), emissão individual e por turma, segunda via com motivo, anulação, histórico, impressão (PDF do tamanho do cartão ou folha A4 de 10 com marcas de corte) e verificação pública pelo QR ou pelo código impresso. Os pedidos de "Cartão de estudante" automáticos emitem o cartão; os preparados fora (gráfica) seguem o fluxo normal. |
-| D8 | Verificação dos avisos, testes de ponta a ponta e este relatório. |
+| D8 | Verificação dos avisos, testes de ponta a ponta e este relatório. Fecho dos pendentes: documentos que quem pede junta, logótipo guardado em cada cartão, conversão das fotografias WEBP e relatório do módulo. |
 
 ## 2. Entidades (BD de cada colégio)
 
@@ -25,6 +25,7 @@ família ↔ aluno, ficheiros); o portal só mostra e envia.
 | 0048_documents | `document_types`, `document_requests` (número por sequência, cópia do tipo e do beneficiário, revisão para não se pisarem), `document_request_events` (histórico), `document_deliveries` |
 | 0049_document_issue | `document_templates` (só de acrescentar, por trigger), `issued_documents` (versões; uma só ativa por pedido), `fee_policy` e `charge_id` nos tipos e pedidos, eventos FILE e PAYMENT, `charges.kind` passa a aceitar `DOCUMENTO` |
 | 0050_student_cards | `student_card_settings` (uma linha: modelo e personalização), `student_photos` (fotografia carregada pela secretaria), `student_cards` (por aluno e ano letivo, com versões; um só válido; código único; cópia do que se imprimiu) |
+| 0051_document_attachments | `document_types.attachments` (os documentos a juntar, até 5), `document_request_files` (os ficheiros juntos, cifrados; o mais recente de cada documento é o que conta), `student_card_settings.logo_key/logo_sha256` (o logótipo dos cartões copiado para o armazenamento do colégio) |
 
 Permissões (nenhuma é atribuída automaticamente; o responsável do colégio atribui-as):
 
@@ -36,6 +37,8 @@ Famílias: o encarregado só vê os educandos que gere (`student_guardians.can_m
 ## 3. Endpoints (`/api/v1/documents`, salvo indicação)
 
 - **Tipos e modelos:** `GET/POST types`, `POST types/suggested`, `PUT/DELETE types/:id`, `GET/PUT types/:id/template`, `POST types/:id/template/preview`.
+- **Criar com documentos juntos:** os `POST` de criação (equipa, funcionário e família) aceitam JSON ou multipart com `payload` (o JSON do pedido) e um ficheiro `anexo.<documento>` por documento pedido. Depois: `POST requests/:id/attachments` (campos `file` e `itemKey`) e `GET requests/:id/attachments/:fileId`, também em `me/` e na família.
+- **Relatório:** `GET reports?publico=STUDENT|EMPLOYEE&de=&ate=`.
 - **Pedidos (equipa):** `GET/POST requests`, `GET beneficiaries`, `GET requests/:id`, `POST requests/:id/{review|process|ready-pickup|ready-download|reject|cancel}`, `POST requests/:id/notes`, `POST requests/:id/delivery`, `GET requests/:id/preview`, `POST requests/:id/generate`, `POST requests/:id/upload`, `GET requests/:id/file?versao=`.
 - **Funcionário:** `GET me/types`, `GET/POST me/requests`, `GET me/requests/:id`, `GET me/requests/:id/file`, `POST me/requests/:id/cancel`.
 - **Cartões:** `GET cards`, `PUT cards/settings`, `POST cards/preview`, `GET cards/groups/:id`, `GET cards/groups/:id/print?formato=cartao|folha`, `GET cards/students/:id`, `GET/POST cards/students/:id/photo`, `POST cards/issue`, `GET cards/print?ids=&formato=`, `POST cards/:id/revoke`.
@@ -45,20 +48,21 @@ Famílias: o encarregado só vê os educandos que gere (`student_guardians.can_m
 
 ## 4. Componentes do portal
 
-- Secretaria: `/documentos/pedidos` (+ `/[id]`, com "Documento e taxa"), `/documentos/configuracao` (+ `/[id]/modelo`), `/documentos/cartoes` (modelo + turmas por passos Ensino → Classe → Curso → Turma), `/documentos/cartoes/modelo`, `/documentos/cartoes/turmas/[id]`, `/documentos/cartoes/alunos/[id]`.
-- RH: `/rh/documentos` (+ `/[id]`), `/rh/documentos/configuracao` (+ `/[id]/modelo`).
+- Secretaria: `/documentos/pedidos` (+ `/[id]`, com "Documento e taxa"), `/documentos/configuracao` (+ `/[id]/modelo`), `/documentos/cartoes` (modelo + turmas por passos Ensino → Classe → Curso → Turma), `/documentos/cartoes/modelo`, `/documentos/cartoes/turmas/[id]`, `/documentos/cartoes/alunos/[id]`, `/documentos/relatorio`.
+- RH: `/rh/documentos` (+ `/[id]`), `/rh/documentos/configuracao` (+ `/[id]/modelo`), `/rh/documentos/relatorio`.
 - Funcionário: `/os-meus-documentos` (+ `/[id]`).
 - Família: `/familia/documentos` (+ `/[id]`); a taxa paga-se em `/familia/pagamentos` (serviço "Documento").
 - Público: `/verificar` (escrever o código) e `/verificar/[codigo]` (aberta pelo QR).
 - Ficheiros: route handlers que passam o ficheiro da API ao navegador (`.../ficheiro`, `.../previsualizar`, `/documentos/cartoes/imprimir`, `/documentos/cartoes/fotografia/[id]`); nunca há URL pública.
-- Componentes (`features/documents/components`): `types-config`, `template-editor`, `requests-panel`, `staff-request-view`, `request-wizard`, `my-requests`, `cards-home`, `card-settings`, `cards-group`, `cards-history`, `card-verify`.
+- Componentes (`features/documents/components`): `types-config`, `template-editor`, `requests-panel`, `staff-request-view`, `request-wizard`, `my-requests`, `cards-home`, `card-settings`, `cards-group`, `cards-history`, `card-verify`, `attachments-panel`, `documents-report`.
 
 ## 5. Regras importantes
 
 - Transições validadas no backend; cada passo fica no histórico com o estado anterior, o novo, quem, quando e o motivo.
 - Um documento automático não fica pronto sem ser emitido; com dados em falta não se emite e o sistema diz quais faltam. Nunca se inventam dados.
 - Ficheiros (documentos, fotografias) cifrados no armazenamento do próprio colégio; downloads só pela API, com a sessão.
-- Cartões: só com matrícula ativa e fotografia JPG ou PNG. A fotografia WEBP da inscrição não se imprime: pede-se uma JPG ou PNG. Válidos até ao fim do ano letivo da matrícula. A verificação diz "anulado", "substituído", "fora da validade" ou "aluno já não matriculado" quando é o caso. Reimprimir um cartão antigo leva a marca "SUBSTITUÍDO" ou "ANULADO".
+- Documentos juntos: só os que o tipo pede, um ficheiro por documento (PDF, JPG ou PNG até 10 MB, tipo real verificado). Os obrigatórios vêm com o pedido (ao balcão não se exigem: a equipa vê-os em papel). Juntam-se mais enquanto o pedido está a ser tratado (até ficar pronto); o anterior fica no histórico.
+- Cartões: só com matrícula ativa e fotografia JPG ou PNG. A fotografia WEBP da inscrição converte-se para JPG no navegador da secretaria (botão "Converter"), sem biblioteca de imagem no servidor. Cada cartão guarda o logótipo com que foi emitido. Válidos até ao fim do ano letivo da matrícula. A verificação diz "anulado", "substituído", "fora da validade" ou "aluno já não matriculado" quando é o caso. Reimprimir um cartão antigo leva a marca "SUBSTITUÍDO" ou "ANULADO".
 - Avisos: o pedido recebido, em análise, aguarda pagamento, pagamento confirmado, em preparação (só se a equipa marcar "avisar"), pronto a levantar, disponível para download, entregue, rejeitado e cancelado. O aluno maior recebe os seus avisos; o encarregado recebe os do menor; o funcionário recebe os seus. A equipa é avisada dos pedidos novos, dos pagamentos confirmados e dos cancelamentos.
 - Os documentos escolares não são documentos fiscais: o módulo não emite faturas nem recibos.
 
@@ -66,11 +70,11 @@ Famílias: o encarregado só vê os educandos que gere (`student_guardians.can_m
 
 Ponta a ponta (API real, BD local isolada `eduflow_platform_e2e`, dois portais): blocos `dc` (D1–D3), `d4` (D4–D6) e `d7` (D7–D8), mais a regressão de todos os módulos anteriores. Cobrem: pedidos do aluno maior, do encarregado, de quem não é encarregado (recusado) e do funcionário; quem não tem permissão; geração de PDF; upload com validação do tipo real; dados em falta; segunda via e versões; os três modelos de cartão, personalização, emissão individual e por turma, produção externa, segunda via, anulação e verificação pública; disponível para levantamento, aviso, entrega com e sem quem recebeu; isolamento entre colégios, alunos e funcionários; pedido gratuito, com taxa, pagamento por confirmar, confirmado e isentado.
 
-Última volta (27/11/2026): **1012 verificações certas, 2 falhas que já existiam antes deste módulo** (admissões "aprovar a A7" e assiduidade "verificar agora", ambas dependentes da data). A BD de desenvolvimento ficou intacta. Typecheck, fronteiras entre serviços e lint do portal sem erros.
+Mais o bloco `dp` (documentos juntos, logótipo dos cartões, fotografias WEBP, relatório) e a conversão WEBP → JPG vista numa captura (antes e depois do clique).
+
+Última volta (27/11/2026): **1025 verificações certas, 2 falhas que já existiam antes deste módulo** (admissões "aprovar a A7" e assiduidade "verificar agora", ambas dependentes da data). A BD de desenvolvimento ficou intacta. Typecheck, fronteiras entre serviços e lint do portal sem erros.
 
 ## 7. Problemas conhecidos e pendentes
 
-- Quem pede ainda não pode anexar documentos complementares: os requisitos são texto com instruções.
-- O logótipo do cartão é o atual do colégio (não fica copiado em cada cartão). Ao mudar o logótipo, os cartões reimpressos saem com o novo.
-- Fotografias WEBP das inscrições: o PDF não as embebe. A secretaria carrega uma JPG ou PNG. Converter automaticamente exigiria uma biblioteca de imagem.
-- Relatórios estatísticos do módulo (tempos médios, volume por tipo): não incluídos. O histórico e as entregas consultam-se em cada pedido e nos painéis com filtros.
+- Os cartões emitidos antes de se guardar o logótipo (antes da migração 0051) reimprimem-se com o logótipo atual.
+- A conversão WEBP → JPG precisa de um navegador que leia WEBP (todos os atuais).

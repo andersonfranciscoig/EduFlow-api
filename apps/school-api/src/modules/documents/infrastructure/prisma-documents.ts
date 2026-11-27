@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from ".prisma/tenant-client";
 import { formatStudentNumber } from "../../admissions/domain/enrollment";
 import { gradeLabel } from "../../pedagogy/domain/academic";
-import type { Audience, Department, ExtraField, Method, RequestStatus } from "../domain/documents";
+import type { AttachmentItem, Audience, Department, ExtraField, Method, RequestStatus } from "../domain/documents";
 import { PrismaCardsRepository } from "./prisma-cards";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -24,6 +24,8 @@ export interface TypeRow {
   slaDays: number;
   requiresApproval: boolean;
   fields: ExtraField[];
+  /** os documentos que quem pede junta */
+  attachments: AttachmentItem[];
   active: boolean;
   position: number;
   /** a versão mais recente do modelo (null = sem modelo) */
@@ -123,6 +125,19 @@ export interface IssuedRow {
   createdByName: string | null;
   createdAt: Date;
 }
+export interface AttachmentRow {
+  id: string;
+  itemKey: string;
+  label: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  storageKey: string;
+  uploadedByKind: "FAMILY" | "EMPLOYEE" | "STAFF";
+  uploadedByName: string | null;
+  createdAt: Date;
+}
 export interface EventRow {
   id: string;
   kind: "STATUS" | "NOTE" | "FILE" | "PAYMENT";
@@ -165,7 +180,7 @@ export interface ListFilter {
 
 const TYPE_SQL = Prisma.sql`
   SELECT t.id, t.audience, t.department, t.category, t.name, t.description, t.requirements, t.method, t.pickup, t.download, t.fee, t.fee_policy AS "feePolicy",
-         t.sla_days AS "slaDays", t.requires_approval AS "requiresApproval", t.fields, t.active, t.position, t.updated_at AS "updatedAt",
+         t.sla_days AS "slaDays", t.requires_approval AS "requiresApproval", t.fields, t.attachments, t.active, t.position, t.updated_at AS "updatedAt",
          (SELECT max(v.version) FROM document_templates v WHERE v.type_id = t.id) AS "templateVersion",
          (SELECT count(*)::int FROM document_requests r WHERE r.type_id = t.id) AS requests,
          (SELECT count(*)::int FROM document_requests r WHERE r.type_id = t.id AND r.status IN ('PENDING','IN_REVIEW','AWAITING_PAYMENT','PROCESSING','READY_PICKUP','READY_DOWNLOAD')) AS "openRequests"
@@ -211,15 +226,15 @@ export class PrismaDocumentsRepository {
   async createType(t: TypeInput, actorId: string | null, now: Date) {
     const id = randomUUID();
     await this.db.$executeRaw`
-      INSERT INTO document_types (id, audience, department, category, name, description, requirements, method, pickup, download, fee, fee_policy, sla_days, requires_approval, fields, active, position, created_by_id, created_at, updated_at)
-      VALUES (${id}::uuid, ${t.audience}, ${t.department}, ${t.category}, ${t.name}, ${t.description}, ${t.requirements}, ${t.method}, ${t.pickup}, ${t.download}, ${t.fee}, ${t.feePolicy}, ${t.slaDays}, ${t.requiresApproval}, ${json(t.fields)}::jsonb, ${t.active},
+      INSERT INTO document_types (id, audience, department, category, name, description, requirements, method, pickup, download, fee, fee_policy, sla_days, requires_approval, fields, attachments, active, position, created_by_id, created_at, updated_at)
+      VALUES (${id}::uuid, ${t.audience}, ${t.department}, ${t.category}, ${t.name}, ${t.description}, ${t.requirements}, ${t.method}, ${t.pickup}, ${t.download}, ${t.fee}, ${t.feePolicy}, ${t.slaDays}, ${t.requiresApproval}, ${json(t.fields)}::jsonb, ${json(t.attachments)}::jsonb, ${t.active},
               (SELECT coalesce(max(position), 0) + 1 FROM document_types WHERE audience = ${t.audience}), ${actorId}::uuid, ${now}, ${now})`;
     return id;
   }
   async updateType(id: string, t: TypeInput, now: Date) {
     await this.db.$executeRaw`
       UPDATE document_types SET department = ${t.department}, category = ${t.category}, name = ${t.name}, description = ${t.description}, requirements = ${t.requirements}, method = ${t.method},
-             pickup = ${t.pickup}, download = ${t.download}, fee = ${t.fee}, fee_policy = ${t.feePolicy}, sla_days = ${t.slaDays}, requires_approval = ${t.requiresApproval}, fields = ${json(t.fields)}::jsonb, active = ${t.active}, updated_at = ${now}
+             pickup = ${t.pickup}, download = ${t.download}, fee = ${t.fee}, fee_policy = ${t.feePolicy}, sla_days = ${t.slaDays}, requires_approval = ${t.requiresApproval}, fields = ${json(t.fields)}::jsonb, attachments = ${json(t.attachments)}::jsonb, active = ${t.active}, updated_at = ${now}
        WHERE id = ${id}::uuid`;
   }
   async setActive(id: string, active: boolean, now: Date) {
@@ -445,6 +460,21 @@ export class PrismaDocumentsRepository {
               ${d.fileKey}, ${d.fileName}, ${d.mimeType}, ${d.size}, ${d.sha256}, 'ACTIVE', ${d.reason}, ${actor.id}::uuid, ${actor.name}, ${now})
       RETURNING version`;
     return r.version;
+  }
+
+  // ================================================================ documentos juntos por quem pede
+
+  attachments(requestId: string) {
+    return this.db.$queryRaw<AttachmentRow[]>`
+      SELECT id, item_key AS "itemKey", label, file_name AS "fileName", mime_type AS "mimeType", size, sha256, storage_key AS "storageKey",
+             uploaded_by_kind AS "uploadedByKind", uploaded_by_name AS "uploadedByName", created_at AS "createdAt"
+        FROM document_request_files WHERE request_id = ${requestId}::uuid ORDER BY created_at DESC, id`;
+  }
+  async addAttachment(requestId: string, f: { itemKey: string; label: string; fileName: string; mimeType: string; size: number; sha256: string; storageKey: string }, actor: Actor, now: Date) {
+    await this.db.$executeRaw`
+      INSERT INTO document_request_files (id, request_id, item_key, label, file_name, mime_type, size, sha256, storage_key, uploaded_by_kind, uploaded_by_name, created_at)
+      VALUES (${randomUUID()}::uuid, ${requestId}::uuid, ${f.itemKey}, ${f.label}, ${f.fileName}, ${f.mimeType}, ${f.size}, ${f.sha256}, ${f.storageKey},
+              ${actor.kind === "SYSTEM" ? "STAFF" : actor.kind}, ${actor.name}, ${now})`;
   }
 
   // ================================================================ a quem avisar

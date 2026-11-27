@@ -22,6 +22,8 @@ export interface CardData {
   showQr: boolean;
   backNote: string;
   photoKey: string;
+  /** o logótipo com que foi emitido (cópia no armazenamento do colégio); null/ausente = sem logótipo */
+  logoKey?: string | null;
 }
 export interface CardRow {
   id: string;
@@ -97,6 +99,16 @@ export class PrismaCardsRepository {
              updated_by_name AS "updatedByName", updated_at AS "updatedAt"
         FROM student_card_settings WHERE id = 1`;
     return r ?? { ...DEFAULT_CARD_SETTINGS, updatedByName: null, updatedAt: null };
+  }
+  /** O logótipo já copiado para o armazenamento do colégio (e o SHA-256 da cópia). */
+  async logo() {
+    const [r] = await this.db.$queryRaw<{ key: string | null; sha: string | null }[]>`SELECT logo_key AS key, logo_sha256 AS sha FROM student_card_settings WHERE id = 1`;
+    return r ?? { key: null, sha: null };
+  }
+  async setLogo(key: string, sha: string) {
+    await this.db.$executeRaw`
+      INSERT INTO student_card_settings (id, logo_key, logo_sha256) VALUES (1, ${key}, ${sha})
+      ON CONFLICT (id) DO UPDATE SET logo_key = EXCLUDED.logo_key, logo_sha256 = EXCLUDED.logo_sha256`;
   }
   async saveSettings(s: CardSettings, actor: Actor, now: Date) {
     await this.db.$executeRaw`
