@@ -4,7 +4,7 @@ import { DomainError } from "../../../../../../libs/kernel/src/domain/DomainErro
  * DOCUMENTOS — o que se pode pedir (tipos configuráveis por colégio), os pedidos e a sua máquina
  * de estados. Regras puras (sem BD): validação dos tipos e das respostas, transições permitidas.
  */
-export type DocumentsErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "NAME_TAKEN" | "CHANGED" | "NOT_AVAILABLE";
+export type DocumentsErrorCode = "INVALID_INPUT" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_STATE" | "NAME_TAKEN" | "CHANGED" | "NOT_AVAILABLE" | "INCOMPLETE";
 export type DocumentsError = DomainError<DocumentsErrorCode>;
 export const documentsError = (code: DocumentsErrorCode, message: string, meta?: Record<string, unknown>): DocumentsError => new DomainError(code, message, meta);
 
@@ -103,19 +103,38 @@ export const OPEN_STATUSES: RequestStatus[] = ["PENDING", "IN_REVIEW", "AWAITING
 /** DOC-<ano>-<n.º com 6 algarismos>: único no colégio (a sequência não se repete). */
 export const requestNumber = (year: number, n: number) => `DOC-${year}-${String(n).padStart(6, "0")}`;
 
-export type StaffAction = "review" | "process" | "ready_pickup" | "reject" | "cancel";
+export type StaffAction = "review" | "process" | "ready_pickup" | "ready_download" | "reject" | "cancel";
+export type FeePolicy = "BEFORE" | "ON_DELIVERY";
+export const FEE_POLICIES: Record<FeePolicy, { label: string; hint: string }> = {
+  BEFORE: { label: "Paga antes", hint: "O documento só se prepara depois de as Finanças confirmarem o pagamento." },
+  ON_DELIVERY: { label: "Paga até à entrega", hint: "O documento prepara-se já; só se entrega (ou descarrega) depois de pago." },
+};
 export interface Snapshot {
   status: RequestStatus;
   requiresApproval: boolean;
   pickup: boolean;
   download: boolean;
+  method?: Method;
+  /** já há um ficheiro emitido (gerado ou carregado) */
+  hasFile?: boolean;
+  fee?: number | null;
+  feePolicy?: FeePolicy | null;
+  /** a cobrança da taxa: OPEN | PAID | WAIVED | VOID */
+  chargeStatus?: string | null;
 }
+/** A taxa está resolvida? (sem taxa, paga ou isenta) */
+export const feeSettled = (r: Pick<Snapshot, "fee" | "chargeStatus">) => !r.fee || r.chargeStatus === "PAID" || r.chargeStatus === "WAIVED";
+/** Pode entregar-se ou descarregar-se já? (com "paga até à entrega", só depois de pago) */
+export const releaseAllowed = (r: Pick<Snapshot, "fee" | "chargeStatus" | "feePolicy">) => feeSettled(r) || r.feePolicy === "BEFORE";
 
 /**
  * As transições que a equipa pode fazer. Cada uma diz de onde pode partir; o resto é recusado.
  *  - analisar: Pendente → Em análise
  *  - preparar: Em análise → Em processamento (ou Pendente → Em processamento, se o tipo não pede aprovação)
- *  - pronto a levantar: Em processamento → Disponível para levantamento (se o tipo tem levantamento)
+ *    (com taxa "paga antes" ainda por pagar: → Aguarda pagamento; dali, só com o pagamento confirmado)
+ *  - pronto a levantar: Em processamento → Disponível para levantamento (se o tipo tem levantamento;
+ *    um documento automático precisa do ficheiro emitido)
+ *  - pronto para download: Em processamento → Disponível para download (com o ficheiro emitido)
  *  - rejeitar (com motivo): de Pendente, Em análise, Aguarda pagamento ou Em processamento
  *  - cancelar (com motivo): de qualquer estado aberto que ainda não foi entregue
  * A entrega (Disponível para levantamento → Concluído) faz-se com o registo de quem recebeu.
@@ -126,13 +145,24 @@ export function staffTransition(r: Snapshot, action: StaffAction): { ok: true; t
   switch (action) {
     case "review":
       return from === "PENDING" ? { ok: true, to: "IN_REVIEW" } : no(`Só se começa a analisar um pedido pendente (este está “${STATUS_LABELS[from]}”).`);
-    case "process":
-      if (from === "IN_REVIEW") return { ok: true, to: "PROCESSING" };
-      if (from === "PENDING") return r.requiresApproval ? no("Este documento precisa de aprovação: comece por analisar o pedido.") : { ok: true, to: "PROCESSING" };
+    case "process": {
+      // com taxa "paga antes": fica à espera do pagamento (as Finanças confirmam-no)
+      const waits = !!r.fee && r.feePolicy === "BEFORE" && !feeSettled(r);
+      if (from === "AWAITING_PAYMENT") return waits ? no("O pagamento ainda não foi confirmado pelas Finanças.") : { ok: true, to: "PROCESSING" };
+      if (from === "PENDING" && r.requiresApproval) return no("Este documento precisa de aprovação: comece por analisar o pedido.");
+      if (from === "IN_REVIEW" || from === "PENDING") return { ok: true, to: waits ? "AWAITING_PAYMENT" : "PROCESSING" };
       return no(`Não se pode passar a preparação um pedido “${STATUS_LABELS[from]}”.`);
+    }
     case "ready_pickup":
       if (!r.pickup) return no("Este documento não se levanta no colégio.");
-      return from === "PROCESSING" ? { ok: true, to: "READY_PICKUP" } : no("Só fica disponível para levantamento um pedido em processamento.");
+      if (from !== "PROCESSING") return no("Só fica disponível para levantamento um pedido em processamento.");
+      if (r.method === "AUTO" && !r.hasFile) return no("Emita primeiro o documento (gerar com o modelo ou juntar o ficheiro).");
+      return { ok: true, to: "READY_PICKUP" };
+    case "ready_download":
+      if (!r.download) return no("Este documento não se descarrega pela plataforma.");
+      if (from !== "PROCESSING") return no("Só fica disponível para download um pedido em processamento.");
+      if (!r.hasFile) return no("Emita primeiro o documento (gerar com o modelo ou juntar o ficheiro).");
+      return { ok: true, to: "READY_DOWNLOAD" };
     case "reject":
       return ["PENDING", "IN_REVIEW", "AWAITING_PAYMENT", "PROCESSING"].includes(from) ? { ok: true, to: "REJECTED" } : no(`Não se pode rejeitar um pedido “${STATUS_LABELS[from]}”.`);
     case "cancel":
@@ -144,6 +174,10 @@ export function staffTransition(r: Snapshot, action: StaffAction): { ok: true; t
 export const requesterCanCancel = (s: RequestStatus) => s === "PENDING" || s === "IN_REVIEW" || s === "AWAITING_PAYMENT";
 /** A entrega física: só de um pedido disponível para levantamento. */
 export const canDeliver = (s: RequestStatus) => s === "READY_PICKUP";
+/** Quem pediu pode descarregar: com download, ficheiro emitido, documento pronto e a taxa resolvida (se for paga até à entrega). */
+export const canDownload = (r: Snapshot) => r.download && !!r.hasFile && (r.status === "READY_DOWNLOAD" || r.status === "READY_PICKUP" || r.status === "COMPLETED") && releaseAllowed(r);
+/** Pode emitir-se (ou substituir) o ficheiro: em processamento, pronto ou concluído (segunda via). */
+export const canIssue = (s: RequestStatus) => s === "PROCESSING" || s === "READY_PICKUP" || s === "READY_DOWNLOAD" || s === "COMPLETED";
 
 /** A data prevista: hoje + o prazo do tipo (dias corridos). */
 export function dueOn(today: string, slaDays: number) {
