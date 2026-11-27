@@ -2225,9 +2225,8 @@ model StudentCardSettings {
 model DocumentHeaderSettings {
   id               Int       @id @default(1) @db.SmallInt
   enabled          Boolean   @default(true)
-  countryLine      String    @default("República de Angola") @map("country_line")
-  /// vazio = sem a linha do ministério
-  ministryLine     String?   @default("Ministério da Educação") @map("ministry_line")
+  /// as linhas por cima do nome do colégio (1 a 6), por ordem
+  lines            Json      @default("[\"República de Angola\", \"Ministério da Educação\"]")
   showEmblem       Boolean   @default(true) @map("show_emblem")
   /// a insígnia carregada pelo colégio (PNG ou JPG, cifrada no armazenamento do colégio)
   emblemKey        String?   @map("emblem_key")

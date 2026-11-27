@@ -228,7 +228,7 @@ export class PrismaDocumentsRepository {
 
   async header(): Promise<HeaderRow> {
     const [r] = await this.db.$queryRaw<HeaderRow[]>`
-      SELECT enabled, country_line AS "countryLine", ministry_line AS "ministryLine", show_emblem AS "showEmblem",
+      SELECT enabled, lines, show_emblem AS "showEmblem",
              emblem_key AS "emblemKey", emblem_name AS "emblemName", emblem_mime AS "emblemMime", emblem_uploaded_at AS "emblemUploadedAt",
              logo_key AS "logoKey", logo_name AS "logoName", logo_uploaded_at AS "logoUploadedAt",
              updated_by_name AS "updatedByName", updated_at AS "updatedAt"
@@ -237,9 +237,9 @@ export class PrismaDocumentsRepository {
   }
   async saveHeader(h: HeaderSettings, actor: Actor, now: Date) {
     await this.db.$executeRaw`
-      INSERT INTO document_header_settings (id, enabled, country_line, ministry_line, show_emblem, updated_by_id, updated_by_name, updated_at)
-      VALUES (1, ${h.enabled}, ${h.countryLine}, ${h.ministryLine}, ${h.showEmblem}, ${actor.id}::uuid, ${actor.name}, ${now})
-      ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, country_line = EXCLUDED.country_line, ministry_line = EXCLUDED.ministry_line,
+      INSERT INTO document_header_settings (id, enabled, lines, show_emblem, updated_by_id, updated_by_name, updated_at)
+      VALUES (1, ${h.enabled}, ${json(h.lines)}::jsonb, ${h.showEmblem}, ${actor.id}::uuid, ${actor.name}, ${now})
+      ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, lines = EXCLUDED.lines,
         show_emblem = EXCLUDED.show_emblem, updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
     await this.db.schoolActivity.create({ data: { id: randomUUID(), type: "documents.header.settings", subjectId: HEADER_SUBJECT, actorId: actor.id, details: { ...h } as Prisma.InputJsonValue, occurredAt: now } });
   }

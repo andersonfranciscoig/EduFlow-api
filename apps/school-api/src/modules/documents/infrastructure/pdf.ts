@@ -19,8 +19,8 @@ export interface PdfInput {
   header?: OfficialHeader | null;
 }
 export interface OfficialHeader {
-  country: string;
-  ministry: string | null;
+  /** as linhas por cima do nome do colégio (ex.: "República de Angola", "Ministério da Educação") */
+  lines: string[];
   emblem: Buffer | null;
   /** a chave da insígnia no armazenamento (os cartões guardam-na) */
   emblemKey?: string | null;
@@ -130,8 +130,10 @@ export async function renderDocumentPdf(input: PdfInput): Promise<Buffer> {
         p.drawImage(emblem, { x: (A4.w - emblem.width * s) / 2, y: y - emblem.height * s, width: emblem.width * s, height: emblem.height * s });
         y -= emblem.height * s + 14;
       } else y -= 10;
-      y = center(p, official.country.toUpperCase(), y, 11.5, bold);
-      if (official.ministry) y = center(p, official.ministry.toUpperCase(), y, 10.5, bold);
+      // a primeira linha (ex.: República de Angola) um pouco maior; as seguintes por ordem
+      official.lines.forEach((l, i) => {
+        y = center(p, l.toUpperCase(), y, i === 0 ? 11.5 : 10.5, bold);
+      });
       y = center(p, input.school.toUpperCase(), y - 1, 12, bold);
       y -= 4;
       p.drawLine({ start: { x: M.x, y }, end: { x: A4.w - M.x, y }, thickness: 1.4, color: LINE });

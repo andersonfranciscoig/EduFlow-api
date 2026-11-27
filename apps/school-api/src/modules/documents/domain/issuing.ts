@@ -100,19 +100,22 @@ export const fieldKey = (k: string) => `${FIELD_PREFIX}${k}`;
 /** O cabeçalho oficial dos documentos (como nos documentos escolares angolanos). */
 export interface HeaderSettings {
   enabled: boolean;
-  countryLine: string;
-  ministryLine: string | null;
+  /** as linhas por cima do nome do colégio (1 a 6), por ordem */
+  lines: string[];
   showEmblem: boolean;
 }
-export const DEFAULT_HEADER: HeaderSettings = { enabled: true, countryLine: "República de Angola", ministryLine: "Ministério da Educação", showEmblem: true };
+export const DEFAULT_HEADER: HeaderSettings = { enabled: true, lines: ["República de Angola", "Ministério da Educação"], showEmblem: true };
+export const HEADER_MAX_LINES = 6;
 export const EMBLEM_MAX_BYTES = 2 * 1024 * 1024;
 
-export function checkHeader(input: { enabled: boolean; countryLine?: string | null; ministryLine?: string | null; showEmblem: boolean }): { ok: true; value: HeaderSettings } | { ok: false; message: string } {
-  const country = String(input.countryLine ?? "").replace(/\s+/g, " ").trim();
-  const ministry = String(input.ministryLine ?? "").replace(/\s+/g, " ").trim();
-  if (country.length < 3 || country.length > 80) return { ok: false, message: "Escreva a primeira linha do cabeçalho (3 a 80 caracteres), por exemplo “República de Angola”." };
-  if (ministry.length > 120) return { ok: false, message: "A linha do ministério tem no máximo 120 caracteres." };
-  return { ok: true, value: { enabled: input.enabled, countryLine: country, ministryLine: ministry || null, showEmblem: input.showEmblem } };
+/** As linhas: as vazias saem; pelo menos uma (a primeira com 3 caracteres ou mais), no máximo 6, cada uma até 120. */
+export function checkHeader(input: { enabled: boolean; lines?: (string | null)[] | null; showEmblem: boolean }): { ok: true; value: HeaderSettings } | { ok: false; message: string } {
+  const lines = (input.lines ?? []).map((l) => String(l ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (!lines.length || lines[0].length < 3) return { ok: false, message: "Escreva pelo menos a primeira linha do cabeçalho (3 caracteres ou mais), por exemplo “República de Angola”." };
+  if (lines.length > HEADER_MAX_LINES) return { ok: false, message: `O cabeçalho tem no máximo ${HEADER_MAX_LINES} linhas (além do nome do colégio).` };
+  const long = lines.findIndex((l) => l.length > 120);
+  if (long >= 0) return { ok: false, message: `A linha ${long + 1} tem mais de 120 caracteres.` };
+  return { ok: true, value: { enabled: input.enabled, lines, showEmblem: input.showEmblem } };
 }
 
 /** A insígnia: PNG ou JPG até 2 MB, com o tipo real verificado. */
