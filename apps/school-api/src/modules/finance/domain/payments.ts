@@ -14,14 +14,14 @@ import type { LateFeeKind } from "./pricing";
  *
  * Nada conta como pago antes de as Finanças validarem. Referência e Multicaixa Express chegam em breve.
  */
-export type ChargeKind = "INSCRICAO" | "MATRICULA" | "PROPINA" | "OUTRA";
+export type ChargeKind = "INSCRICAO" | "MATRICULA" | "PROPINA" | "DOCUMENTO" | "OUTRA";
 export type ChargeStatus = "OPEN" | "PAID" | "WAIVED" | "VOID";
 export type PaymentStatus = "SUBMITTED" | "VALIDATED" | "REJECTED" | "CANCELLED";
 export type PaymentMethod = "TRANSFERENCIA" | "DEPOSITO";
 /** Formas de pagamento que hão de existir (pedem-se à EduFlow: lista de espera). */
 export type FutureMethod = "REFERENCIA" | "EXPRESS";
 
-export const CHARGE_KINDS: Record<ChargeKind, string> = { INSCRICAO: "Inscrição", MATRICULA: "Matrícula", PROPINA: "Propina", OUTRA: "Outra" };
+export const CHARGE_KINDS: Record<ChargeKind, string> = { INSCRICAO: "Inscrição", MATRICULA: "Matrícula", PROPINA: "Propina", DOCUMENTO: "Documento", OUTRA: "Outra" };
 export const CHARGE_LABELS: Record<ChargeStatus, string> = { OPEN: "Por pagar", PAID: "Paga", WAIVED: "Isenta", VOID: "Sem efeito" };
 export const PAYMENT_LABELS: Record<PaymentStatus, string> = { SUBMITTED: "Em validação", VALIDATED: "Validado", REJECTED: "Recusado", CANCELLED: "Retirado" };
 export const METHOD_LABELS: Record<PaymentMethod, string> = { TRANSFERENCIA: "Transferência", DEPOSITO: "Depósito" };

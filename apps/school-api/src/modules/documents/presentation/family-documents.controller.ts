@@ -1,17 +1,19 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
+import { HrFileStores } from "../../hr/infrastructure/hr-file-store";
+import { DocumentIssuing } from "../application/DocumentIssuing";
 import { ApiBody, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { z } from "zod";
 import { unwrap } from "../../../../../../libs/kernel/src/presentation/domain-http";
 import { openApi } from "../../../../../../libs/kernel/src/presentation/openapi";
 import { ZodValidationPipe } from "../../../../../../libs/kernel/src/presentation/zod-validation.pipe";
 import { CurrentTenant, type TenantContext, TenantGuard } from "../../../tenancy/tenant-context";
-import { notifyFamily } from "../../family/infrastructure/family-notify";
 import { CurrentFamily, FamilyAuthGuard, type FamilyPrincipal } from "../../family/presentation/family-auth";
 import { Notifier } from "../../notifications/infrastructure/notifier";
 import { DocumentRequests, type Notices } from "../application/DocumentRequests";
 import type { RequestStatus } from "../domain/documents";
 import { PrismaDocumentsRepository } from "../infrastructure/prisma-documents";
-import { cancelBody, DOCUMENTS_HTTP, requestBody } from "./documents.controller";
+import { cancelBody, documentNotices, DOCUMENTS_HTTP, requestBody, sendDocument } from "./documents.controller";
 
 const id = new ZodValidationPipe(z.uuid({ error: "Identificador inválido." }));
 const familyRequestBody = requestBody.extend({ studentId: z.uuid() }).meta({ title: "FamilyDocumentRequest", description: "O aluno (o próprio, ou um educando menor que a conta gere), o documento e as respostas." });
@@ -35,6 +37,8 @@ const listQuery = new ZodValidationPipe(
 export class FamilyDocumentsController {
   constructor(
     private readonly requests: DocumentRequests,
+    private readonly issuing: DocumentIssuing,
+    private readonly stores: HrFileStores,
     private readonly notifier: Notifier,
   ) {}
 
@@ -42,10 +46,7 @@ export class FamilyDocumentsController {
     return PrismaDocumentsRepository.for(t.db);
   }
   private notices(t: TenantContext): Notices {
-    return {
-      staff: this.notifier.for(t.db, { slug: t.entry.slug, name: t.entry.schoolName }),
-      family: { notify: (accountId, n) => notifyFamily(t.db, { accountId, ...n, now: new Date() }) },
-    };
+    return documentNotices(this.notifier, t);
   }
 
   @Get("catalog")
@@ -64,13 +65,19 @@ export class FamilyDocumentsController {
   @Get("requests")
   @ApiOperation({ summary: "Os pedidos dos alunos da conta (?aluno=&estado=&q=&pagina=)" })
   async list(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Query(listQuery) q: { aluno?: string; estado?: RequestStatus | "OPEN"; q?: string; pagina?: number }) {
-    return this.requests.familyList(this.repo(t), f.account.id, { studentId: q.aluno, status: q.estado, q: q.q, page: q.pagina });
+    return this.requests.familyList(this.repo(t), this.notices(t), f.account.id, { studentId: q.aluno, status: q.estado, q: q.q, page: q.pagina });
   }
 
   @Get("requests/:id")
   @ApiOperation({ summary: "Um pedido, com o histórico (sem as notas internas do colégio)" })
   async detail(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) requestId: string) {
-    return unwrap(await this.requests.familyDetail(this.repo(t), f.account.id, requestId), DOCUMENTS_HTTP);
+    return unwrap(await this.requests.familyDetail(this.repo(t), this.notices(t), f.account.id, requestId), DOCUMENTS_HTTP);
+  }
+
+  @Get("requests/:id/file")
+  @ApiOperation({ summary: "Descarregar o documento (quando está pronto e, com taxa paga até à entrega, depois de pago); fica no histórico" })
+  async file(@CurrentTenant() t: TenantContext, @CurrentFamily() f: FamilyPrincipal, @Param("id", id) requestId: string, @Res({ passthrough: true }) res: Response) {
+    return sendDocument(res, unwrap(await this.issuing.requesterFile(this.repo(t), this.stores.for(t.entry), this.notices(t), { kind: "FAMILY", accountId: f.account.id }, requestId), DOCUMENTS_HTTP), true);
   }
 
   @Post("requests/:id/cancel")

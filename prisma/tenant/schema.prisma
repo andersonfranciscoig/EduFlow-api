@@ -2041,6 +2041,8 @@ model DocumentType {
   pickup           Boolean  @default(true)
   download         Boolean  @default(false)
   fee              Int?
+  /// BEFORE (só se prepara depois de pago) | ON_DELIVERY (só se entrega depois de pago)
+  feePolicy        String   @default("BEFORE") @map("fee_policy")
   slaDays          Int      @default(3) @map("sla_days")
   requiresApproval Boolean  @default(false) @map("requires_approval")
   fields           Json     @default("[]")
@@ -2089,6 +2091,9 @@ model DocumentRequest {
   createdAt          DateTime  @map("created_at")
   updatedAt          DateTime  @map("updated_at")
   completedAt        DateTime? @map("completed_at")
+  feePolicy          String?   @map("fee_policy")
+  /// a cobrança da taxa (kind DOCUMENTO)
+  chargeId           String?   @map("charge_id") @db.Uuid
 
   @@index([studentId, createdAt(sort: Desc)], map: "document_requests_student_idx")
   @@index([employeeId, createdAt(sort: Desc)], map: "document_requests_employee_idx")
@@ -2112,6 +2117,49 @@ model DocumentRequestEvent {
 
   @@index([requestId, at], map: "document_request_events_request_idx")
   @@map("document_request_events")
+}
+
+/// Cada versão do modelo de um tipo de documento (só de acrescentar; a mais recente é a que se usa).
+model DocumentTemplate {
+  id            String   @id @db.Uuid
+  typeId        String   @map("type_id") @db.Uuid
+  version       Int
+  title         String
+  body          String
+  signerName    String?  @map("signer_name")
+  signerRole    String?  @map("signer_role")
+  showLogo      Boolean  @default(true) @map("show_logo")
+  createdById   String?  @map("created_by_id") @db.Uuid
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @map("created_at")
+
+  @@unique([typeId, version], map: "document_templates_version_key")
+  @@map("document_templates")
+}
+
+/// Cada versão emitida de um pedido (gerada com o modelo ou carregada): ficheiro cifrado no armazenamento do colégio.
+model IssuedDocument {
+  id              String    @id @db.Uuid
+  requestId       String    @map("request_id") @db.Uuid
+  version         Int
+  /// AUTO | EXTERNAL
+  method          String
+  templateVersion Int?      @map("template_version")
+  fileKey         String    @map("file_key")
+  fileName        String    @map("file_name")
+  mimeType        String    @map("mime_type")
+  size            Int
+  sha256          String
+  /// ACTIVE | REPLACED
+  status          String    @default("ACTIVE")
+  reason          String?
+  createdById     String?   @map("created_by_id") @db.Uuid
+  createdByName   String?   @map("created_by_name")
+  createdAt       DateTime  @map("created_at")
+  replacedAt      DateTime? @map("replaced_at")
+
+  @@unique([requestId, version], map: "issued_documents_version_key")
+  @@map("issued_documents")
 }
 
 /// A entrega de um documento físico: quem recebeu, a relação com o beneficiário e quem entregou.

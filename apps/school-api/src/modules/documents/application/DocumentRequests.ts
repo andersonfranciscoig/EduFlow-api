@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Logger } from "@nestjs/common";
 import type { Clock } from "../../../../../../libs/kernel/src/application/ports";
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
@@ -6,33 +7,40 @@ import type { StaffNotify } from "../../notifications/infrastructure/notifier";
 import {
   type Audience,
   canDeliver,
+  canDownload,
+  canIssue,
   checkAnswers,
   DEPARTMENTS,
   type DocumentsError,
-  type ExtraField,
   documentsError,
   dueOn,
+  type ExtraField,
+  FEE_POLICIES,
+  feeSettled,
   METHODS,
   OPEN_STATUSES,
+  releaseAllowed,
   type RequestStatus,
   requesterCanCancel,
   requestNumber,
+  type Snapshot,
   type StaffAction,
   staffTransition,
   STATUS_LABELS,
 } from "../domain/documents";
-import type { Actor, Beneficiary, ListFilter, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
+import type { Actor, Beneficiary, IssuedRow, ListFilter, PrismaDocumentsRepository, RequestRow, TypeRow } from "../infrastructure/prisma-documents";
 import { audiencesFor, can, type DocumentsViewer } from "./DocumentTypes";
 
 type R<T> = Promise<Result<T, DocumentsError>>;
 type Repo = PrismaDocumentsRepository;
-const today = (now: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Luanda" }).format(now);
+export const today = (now: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Luanda" }).format(now);
 const clean = (v: unknown, max: number) =>
   String(v ?? "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
 const notFound = () => fail(documentsError("NOT_FOUND", "Pedido não encontrado."));
+const kz = (n: number) => `${n.toLocaleString("pt-PT")} Kz`;
 
 /** Avisos à família (uma conta de cada vez) — a implementação grava na área da família. */
 export interface FamilyNotify {
@@ -47,18 +55,31 @@ export interface Notices {
 export const RECEIVER_RELATIONSHIPS = { SELF: "O próprio", GUARDIAN: "Encarregado de educação", AUTHORIZED: "Pessoa autorizada" } as const;
 export type ReceiverRelationship = keyof typeof RECEIVER_RELATIONSHIPS;
 
+/** O estado do pedido para a máquina de estados (com o ficheiro emitido e a taxa). */
+export const snapshotOf = (r: RequestRow, file: IssuedRow | null): Snapshot => ({
+  status: r.status,
+  requiresApproval: r.requiresApproval,
+  pickup: r.pickup,
+  download: r.download,
+  method: r.method,
+  hasFile: !!file,
+  fee: r.fee,
+  feePolicy: r.feePolicy,
+  chargeStatus: r.chargeStatus,
+});
+
 /**
  * PEDIDOS DE DOCUMENTOS — da família (o aluno maior ou o encarregado de um menor), do funcionário (os
  * seus) e da equipa (ao balcão, em nome de alguém). A máquina de estados está em domain/documents;
- * aqui confirma-se quem pode o quê, guarda-se o histórico e avisa-se quem deve saber.
+ * aqui confirma-se quem pode o quê, cria-se a cobrança da taxa, guarda-se o histórico e avisa-se.
  */
 export class DocumentRequests {
   private readonly logger = new Logger("DocumentRequests");
   constructor(private readonly clock: Clock) {}
 
-  private ref = (r: { year: number; number: number }) => requestNumber(r.year, r.number);
+  ref = (r: { year: number; number: number }) => requestNumber(r.year, r.number);
   private staffLink = (r: { id: string; audience: Audience }) => `${r.audience === "EMPLOYEE" ? "/rh/documentos" : "/documentos/pedidos"}/${r.id}`;
-  private async quietly(what: string, fn: () => Promise<unknown>) {
+  async quietly(what: string, fn: () => Promise<unknown>) {
     try {
       await fn();
     } catch (e) {
@@ -66,8 +87,25 @@ export class DocumentRequests {
     }
   }
 
+  /** A taxa do pedido, para quem pede e para a equipa. */
+  private feeView(r: RequestRow) {
+    if (!r.fee) return null;
+    const settled = feeSettled(r);
+    return {
+      amount: r.fee,
+      policy: r.feePolicy ?? "BEFORE",
+      policyLabel: FEE_POLICIES[r.feePolicy ?? "BEFORE"].label,
+      status: r.chargeStatus,
+      statusLabel: r.chargeStatus === "PAID" ? "Paga" : r.chargeStatus === "WAIVED" ? "Isenta" : r.chargeStatus === "VOID" ? "Anulada" : r.chargeInValidation ? "Pagamento em validação" : "Por pagar",
+      settled,
+      inValidation: r.chargeInValidation,
+      chargeId: r.chargeId,
+    };
+  }
+
   /** O pedido tal como a família ou o funcionário o vê (sem as notas internas). */
-  private publicView(r: RequestRow, events: Awaited<ReturnType<Repo["events"]>>, delivery: Awaited<ReturnType<Repo["delivery"]>>, fields: ExtraField[]) {
+  private publicView(r: RequestRow, events: Awaited<ReturnType<Repo["events"]>>, delivery: Awaited<ReturnType<Repo["delivery"]>>, fields: ExtraField[], file: IssuedRow | null) {
+    const snap = snapshotOf(r, file);
     return {
       id: r.id,
       reference: this.ref(r),
@@ -79,14 +117,14 @@ export class DocumentRequests {
       pickup: r.pickup,
       download: r.download,
       fee: r.fee,
+      feeInfo: this.feeView(r),
       beneficiary: r.beneficiary,
       studentId: r.studentId,
       requesterName: r.requesterName,
       relationship: r.relationship,
       answers: r.answers,
-      /** as respostas com o nome de cada campo (os campos do tipo; um campo que já não exista mostra a chave) */
+      /** as respostas com o nome de cada campo, pela ordem dos campos do documento */
       answerList: [
-        // pela ordem dos campos do documento; um campo que já não exista vai no fim
         ...fields.filter((f) => r.answers[f.key]).map((f) => ({ key: f.key, label: f.label, value: r.answers[f.key] })),
         ...Object.entries(r.answers)
           .filter(([key]) => !fields.some((f) => f.key === key))
@@ -101,9 +139,12 @@ export class DocumentRequests {
       cancelReason: r.cancelReason,
       createdAt: r.createdAt.toISOString(),
       completedAt: r.completedAt?.toISOString() ?? null,
-      canCancel: requesterCanCancel(r.status),
+      canCancel: requesterCanCancel(r.status) && !r.chargeInValidation,
+      /** o ficheiro que quem pediu pode descarregar (quando pode) */
+      file: canDownload(snap) && file ? { version: file.version, name: file.fileName, size: file.size, mimeType: file.mimeType } : null,
+      waitingPayment: !!r.fee && !releaseAllowed(r) && (r.status === "READY_PICKUP" || r.status === "READY_DOWNLOAD"),
       delivery: delivery && { receivedBy: delivery.receivedBy, relationshipLabel: RECEIVER_RELATIONSHIPS[delivery.relationship as ReceiverRelationship] ?? delivery.relationship, at: delivery.deliveredAt.toISOString() },
-      history: events.filter((e) => !e.internal).map((e) => ({ kind: e.kind, from: e.fromStatus, to: e.toStatus, toLabel: e.toStatus ? STATUS_LABELS[e.toStatus] : null, note: e.note, by: e.actorKind === "STAFF" ? "Colégio" : e.actorName, at: e.at.toISOString() })),
+      history: events.filter((e) => !e.internal).map((e) => ({ kind: e.kind, from: e.fromStatus, to: e.toStatus, toLabel: e.toStatus ? STATUS_LABELS[e.toStatus] : null, note: e.note, by: e.actorKind === "STAFF" ? "Colégio" : e.actorKind === "SYSTEM" ? "Sistema" : e.actorName, at: e.at.toISOString() })),
     };
   }
   private listItem(r: RequestRow) {
@@ -121,29 +162,30 @@ export class DocumentRequests {
       status: r.status,
       statusLabel: STATUS_LABELS[r.status],
       fee: r.fee,
+      feeStatusLabel: this.feeView(r)?.statusLabel ?? null,
       pickup: r.pickup,
       download: r.download,
       dueOn: r.dueOn,
       overdue: !!r.dueOn && OPEN_STATUSES.includes(r.status) && r.status !== "READY_PICKUP" && r.status !== "READY_DOWNLOAD" && r.dueOn < today(this.clock.now()),
       createdAt: r.createdAt.toISOString(),
-      canCancel: requesterCanCancel(r.status),
+      canCancel: requesterCanCancel(r.status) && !r.chargeInValidation,
     };
   }
 
   // ================================================================ avisos
 
   /** Avisa quem pediu (a família do aluno, ou o funcionário) de uma mudança no pedido. */
-  private async tellRequester(repo: Repo, notices: Notices, r: RequestRow, title: string, body: string | null) {
+  async tellRequester(repo: Repo, notices: Notices, r: RequestRow, title: string, body: string | null, link?: string) {
     const t = `${r.typeName}: ${title}`;
     if (r.audience === "STUDENT" && r.studentId) {
       const accounts = await repo.familyRecipients(r.studentId, today(this.clock.now()));
-      for (const a of accounts) await notices.family.notify(a.accountId, { kind: "DOCUMENT_STATUS", title: `${t} · ${r.beneficiary.name.split(" ")[0]}`, body: `${this.ref(r)}${body ? `. ${body}` : ""}`, link: `/familia/documentos/${r.id}`, studentId: r.studentId });
+      for (const a of accounts) await notices.family.notify(a.accountId, { kind: "DOCUMENT_STATUS", title: `${t} · ${r.beneficiary.name.split(" ")[0]}`, body: `${this.ref(r)}${body ? `. ${body}` : ""}`, link: link ?? `/familia/documentos/${r.id}`, studentId: r.studentId });
     } else if (r.employeeId) {
-      await notices.staff.notify({ kind: "MY_DOCUMENTS", employeeIds: [r.employeeId], title: t, body: `${this.ref(r)}${body ? `. ${body}` : ""}`, link: `/os-meus-documentos/${r.id}`, dedupeKey: `doc:${r.id}:${r.revision}:${r.status}` });
+      await notices.staff.notify({ kind: "MY_DOCUMENTS", employeeIds: [r.employeeId], title: t, body: `${this.ref(r)}${body ? `. ${body}` : ""}`, link: `/os-meus-documentos/${r.id}`, dedupeKey: `doc:${r.id}:${r.revision}:${r.status}:${title}` });
     }
   }
   /** Avisa quem trata os pedidos deste público (secretaria ou RH). */
-  private async tellStaff(repo: Repo, notices: Notices, r: RequestRow, title: string, body: string | null, key: string) {
+  async tellStaff(repo: Repo, notices: Notices, r: RequestRow, title: string, body: string | null, key: string) {
     const perms = r.audience === "EMPLOYEE" ? ["hr.doc_requests.process"] : ["documents.requests.process"];
     const users = await repo.usersWithAny(perms);
     if (users.length) await notices.staff.notify({ kind: "DOCUMENT_REQUESTS", userIds: users.map((u) => u.id), title, body, link: this.staffLink(r), dedupeKey: `doc:${r.id}:${key}` });
@@ -153,8 +195,47 @@ export class DocumentRequests {
     if (!r) return;
     await this.quietly("pedido novo", async () => {
       if (!byStaff) await this.tellStaff(repo, notices, r, `Pedido de documento: ${r.typeName}`, `${this.ref(r)} · ${r.beneficiary.name}${r.beneficiary.kind === "STUDENT" && r.beneficiary.classLabel ? ` · ${r.beneficiary.classLabel}${r.beneficiary.groupName ? ` turma ${r.beneficiary.groupName}` : ""}` : ""}`, "new");
-      await this.tellRequester(repo, notices, r, "pedido recebido", r.dueOn ? `Prazo previsto: ${r.dueOn.split("-").reverse().join("/")}.` : null);
+      const fee = r.fee ? ` Taxa: ${kz(r.fee)} (em Pagamentos).` : "";
+      await this.tellRequester(repo, notices, r, "pedido recebido", `${r.dueOn ? `Prazo previsto: ${r.dueOn.split("-").reverse().join("/")}.` : ""}${fee}`.trim() || null);
     });
+  }
+
+  // ================================================================ taxas: o pagamento confirmado faz avançar o pedido
+
+  /**
+   * Os pedidos à espera do pagamento cuja cobrança as Finanças já deram como paga (ou isentaram)
+   * passam a "Em processamento". Corre depois de validar um pagamento ou isentar uma cobrança, e ao
+   * abrir os pedidos (se alguma coisa escapou).
+   */
+  async syncPayments(repo: Repo, notices: Notices) {
+    const ids = await repo.paidWhileWaiting();
+    let moved = 0;
+    for (const { id } of ids) {
+      const r = await repo.request(id);
+      if (!r || r.status !== "AWAITING_PAYMENT") continue;
+      const now = this.clock.now();
+      const done = await repo.transaction(async (tx) => {
+        if (!(await tx.move(r.id, "AWAITING_PAYMENT", "PROCESSING", r.revision, {}, now))) return false;
+        await tx.event(r.id, { kind: "PAYMENT", from: "AWAITING_PAYMENT", to: "PROCESSING", note: r.chargeStatus === "WAIVED" ? "Taxa isentada pelas Finanças" : "Pagamento confirmado pelas Finanças", internal: false }, { kind: "SYSTEM", id: null, name: "Sistema" }, now);
+        return true;
+      });
+      if (!done) continue;
+      moved++;
+      const fresh = (await repo.request(id))!;
+      await this.quietly("pagamento confirmado", async () => {
+        await this.tellRequester(repo, notices, fresh, "pagamento confirmado", "O documento vai ser preparado.");
+        await this.tellStaff(repo, notices, fresh, `Pagamento confirmado: ${fresh.typeName}`, `${this.ref(fresh)} · ${fresh.beneficiary.name}: pode preparar o documento.`, `paid`);
+      });
+    }
+    return moved;
+  }
+
+  /** Cancelar ou rejeitar com taxa: a cobrança por pagar anula-se; com um pagamento em validação, espera-se. */
+  private feeBlocksClosing(r: RequestRow) {
+    return r.chargeInValidation ? "Há um pagamento desta taxa à espera das Finanças: aguarde a decisão antes de cancelar ou rejeitar." : null;
+  }
+  private feeClosingNote(r: RequestRow) {
+    return r.chargeStatus === "PAID" ? " A taxa já estava paga: o reembolso trata-se com as Finanças." : "";
   }
 
   // ================================================================ criar (comum)
@@ -170,8 +251,15 @@ export class DocumentRequests {
     // o mesmo documento, para o mesmo beneficiário, ainda em curso: não se pede duas vezes
     const open = await repo.list({ audiences: [t.audience], status: "OPEN", typeId: t.id, studentIds: input.studentId ? [input.studentId] : null, employeeId: input.employeeId, page: 1, pageSize: 1 });
     if (open.rows[0]) return fail(documentsError("INVALID_STATE", `Já há um pedido deste documento em curso (${this.ref(open.rows[0])}).`, { requestId: open.rows[0].id }));
-    const { id, number } = await repo.transaction((tx) =>
-      tx.createRequest(
+    // a taxa: uma cobrança nas Finanças (no ano letivo do aluno)
+    const year = t.fee && input.studentId ? await repo.chargeYear(input.studentId, day) : null;
+    if (t.fee && !year) return fail(documentsError("NOT_AVAILABLE", "O colégio ainda não tem ano letivo: este documento (com taxa) não se pode pedir por agora."));
+    const due = dueOn(day, t.slaDays);
+    const chargeId = t.fee ? randomUUID() : null;
+    const id = randomUUID();
+    const { number } = await repo.transaction(async (tx) => {
+      if (chargeId && year && input.studentId) await tx.createCharge({ id: chargeId, label: `Documento: ${t.name}`, amount: t.fee!, yearId: year.yearId, enrollmentId: year.enrollmentId, studentId: input.studentId, dueOn: day }, now);
+      const created = await tx.createRequest(
         {
           year: Number(day.slice(0, 4)),
           typeId: t.id,
@@ -184,6 +272,8 @@ export class DocumentRequests {
           download: t.download,
           requiresApproval: t.requiresApproval,
           fee: t.fee,
+          feePolicy: t.fee ? t.feePolicy : null,
+          chargeId,
           studentId: input.studentId,
           employeeId: input.employeeId,
           beneficiary: input.beneficiary,
@@ -194,12 +284,15 @@ export class DocumentRequests {
           relationship: input.requester.relationship,
           answers: a.answers,
           notes,
-          dueOn: dueOn(day, t.slaDays),
+          dueOn: due,
         },
         actor,
         now,
-      ),
-    );
+        id,
+      );
+      if (chargeId) await tx.renameCharge(chargeId, `Documento: ${t.name} (${requestNumber(Number(day.slice(0, 4)), created.number)})`, now);
+      return created;
+    });
     await this.afterCreate(repo, notices, id, input.requester.kind === "STAFF");
     return ok({ id, reference: requestNumber(Number(day.slice(0, 4)), number) });
   }
@@ -207,7 +300,7 @@ export class DocumentRequests {
   // ================================================================ família
 
   /** Os alunos que a conta pode representar (o próprio, ou os menores que gere), já verificado aqui. */
-  private async familyStudentIds(repo: Repo, accountId: string) {
+  async familyStudentIds(repo: Repo, accountId: string) {
     const day = today(this.clock.now());
     return (await repo.familyStudents(accountId)).filter((s) => canAccessStudent({ self: s.self, managingGuardian: s.managing }, s.birthDate, day)).map((s) => s.id);
   }
@@ -216,7 +309,10 @@ export class DocumentRequests {
   async familyCatalog(repo: Repo, accountId: string) {
     const ids = await this.familyStudentIds(repo, accountId);
     const [types, students] = await Promise.all([repo.types(["STUDENT"], true), Promise.all(ids.map(async (id) => ({ id, ...(await repo.studentSnapshot(id))! })))]);
-    return { students, types: types.map((t) => ({ id: t.id, name: t.name, category: t.category, description: t.description, requirements: t.requirements, methodLabel: METHODS[t.method].label, pickup: t.pickup, download: t.download, fee: t.fee, slaDays: t.slaDays, requiresApproval: t.requiresApproval, fields: t.fields, departmentLabel: DEPARTMENTS[t.department] })) };
+    return { students, types: types.map((t) => this.catalogType(t)) };
+  }
+  private catalogType(t: TypeRow) {
+    return { id: t.id, name: t.name, category: t.category, description: t.description, requirements: t.requirements, methodLabel: METHODS[t.method].label, pickup: t.pickup, download: t.download, fee: t.fee, feePolicyLabel: t.fee ? FEE_POLICIES[t.feePolicy].hint : null, slaDays: t.slaDays, requiresApproval: t.requiresApproval, fields: t.fields, departmentLabel: DEPARTMENTS[t.department] };
   }
 
   async familyCreate(repo: Repo, notices: Notices, accountId: string, body: { studentId: string; typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }): R<{ id: string; reference: string }> {
@@ -236,7 +332,8 @@ export class DocumentRequests {
     );
   }
 
-  async familyList(repo: Repo, accountId: string, f: { studentId?: string; status?: RequestStatus | "OPEN"; q?: string; page?: number }) {
+  async familyList(repo: Repo, notices: Notices, accountId: string, f: { studentId?: string; status?: RequestStatus | "OPEN"; q?: string; page?: number }) {
+    await this.syncPayments(repo, notices);
     const ids = await this.familyStudentIds(repo, accountId);
     const students = f.studentId ? ids.filter((i) => i === f.studentId) : ids;
     const filter: ListFilter = { audiences: ["STUDENT"], studentIds: students, status: f.status ?? null, q: f.q?.trim() || null, page: f.page ?? 1, pageSize: 30 };
@@ -244,16 +341,17 @@ export class DocumentRequests {
     return { total: list.total, page: filter.page, pageSize: filter.pageSize, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])), items: list.rows.map((r) => this.listItem(r)) };
   }
 
-  private async familyOwned(repo: Repo, accountId: string, id: string) {
+  async familyOwned(repo: Repo, accountId: string, id: string) {
     const r = await repo.request(id);
     if (!r || !r.studentId) return null;
     return (await this.familyStudentIds(repo, accountId)).includes(r.studentId) ? r : null;
   }
-  async familyDetail(repo: Repo, accountId: string, id: string) {
+  async familyDetail(repo: Repo, notices: Notices, accountId: string, id: string) {
+    await this.syncPayments(repo, notices);
     const r = await this.familyOwned(repo, accountId, id);
     if (!r) return notFound();
-    const [events, delivery, type] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId)]);
-    return ok(this.publicView(r, events, delivery, type?.fields ?? []));
+    const [events, delivery, type, file] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id)]);
+    return ok(this.publicView(r, events, delivery, type?.fields ?? [], file));
   }
   async familyCancel(repo: Repo, notices: Notices, accountId: string, id: string, reason: string | null): R<{ status: RequestStatus }> {
     const r = await this.familyOwned(repo, accountId, id);
@@ -263,11 +361,14 @@ export class DocumentRequests {
 
   private async requesterCancel(repo: Repo, notices: Notices, r: RequestRow, reason: string | null, actor: Actor): R<{ status: RequestStatus }> {
     if (!requesterCanCancel(r.status)) return fail(documentsError("INVALID_STATE", `Já não se pode cancelar: o pedido está “${STATUS_LABELS[r.status]}”. Fale com o colégio.`));
+    const blocked = this.feeBlocksClosing(r);
+    if (blocked) return fail(documentsError("INVALID_STATE", blocked));
     const why = clean(reason, 300) || null;
     const now = this.clock.now();
     const done = await repo.transaction(async (tx) => {
       if (!(await tx.move(r.id, r.status, "CANCELLED", r.revision, { cancelReason: why }, now))) return false;
-      await tx.event(r.id, { kind: "STATUS", from: r.status, to: "CANCELLED", note: why, internal: false }, actor, now);
+      if (r.chargeId) await tx.voidCharge(r.chargeId, now);
+      await tx.event(r.id, { kind: "STATUS", from: r.status, to: "CANCELLED", note: `${why ?? ""}${this.feeClosingNote(r)}`.trim() || null, internal: false }, actor, now);
       return true;
     });
     if (!done) return fail(documentsError("CHANGED", "O pedido mudou entretanto: atualize a página."));
@@ -277,7 +378,7 @@ export class DocumentRequests {
 
   // ================================================================ o funcionário (os seus pedidos)
 
-  private async me(repo: Repo, userId: string) {
+  async me(repo: Repo, userId: string) {
     const e = await repo.employeeOfUser(userId);
     return e && ["APPROVED", "ACTIVE", "SUSPENDED"].includes(e.status) ? e : null;
   }
@@ -285,7 +386,7 @@ export class DocumentRequests {
     const e = await this.me(repo, userId);
     if (!e) return ok({ employee: null, types: [] });
     const [types, snap] = await Promise.all([repo.types(["EMPLOYEE"], true), repo.employeeSnapshot(e.id)]);
-    return ok({ employee: snap && { id: e.id, name: snap.name, number: snap.number, jobTitle: snap.jobTitle, department: snap.department }, types: types.map((t) => ({ id: t.id, name: t.name, category: t.category, description: t.description, requirements: t.requirements, methodLabel: METHODS[t.method].label, pickup: t.pickup, download: t.download, fee: t.fee, slaDays: t.slaDays, requiresApproval: t.requiresApproval, fields: t.fields, departmentLabel: DEPARTMENTS[t.department] })) });
+    return ok({ employee: snap && { id: e.id, name: snap.name, number: snap.number, jobTitle: snap.jobTitle, department: snap.department }, types: types.map((t) => this.catalogType(t)) });
   }
   async mineCreate(repo: Repo, notices: Notices, v: DocumentsViewer, body: { typeId: string; answers?: Record<string, unknown> | null; notes?: string | null }): R<{ id: string; reference: string }> {
     const e = await this.me(repo, v.userId);
@@ -304,15 +405,15 @@ export class DocumentRequests {
     const [list, counts] = await Promise.all([repo.list(filter), repo.statusCounts(filter)]);
     return { total: list.total, page: filter.page, pageSize: filter.pageSize, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])), items: list.rows.map((r) => this.listItem(r)) };
   }
-  private async mineOwned(repo: Repo, userId: string, id: string) {
+  async mineOwned(repo: Repo, userId: string, id: string) {
     const [e, r] = await Promise.all([repo.employeeOfUser(userId), repo.request(id)]);
     return e && r && r.employeeId === e.id ? r : null;
   }
   async mineDetail(repo: Repo, userId: string, id: string) {
     const r = await this.mineOwned(repo, userId, id);
     if (!r) return notFound();
-    const [events, delivery, type] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId)]);
-    return ok(this.publicView(r, events, delivery, type?.fields ?? []));
+    const [events, delivery, type, file] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.activeIssued(id)]);
+    return ok(this.publicView(r, events, delivery, type?.fields ?? [], file));
   }
   async mineCancel(repo: Repo, notices: Notices, v: DocumentsViewer, id: string, reason: string | null): R<{ status: RequestStatus }> {
     const r = await this.mineOwned(repo, v.userId, id);
@@ -322,10 +423,11 @@ export class DocumentRequests {
 
   // ================================================================ a equipa (secretaria e RH)
 
-  private actor(v: DocumentsViewer): Actor {
+  actor(v: DocumentsViewer): Actor {
     return { kind: "STAFF", id: v.support ? null : v.userId, name: v.support ? "Suporte EduFlow" : v.name };
   }
-  async staffList(repo: Repo, v: DocumentsViewer, f: Omit<ListFilter, "audiences" | "pageSize"> & { audience?: Audience | null }) {
+  async staffList(repo: Repo, notices: Notices, v: DocumentsViewer, f: Omit<ListFilter, "audiences" | "pageSize"> & { audience?: Audience | null }) {
+    await this.syncPayments(repo, notices);
     const allowed = audiencesFor(v, "view");
     const audiences = f.audience ? allowed.filter((a) => a === f.audience) : allowed;
     const filter: ListFilter = { ...f, audiences, page: f.page || 1, pageSize: 30 };
@@ -341,19 +443,26 @@ export class DocumentRequests {
     };
   }
 
-  async staffDetail(repo: Repo, v: DocumentsViewer, id: string) {
+  async staffDetail(repo: Repo, notices: Notices, v: DocumentsViewer, id: string) {
+    await this.syncPayments(repo, notices);
     const r = await repo.request(id);
     if (!r || !can(v, r.audience, "view")) return notFound();
-    const [events, delivery, type] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId)]);
-    const base = this.publicView(r, events, delivery, type?.fields ?? []);
+    const [events, delivery, type, files] = await Promise.all([repo.events(id), repo.delivery(id), repo.type(r.typeId), repo.issued(id)]);
+    const file = files.find((f) => f.status === "ACTIVE") ?? null;
+    const base = this.publicView(r, events, delivery, type?.fields ?? [], file);
+    const snap = snapshotOf(r, file);
     const adult = r.beneficiary.kind === "STUDENT" ? isAdult(r.beneficiary.birthDate, today(this.clock.now())) : true;
-    const act = (a: StaffAction) => can(v, r.audience, "process") && staffTransition(r, a).ok;
+    const process = can(v, r.audience, "process");
+    const act = (a: StaffAction) => process && staffTransition(snap, a).ok;
     return ok({
       ...base,
+      method: r.method,
       requesterKind: r.requesterKind,
       handledByName: r.handledByName,
       fields: type?.fields ?? [],
       adult,
+      templateVersion: type?.templateVersion ?? null,
+      files: files.map((f) => ({ id: f.id, version: f.version, method: f.method, methodLabel: f.method === "AUTO" ? "Gerado com o modelo" : "Carregado", templateVersion: f.templateVersion, name: f.fileName, size: f.size, mimeType: f.mimeType, status: f.status, reason: f.reason, by: f.createdByName, at: f.createdAt.toISOString() })),
       receiverOptions: (Object.keys(RECEIVER_RELATIONSHIPS) as ReceiverRelationship[])
         .filter((k) => (r.audience === "EMPLOYEE" ? k !== "GUARDIAN" : adult ? k !== "GUARDIAN" : k !== "SELF"))
         .map((k) => ({ key: k, label: RECEIVER_RELATIONSHIPS[k] })),
@@ -363,11 +472,16 @@ export class DocumentRequests {
         review: act("review"),
         process: act("process"),
         readyPickup: act("ready_pickup"),
-        reject: act("reject"),
-        cancel: act("cancel"),
-        deliver: can(v, r.audience, "deliver") && canDeliver(r.status),
-        note: can(v, r.audience, "process") || can(v, r.audience, "deliver"),
+        readyDownload: act("ready_download"),
+        reject: act("reject") && !r.chargeInValidation,
+        cancel: act("cancel") && !r.chargeInValidation,
+        deliver: can(v, r.audience, "deliver") && canDeliver(r.status) && releaseAllowed(r),
+        note: process || can(v, r.audience, "deliver"),
+        // emitir com o modelo (só documentos automáticos com modelo) ou carregar o ficheiro preparado fora
+        generate: process && canIssue(r.status) && r.method === "AUTO" && !!type?.templateVersion,
+        upload: process && canIssue(r.status),
       },
+      deliverBlocked: canDeliver(r.status) && !releaseAllowed(r) ? "A taxa ainda não foi paga: só se entrega depois de as Finanças confirmarem o pagamento." : null,
     });
   }
 
@@ -376,32 +490,40 @@ export class DocumentRequests {
     const r = await repo.request(id);
     if (!r || !can(v, r.audience, "view")) return notFound();
     if (!can(v, r.audience, "process")) return fail(documentsError("FORBIDDEN", r.audience === "EMPLOYEE" ? "Tratar os pedidos dos funcionários exige a permissão do RH." : "Tratar os pedidos exige a permissão “Tratar os pedidos de documentos”."));
-    const t = staffTransition(r, action);
+    const t = staffTransition(snapshotOf(r, await repo.activeIssued(id)), action);
     if (!t.ok) return fail(documentsError("INVALID_STATE", t.message));
     const reason = clean(input.reason, 300);
-    if ((action === "reject" || action === "cancel") && reason.length < 3) return fail(documentsError("INVALID_INPUT", action === "reject" ? "Indique o motivo da rejeição (3 a 300 caracteres): a família ou o funcionário vê-o." : "Indique o motivo do cancelamento (3 a 300 caracteres)."));
+    const closing = action === "reject" || action === "cancel";
+    if (closing && reason.length < 3) return fail(documentsError("INVALID_INPUT", action === "reject" ? "Indique o motivo da rejeição (3 a 300 caracteres): a família ou o funcionário vê-o." : "Indique o motivo do cancelamento (3 a 300 caracteres)."));
+    if (closing) {
+      const blocked = this.feeBlocksClosing(r);
+      if (blocked) return fail(documentsError("INVALID_STATE", blocked));
+    }
     const note = clean(input.note, 600) || null;
     const now = this.clock.now();
     const actor = this.actor(v);
     const done = await repo.transaction(async (tx) => {
       const set = action === "reject" ? { rejectReason: reason, handled: actor } : action === "cancel" ? { cancelReason: reason, handled: actor } : { handled: actor };
       if (!(await tx.move(r.id, r.status, t.to, input.revision, set, now))) return false;
-      await tx.event(r.id, { kind: "STATUS", from: r.status, to: t.to, note: action === "reject" || action === "cancel" ? reason : note, internal: false }, actor, now);
+      if (closing && r.chargeId) await tx.voidCharge(r.chargeId, now);
+      await tx.event(r.id, { kind: "STATUS", from: r.status, to: t.to, note: closing ? `${reason}${this.feeClosingNote(r)}` : note, internal: false }, actor, now);
       return true;
     });
     if (!done) return fail(documentsError("CHANGED", "O pedido mudou entretanto: atualize a página."));
     const fresh = (await repo.request(id))!;
     const where = fresh.audience === "EMPLOYEE" ? "nos Recursos Humanos" : "na secretaria";
-    const say: Partial<Record<RequestStatus, [string, string | null]>> = {
+    const say: Partial<Record<RequestStatus, [string, string | null, string?]>> = {
       IN_REVIEW: ["pedido em análise", null],
+      AWAITING_PAYMENT: ["aguarda o pagamento", `Taxa de ${kz(fresh.fee ?? 0)}: pague em Pagamentos. O documento prepara-se depois de as Finanças confirmarem o pagamento.`, `/familia/pagamentos?aluno=${fresh.studentId}&servico=documento`],
       PROCESSING: ["documento em preparação", null],
-      READY_PICKUP: ["pronto a levantar", `Pode levantar ${where}.${note ? ` ${note}` : ""}`],
+      READY_PICKUP: ["pronto a levantar", `Pode levantar ${where}.${note ? ` ${note}` : ""}${fresh.fee && !releaseAllowed(fresh) ? ` Antes, pague a taxa de ${kz(fresh.fee)}.` : ""}`],
+      READY_DOWNLOAD: ["disponível para descarregar", `${note ? `${note} ` : ""}Descarregue-o na plataforma.${fresh.fee && !releaseAllowed(fresh) ? ` Antes, pague a taxa de ${kz(fresh.fee)}.` : ""}`],
       REJECTED: ["pedido rejeitado", `Motivo: ${reason}`],
       CANCELLED: ["pedido cancelado pelo colégio", `Motivo: ${reason}`],
     };
     const msg = say[t.to];
     // "em preparação" só se a equipa quiser avisar; os outros passos avisam sempre
-    if (msg && (t.to !== "PROCESSING" || input.notify)) await this.quietly(`passo ${t.to}`, () => this.tellRequester(repo, notices, fresh, msg[0], msg[1]));
+    if (msg && (t.to !== "PROCESSING" || input.notify)) await this.quietly(`passo ${t.to}`, () => this.tellRequester(repo, notices, fresh, msg[0], msg[1], msg[2]));
     return ok({ status: t.to });
   }
 
@@ -423,6 +545,7 @@ export class DocumentRequests {
     if (!r || !can(v, r.audience, "view")) return notFound();
     if (!can(v, r.audience, "deliver")) return fail(documentsError("FORBIDDEN", "Confirmar entregas exige a permissão de entregar documentos."));
     if (!canDeliver(r.status)) return fail(documentsError("INVALID_STATE", `Só se entrega um documento disponível para levantamento (este está “${STATUS_LABELS[r.status]}”).`));
+    if (!releaseAllowed(r)) return fail(documentsError("INVALID_STATE", "A taxa ainda não foi paga: só se entrega depois de as Finanças confirmarem o pagamento."));
     const rel = input.relationship as ReceiverRelationship;
     const adult = r.beneficiary.kind === "STUDENT" ? isAdult(r.beneficiary.birthDate, today(this.clock.now())) : true;
     if (!(rel in RECEIVER_RELATIONSHIPS)) return fail(documentsError("INVALID_INPUT", "Indique quem levanta: o próprio, o encarregado ou uma pessoa autorizada."));
