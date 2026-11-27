@@ -109,8 +109,8 @@ const templateBody = z
   .object({ title: z.string().max(400), body: z.string().max(12000), signerName: z.string().max(240).nullish(), signerRole: z.string().max(240).nullish(), showLogo: z.boolean() })
   .meta({ title: "DocumentTemplate", description: "O modelo: título, texto (parágrafos separados por linha em branco) com campos {{...}}, quem assina e se leva o logótipo." });
 const headerBody = z
-  .object({ enabled: z.boolean(), countryLine: z.string().max(200).nullish(), ministryLine: z.string().max(300).nullish(), showEmblem: z.boolean() })
-  .meta({ title: "DocumentHeader", description: "O cabeçalho oficial: ligado (ou retirado), a primeira linha (“República de Angola”), a linha do ministério (vazia = sem ela) e se leva a insígnia." });
+  .object({ enabled: z.boolean(), lines: z.array(z.string().max(300)).max(20), showEmblem: z.boolean() })
+  .meta({ title: "DocumentHeader", description: "O cabeçalho oficial: ligado (ou retirado), as linhas por cima do nome do colégio (1 a 6, por ordem: “República de Angola”, “Ministério da Educação”, …; as vazias saem) e se leva a insígnia." });
 /** na rota: insignia | logotipo */
 const imageParam = new ZodValidationPipe(z.enum(["insignia", "logotipo"], { error: "Imagem inválida." }).transform((x): HeaderImage => (x === "insignia" ? "EMBLEM" : "LOGO")));
 const reasonBody = z.object({ reason: z.string().max(600).nullish() }).meta({ title: "DocumentIssueReason", description: "Ao substituir o ficheiro (ou segunda via), o motivo." });

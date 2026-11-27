@@ -31,7 +31,7 @@ export interface CardPrint {
   footer: string;
   watermark?: string | null;
   /** o cabeçalho oficial (insígnia, "República de Angola", ministério); null = só o nome do colégio */
-  header?: { country: string; ministry: string | null; emblem: Buffer | null } | null;
+  header?: { lines: string[]; emblem: Buffer | null } | null;
 }
 
 const MM = 72 / 25.4;
@@ -175,13 +175,20 @@ function officialHead(p: PDFPage, c: CardPrint, f: Fonts, a: Assets, x0: number,
   const tx = x0 + side;
   const mw = x1 - x0 - side * 2;
   const rows: [string, number, PDFFont, number][] = [
-    [hd.country.toUpperCase(), 5, f.bold, 1],
-    ...(hd.ministry ? ([[hd.ministry.toUpperCase(), 4.3, f.regular, 0.9]] as [string, number, PDFFont, number][]) : []),
+    ...hd.lines.map((l, i): [string, number, PDFFont, number] => (i === 0 ? [l.toUpperCase(), 5, f.bold, 1] : [l.toUpperCase(), 4.3, f.regular, 0.9])),
     [c.school.name, 7, f.bold, 1],
     ["CARTÃO DE ESTUDANTE", 4.3, f.regular, 0.85],
   ];
-  const gap = (h - 6) / rows.length;
-  rows.forEach(([t, z, font, o], i) => line(p, t, tx, top - 3 - gap * (i + 1) + 1.5, z, font, color, mw, { min: 3.6, center: true, opacity: o }));
+  // com mais linhas, cada uma ocupa menos: as letras encolhem para caberem na faixa
+  // (o nome do colégio, maior, tem uma vez e meia a altura das outras)
+  const school = rows.length - 2;
+  const unit = (h - 6) / (rows.length + 0.5);
+  const k = Math.min(1, (unit * 0.86) / 5);
+  let y = top - 3;
+  rows.forEach(([t, z, font, o], i) => {
+    y -= i === school ? unit * 1.5 : unit;
+    line(p, t, tx, y + 1.5, i === school ? Math.min(z, unit * 1.2) : z * k, font, color, mw, { min: 3, center: true, opacity: o });
+  });
 }
 const contactLines = (c: CardPrint) => [c.school.address, c.school.phone ? `Tel. ${c.school.phone}` : null, c.school.email].filter((s): s is string => !!s);
 const { w: W, h: H } = CARD;

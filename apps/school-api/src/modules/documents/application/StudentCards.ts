@@ -250,7 +250,7 @@ export class StudentCards {
       backNote: settings.backNote || DEFAULT_BACK_NOTE,
       photoKey: photo.storageKey,
       logoKey,
-      header: school.header ? { country: school.header.country, ministry: school.header.ministry, emblemKey: school.header.emblemKey ?? null } : null,
+      header: school.header ? { lines: school.header.lines, emblemKey: school.header.emblemKey ?? null } : null,
     };
     return { target: t as CardTarget & { yearId: string; endsOn: string; yearName: string }, data, photo: bytes, replaces: active } as const;
   }
@@ -375,10 +375,12 @@ export class StudentCards {
     const headerOf = async (h: CardData["header"]): Promise<CardPrint["header"]> => {
       if (h === undefined) return school.header;
       if (h === null) return null;
+      // os cartões do formato anterior guardaram a República e o ministério à parte
+      const lines = h.lines ?? [h.country, h.ministry].filter((l): l is string => !!l);
       const key = h.emblemKey;
-      if (key && key === school.header?.emblemKey) return { ...h, emblem: school.header.emblem };
+      if (key && key === school.header?.emblemKey) return { lines, emblem: school.header.emblem };
       if (key && !emblems.has(key)) emblems.set(key, await store.read(key).catch(() => null));
-      return { country: h.country, ministry: h.ministry, emblem: key ? (emblems.get(key) ?? null) : null };
+      return { lines, emblem: key ? (emblems.get(key) ?? null) : null };
     };
     for (const c of rows) {
       let photo: Buffer;

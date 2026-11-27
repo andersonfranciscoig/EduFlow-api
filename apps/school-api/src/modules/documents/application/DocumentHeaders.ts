@@ -3,7 +3,7 @@ import type { Clock } from "../../../../../../libs/kernel/src/application/ports"
 import { fail, ok, type Result } from "../../../../../../libs/kernel/src/domain/Result";
 import type { HrFileStore } from "../../hr/application/employee-ports";
 import { type DocumentsError, documentsError } from "../domain/documents";
-import { checkEmblem, checkHeader, sniff } from "../domain/issuing";
+import { checkEmblem, checkHeader, HEADER_MAX_LINES, sniff } from "../domain/issuing";
 import { type OfficialHeader, renderDocumentPdf } from "../infrastructure/pdf";
 import type { Actor, HeaderImage, PrismaDocumentsRepository } from "../infrastructure/prisma-documents";
 import type { FileOut, School } from "./DocumentIssuing";
@@ -54,14 +54,15 @@ export class DocumentHeaders {
     const h = await repo.header();
     const own = await readImage(store, h.logoKey);
     const logo = own ?? (printable(base.platformLogo) ? base.platformLogo : null);
-    const header: OfficialHeader | null = h.enabled ? { country: h.countryLine, ministry: h.ministryLine, emblem: h.showEmblem ? await readImage(store, h.emblemKey) : null, emblemKey: h.showEmblem ? h.emblemKey : null } : null;
+    const header: OfficialHeader | null = h.enabled ? { lines: h.lines, emblem: h.showEmblem ? await readImage(store, h.emblemKey) : null, emblemKey: h.showEmblem ? h.emblemKey : null } : null;
     return { name: base.name, slug: base.slug, logo, header };
   }
 
   async view(repo: Repo, store: HrFileStore, v: DocumentsViewer, platformLogo: Buffer | null) {
     const h = await repo.header();
     return {
-      settings: { enabled: h.enabled, countryLine: h.countryLine, ministryLine: h.ministryLine, showEmblem: h.showEmblem },
+      settings: { enabled: h.enabled, lines: h.lines, showEmblem: h.showEmblem },
+      maxLines: HEADER_MAX_LINES,
       emblem: h.emblemKey ? { name: h.emblemName, uploadedAt: h.emblemUploadedAt?.toISOString() ?? null } : null,
       logo: h.logoKey ? { name: h.logoName, uploadedAt: h.logoUploadedAt?.toISOString() ?? null } : null,
       /** o logótipo do colégio na plataforma: null = não tem; printable = false → converter (ex.: WEBP) */
@@ -73,7 +74,7 @@ export class DocumentHeaders {
     };
   }
 
-  async save(repo: Repo, v: DocumentsViewer, actor: Actor, input: { enabled: boolean; countryLine?: string | null; ministryLine?: string | null; showEmblem: boolean }): R<{ saved: true }> {
+  async save(repo: Repo, v: DocumentsViewer, actor: Actor, input: { enabled: boolean; lines?: (string | null)[] | null; showEmblem: boolean }): R<{ saved: true }> {
     if (!this.canManage(v)) return fail(documentsError("FORBIDDEN", "Configurar o cabeçalho dos documentos exige a permissão de configurar os documentos."));
     const c = checkHeader(input);
     if (!c.ok) return fail(documentsError("INVALID_INPUT", c.message));
