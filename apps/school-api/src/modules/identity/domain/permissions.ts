@@ -76,7 +76,9 @@ export const PERMISSIONS = {
   "communication.announcements.publish": { group: "communication", label: "Publicar avisos para toda a comunidade", hint: "Criar e publicar avisos para qualquer destinatário: toda a instituição, alunos, encarregados, professores, funcionários, classes, turmas, departamentos ou pessoas." },
   "communication.announcements.staff": { group: "communication", label: "Publicar avisos para a equipa", hint: "Criar e publicar avisos só para professores, funcionários, departamentos e pessoas da equipa (ex.: RH, coordenação)." },
   "communication.announcements.manage": { group: "communication", label: "Gerir todos os avisos", hint: "Ver, arquivar e consultar os indicadores de leitura de todos os avisos (sem esta, só os próprios)." },
-  "communication.settings.manage": { group: "communication", label: "Configurar a comunicação", hint: "Categorias dos avisos e se os diretores de turma podem publicar para as suas turmas." },
+  "communication.messages.families": { group: "communication", label: "Escrever às famílias", hint: "Iniciar conversas com qualquer encarregado ou aluno (com conta) do colégio (ex.: secretaria, direção). Os professores e o diretor de turma já falam com as famílias dos seus alunos sem esta." },
+  "communication.groups.manage": { group: "communication", label: "Gerir grupos de conversa", hint: "Criar grupos ligados a turmas, classes, departamentos ou a toda a equipa (os membros sincronizam-se sozinhos) e grupos manuais com qualquer pessoa da equipa." },
+  "communication.settings.manage": { group: "communication", label: "Configurar a comunicação", hint: "Categorias dos avisos, se os diretores de turma publicam para as suas turmas, quem pode falar com quem e se os professores criam grupos." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

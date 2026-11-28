@@ -2300,6 +2300,12 @@ model StudentCard {
 model CommunicationSettings {
   id                    Int       @id @default(1) @db.SmallInt
   classDirectorsPublish Boolean   @default(true) @map("class_directors_publish")
+  /// os alunos maiores (com conta) podem escrever aos seus professores e ao diretor de turma
+  studentsMessage       Boolean   @default(true) @map("students_message")
+  /// a equipa pode escrever entre si (professores, coordenação, RH, direção…)
+  staffMessage          Boolean   @default(true) @map("staff_message")
+  /// os professores podem criar grupos (manuais, com os seus contactos; o diretor de turma, os da sua turma)
+  teachersCreateGroups  Boolean   @default(true) @map("teachers_create_groups")
   updatedById           String?   @map("updated_by_id") @db.Uuid
   updatedByName         String?   @map("updated_by_name")
   updatedAt             DateTime? @map("updated_at")
@@ -2394,6 +2400,98 @@ model AnnouncementFile {
 
   @@index([announcementId], map: "announcement_files_announcement_idx")
   @@map("announcement_files")
+}
+
+/// Uma conversa: DIRECT (uma só por par) ou GROUP (MANUAL | CLASS | GRADE | DEPARTMENT | INSTITUTION).
+model Conversation {
+  id             String               @id @db.Uuid
+  kind           String
+  title          String?
+  description    String?
+  groupType      String?              @map("group_type")
+  refId          String?              @map("ref_id") @db.Uuid
+  refText        String?              @map("ref_text")
+  audience       String?
+  onlyAdminsPost Boolean              @default(false) @map("only_admins_post")
+  membersCanAdd  Boolean              @default(false) @map("members_can_add")
+  directKey      String?              @map("direct_key")
+  createdByKind  String               @map("created_by_kind")
+  createdById    String               @map("created_by_id") @db.Uuid
+  createdAt      DateTime             @map("created_at")
+  updatedAt      DateTime             @map("updated_at")
+  lastMessageAt  DateTime?            @map("last_message_at")
+  syncedAt       DateTime?            @map("synced_at")
+  members        ConversationMember[]
+  messages       Message[]
+
+  @@index([lastMessageAt], map: "conversations_last_idx")
+  @@map("conversations")
+}
+
+/// Quem participa (STAFF | FAMILY), com o papel, a origem (MANUAL | SYNC), a leitura e a saída (o histórico fica).
+model ConversationMember {
+  conversationId String       @map("conversation_id") @db.Uuid
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  memberKind     String       @map("member_kind")
+  memberId       String       @map("member_id") @db.Uuid
+  memberName     String       @map("member_name")
+  label          String?
+  role           String       @default("MEMBER")
+  source         String       @default("MANUAL")
+  joinedAt       DateTime     @map("joined_at")
+  leftAt         DateTime?    @map("left_at")
+  lastReadAt     DateTime?    @map("last_read_at")
+  deliveredAt    DateTime?    @map("delivered_at")
+  archived       Boolean      @default(false)
+
+  @@id([conversationId, memberKind, memberId])
+  @@index([memberKind, memberId], map: "conversation_members_person_idx")
+  @@map("conversation_members")
+}
+
+model Message {
+  id             String        @id @db.Uuid
+  conversationId String        @map("conversation_id") @db.Uuid
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// TEXT | SYSTEM
+  kind           String        @default("TEXT")
+  senderKind     String?       @map("sender_kind")
+  senderId       String?       @map("sender_id") @db.Uuid
+  senderName     String?       @map("sender_name")
+  body           String
+  createdAt      DateTime      @map("created_at")
+  files          MessageFile[]
+
+  @@index([conversationId, createdAt], map: "messages_conversation_idx")
+  @@map("messages")
+}
+
+model MessageFile {
+  id             String   @id @db.Uuid
+  messageId      String   @map("message_id") @db.Uuid
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  conversationId String   @map("conversation_id") @db.Uuid
+  fileName       String   @map("file_name")
+  mimeType       String   @map("mime_type")
+  size           Int
+  sha256         String
+  storageKey     String   @map("storage_key")
+  createdAt      DateTime @map("created_at")
+
+  @@index([messageId], map: "message_files_message_idx")
+  @@map("message_files")
+}
+
+/// A fotografia de perfil escolhida (STAFF | FAMILY); sem ela, o aluno usa a da inscrição e os outros as iniciais.
+model ProfilePhoto {
+  partyKind  String   @map("party_kind")
+  partyId    String   @map("party_id") @db.Uuid
+  storageKey String   @map("storage_key")
+  mimeType   String   @map("mime_type")
+  updatedAt  DateTime @map("updated_at")
+
+  @@id([partyKind, partyId])
+  @@map("profile_photos")
 }
 
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida

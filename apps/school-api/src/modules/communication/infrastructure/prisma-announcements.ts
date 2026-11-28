@@ -7,6 +7,13 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /** o assunto das alterações à configuração da comunicação na atividade do colégio */
 const SETTINGS_SUBJECT = "00000000-0000-0000-0000-0000000000cc";
 
+/** A configuração da comunicação do colégio. */
+export interface CommunicationSettings {
+  classDirectorsPublish: boolean;
+  studentsMessage: boolean;
+  staffMessage: boolean;
+  teachersCreateGroups: boolean;
+}
 export interface Actor {
   id: string;
   name: string;
@@ -83,15 +90,18 @@ export class PrismaAnnouncementsRepository {
 
   // ================================================================ configuração e categorias
 
-  async settings() {
-    const [r] = await this.db.$queryRaw<{ classDirectorsPublish: boolean; updatedByName: string | null; updatedAt: Date | null }[]>`
-      SELECT class_directors_publish AS "classDirectorsPublish", updated_by_name AS "updatedByName", updated_at AS "updatedAt" FROM communication_settings WHERE id = 1`;
-    return r ?? { classDirectorsPublish: true, updatedByName: null, updatedAt: null };
+  async settings(): Promise<CommunicationSettings & { updatedByName: string | null; updatedAt: Date | null }> {
+    const [r] = await this.db.$queryRaw<(CommunicationSettings & { updatedByName: string | null; updatedAt: Date | null })[]>`
+      SELECT class_directors_publish AS "classDirectorsPublish", students_message AS "studentsMessage", staff_message AS "staffMessage", teachers_create_groups AS "teachersCreateGroups",
+             updated_by_name AS "updatedByName", updated_at AS "updatedAt" FROM communication_settings WHERE id = 1`;
+    return r ?? { classDirectorsPublish: true, studentsMessage: true, staffMessage: true, teachersCreateGroups: true, updatedByName: null, updatedAt: null };
   }
-  async saveSettings(s: { classDirectorsPublish: boolean }, actor: Actor, now: Date) {
+  async saveSettings(s: CommunicationSettings, actor: Actor, now: Date) {
     await this.db.$executeRaw`
-      INSERT INTO communication_settings (id, class_directors_publish, updated_by_id, updated_by_name, updated_at) VALUES (1, ${s.classDirectorsPublish}, ${actor.id}::uuid, ${actor.name}, ${now})
-      ON CONFLICT (id) DO UPDATE SET class_directors_publish = EXCLUDED.class_directors_publish, updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
+      INSERT INTO communication_settings (id, class_directors_publish, students_message, staff_message, teachers_create_groups, updated_by_id, updated_by_name, updated_at)
+      VALUES (1, ${s.classDirectorsPublish}, ${s.studentsMessage}, ${s.staffMessage}, ${s.teachersCreateGroups}, ${actor.id}::uuid, ${actor.name}, ${now})
+      ON CONFLICT (id) DO UPDATE SET class_directors_publish = EXCLUDED.class_directors_publish, students_message = EXCLUDED.students_message, staff_message = EXCLUDED.staff_message,
+        teachers_create_groups = EXCLUDED.teachers_create_groups, updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name, updated_at = EXCLUDED.updated_at`;
     await this.activity("communication.settings", SETTINGS_SUBJECT, actor.id, { ...s }, now);
   }
   async categories(includeArchived = false) {
