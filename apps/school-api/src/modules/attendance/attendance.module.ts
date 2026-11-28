@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { systemClock, uuidGenerator } from "../../../../../libs/kernel/src/infrastructure/system";
+import { CommunicationModule } from "../communication/communication.module";
 import { ExamNotices } from "../exams/application/ExamNotices";
 import { FamilyModule } from "../family/family.module";
 import { FinanceModule } from "../finance/finance.module";
@@ -31,7 +32,7 @@ import { TeacherOccurrencesController } from "./presentation/teacher-occurrences
  * justificações, alertas de assiduidade e resumos diários.
  */
 @Module({
-  imports: [IdentityModule, NotificationsModule, HrModule, FamilyModule, FinanceModule],
+  imports: [IdentityModule, NotificationsModule, HrModule, FamilyModule, FinanceModule, CommunicationModule],
   controllers: [AttendanceSettingsController, TeacherOccurrencesController, MyPresenceController, StudentPresenceController, PendingsController, JustificationsController, DigestsController, FamilyDigestsController, ReportsController],
   providers: [
     { provide: AttendanceSettings, useFactory: () => new AttendanceSettings(systemClock) },

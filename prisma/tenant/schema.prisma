@@ -2292,5 +2292,109 @@ model StudentCard {
   @@map("student_cards")
 }
 
+// =============================================================================
+//  COMUNICAÇÃO — avisos (lê-se e escreve-se em SQL: communication/infrastructure)
+// =============================================================================
+
+/// A configuração da comunicação do colégio (uma linha).
+model CommunicationSettings {
+  id                    Int       @id @default(1) @db.SmallInt
+  classDirectorsPublish Boolean   @default(true) @map("class_directors_publish")
+  updatedById           String?   @map("updated_by_id") @db.Uuid
+  updatedByName         String?   @map("updated_by_name")
+  updatedAt             DateTime? @map("updated_at")
+
+  @@map("communication_settings")
+}
+
+model AnnouncementCategory {
+  id            String         @id @db.Uuid
+  name          String
+  position      Int            @default(0)
+  archivedAt    DateTime?      @map("archived_at")
+  createdAt     DateTime       @map("created_at")
+  announcements Announcement[]
+
+  @@map("announcement_categories")
+}
+
+/// Um aviso: DRAFT | SCHEDULED | PUBLISHED | ARCHIVED; prioridade NORMAL | HIGH | URGENT; scope ALL | STAFF | CLASS.
+model Announcement {
+  id           String                  @id @db.Uuid
+  number       Int                     @unique @default(autoincrement())
+  title        String
+  body         String
+  categoryId   String                  @map("category_id") @db.Uuid
+  category     AnnouncementCategory    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  priority     String                  @default("NORMAL")
+  status       String                  @default("DRAFT")
+  scope        String
+  publishAt    DateTime?               @map("publish_at")
+  publishedAt  DateTime?               @map("published_at")
+  expiresAt    DateTime?               @map("expires_at")
+  pinned       Boolean                 @default(false)
+  requiresAck  Boolean                 @default(false) @map("requires_ack")
+  authorId     String                  @map("author_id") @db.Uuid
+  authorName   String                  @map("author_name")
+  revision     Int                     @default(1)
+  archivedAt   DateTime?               @map("archived_at")
+  createdAt    DateTime                @map("created_at")
+  updatedAt    DateTime                @map("updated_at")
+  targets      AnnouncementTarget[]
+  recipients   AnnouncementRecipient[]
+  files        AnnouncementFile[]
+
+  @@index([status, publishAt], map: "announcements_status_idx")
+  @@index([authorId, createdAt], map: "announcements_author_idx")
+  @@map("announcements")
+}
+
+model AnnouncementTarget {
+  id             String       @id @db.Uuid
+  announcementId String       @map("announcement_id") @db.Uuid
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  /// ALL | STUDENTS | GUARDIANS | TEACHERS | STAFF | CLASS | GROUP | DEPARTMENT | USER | FAMILY
+  kind           String
+  refId          String?      @map("ref_id") @db.Uuid
+  refText        String?      @map("ref_text")
+  /// STUDENTS | GUARDIANS | BOTH (turma/classe)
+  audience       String?
+
+  @@index([announcementId], map: "announcement_targets_announcement_idx")
+  @@map("announcement_targets")
+}
+
+/// Quem recebe o aviso (sem repetidos): STAFF (conta do portal) | FAMILY (conta da família).
+model AnnouncementRecipient {
+  announcementId String       @map("announcement_id") @db.Uuid
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  recipientKind  String       @map("recipient_kind")
+  recipientId    String       @map("recipient_id") @db.Uuid
+  recipientName  String       @map("recipient_name")
+  via            String?
+  deliveredAt    DateTime?    @map("delivered_at")
+  viewedAt       DateTime?    @map("viewed_at")
+  acknowledgedAt DateTime?    @map("acknowledged_at")
+
+  @@id([announcementId, recipientKind, recipientId])
+  @@index([recipientKind, recipientId], map: "announcement_recipients_person_idx")
+  @@map("announcement_recipients")
+}
+
+model AnnouncementFile {
+  id             String       @id @db.Uuid
+  announcementId String       @map("announcement_id") @db.Uuid
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  fileName       String       @map("file_name")
+  mimeType       String       @map("mime_type")
+  size           Int
+  sha256         String
+  storageKey     String       @map("storage_key")
+  createdAt      DateTime     @map("created_at")
+
+  @@index([announcementId], map: "announcement_files_announcement_idx")
+  @@map("announcement_files")
+}
+
 // A tabela "_tenant_migrations" (controlo das migrações aplicadas) é gerida
 // diretamente pelo provisioner — ver apps/provisioner/src/tenant-migrator.ts.

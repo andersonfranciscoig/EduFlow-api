@@ -71,6 +71,12 @@ export const PERMISSIONS = {
   "documents.requests.process": { group: "documents", label: "Tratar os pedidos de documentos", hint: "Analisar, preparar, rejeitar (com motivo) e marcar como pronto; registar pedidos ao balcão." },
   "documents.requests.deliver": { group: "documents", label: "Entregar documentos", hint: "Confirmar o levantamento, com quem recebeu e a relação com o aluno." },
   "documents.cards.manage": { group: "documents", label: "Gerir os cartões de estudante", hint: "Escolher o modelo do cartão e personalizá-lo, carregar fotografias, emitir cartões (um a um ou por turma), segundas vias, imprimir e anular." },
+  // ---- Comunicação: avisos (as mensagens e os grupos chegam com cada fase). Receber avisos não pede permissão.
+  "communication.access": { group: "communication", label: "Aceder à gestão da comunicação", hint: "Sem esta, nenhuma das outras da comunicação funciona (receber e ler avisos não precisa de permissão)." },
+  "communication.announcements.publish": { group: "communication", label: "Publicar avisos para toda a comunidade", hint: "Criar e publicar avisos para qualquer destinatário: toda a instituição, alunos, encarregados, professores, funcionários, classes, turmas, departamentos ou pessoas." },
+  "communication.announcements.staff": { group: "communication", label: "Publicar avisos para a equipa", hint: "Criar e publicar avisos só para professores, funcionários, departamentos e pessoas da equipa (ex.: RH, coordenação)." },
+  "communication.announcements.manage": { group: "communication", label: "Gerir todos os avisos", hint: "Ver, arquivar e consultar os indicadores de leitura de todos os avisos (sem esta, só os próprios)." },
+  "communication.settings.manage": { group: "communication", label: "Configurar a comunicação", hint: "Categorias dos avisos e se os diretores de turma podem publicar para as suas turmas." },
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -78,7 +84,7 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 type Group = (typeof PERMISSIONS)[Permission]["group"];
 
 /** Cada grupo tem uma permissão de acesso: sem ela, as outras do grupo não servem. */
-export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access", grading: "grading.access", documents: "documents.access" };
+export const GROUP_ACCESS: Record<Group, Permission> = { hr: "hr.access", admissions: "admissions.access", finance: "finance.access", attendance: "attendance.access", grading: "grading.access", documents: "documents.access", communication: "communication.access" };
 
 export const PERMISSION_GROUPS = (
   [
@@ -88,6 +94,7 @@ export const PERMISSION_GROUPS = (
     { key: "attendance", label: "Assiduidade e provas" },
     { key: "grading", label: "Avaliação e pautas" },
     { key: "documents", label: "Documentos" },
+    { key: "communication", label: "Comunicação" },
   ] as const
 ).map((g) => ({ ...g, permissions: ALL_PERMISSIONS.filter((p) => PERMISSIONS[p].group === g.key) }));
 
