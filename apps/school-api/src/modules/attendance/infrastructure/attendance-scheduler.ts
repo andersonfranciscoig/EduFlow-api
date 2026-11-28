@@ -3,7 +3,10 @@ import { ConfigService } from "@nestjs/config";
 import type { Env } from "../../../config/env";
 import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
+import { Announcements } from "../../communication/application/Announcements";
+import { PrismaAnnouncementsRepository } from "../../communication/infrastructure/prisma-announcements";
 import { ExamNotices } from "../../exams/application/ExamNotices";
+import { notifyFamily } from "../../family/infrastructure/family-notify";
 import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
 import { Reminders } from "../../finance/application/Reminders";
 import { PrismaRemindersRepository } from "../../finance/infrastructure/prisma-reminders";
@@ -48,6 +51,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     private readonly settings: AttendanceSettings,
     private readonly payments: Payments,
     private readonly reminders: Reminders,
+    private readonly announcements: Announcements,
   ) {}
 
   onApplicationBootstrap() {
@@ -99,6 +103,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
         await this.runDigests(slug);
         await this.runExamNotices(slug);
         await this.runPayments(slug);
+        await this.runAnnouncements(slug);
       }
     } catch (e) {
       this.logger.warn(`não foi possível ler os colégios: ${(e as Error).message}`);
@@ -132,6 +137,25 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
       }
     } catch (e) {
       this.logger.warn(`pagamentos falharam em ${slug}: ${(e as Error).message}`);
+    }
+  }
+
+  /** Comunicação: os avisos agendados cuja hora chegou. */
+  private async runAnnouncements(slug: string) {
+    try {
+      const entry = await this.directory.findBySlug(slug);
+      if (!entry) return;
+      const db = this.connections.get(entry);
+      const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('announcements') IS NOT NULL AS ok`;
+      if (!ready?.ok) return;
+      const tenant = { slug: entry.slug, name: entry.schoolName };
+      const n = await this.announcements.publishDue(PrismaAnnouncementsRepository.for(db), {
+        staff: this.notifier.for(db, tenant),
+        family: (accountId, m) => notifyFamily(db, { accountId, kind: m.kind, title: m.title, body: m.body, link: m.link, now: new Date() }),
+      });
+      if (n) this.logger.log(`${slug}: ${n} aviso(s) agendado(s) publicado(s)`);
+    } catch (e) {
+      this.logger.warn(`avisos agendados falharam em ${slug}: ${(e as Error).message}`);
     }
   }
 
