@@ -53,7 +53,9 @@ export const announcementBody = z
   .meta({ title: "Announcement", description: "Título, texto, categoria, prioridade, fixar, confirmação de leitura, agendamento (publishAt), expiração e destinatários. action: DRAFT guarda; PUBLISH publica já (ou agenda, com publishAt)." });
 const updateBody = announcementBody.extend({ revision: z.number().int().min(1) }).meta({ title: "AnnouncementUpdate" });
 const patchBody = z.object({ pinned: z.boolean().optional(), expiresAt: z.string().max(40).nullable().optional() }).meta({ title: "AnnouncementPatch", description: "Num aviso publicado: fixar e a expiração." });
-const settingsBody = z.object({ classDirectorsPublish: z.boolean() }).meta({ title: "CommunicationSettings" });
+const settingsBody = z
+  .object({ classDirectorsPublish: z.boolean().optional(), studentsMessage: z.boolean().optional(), staffMessage: z.boolean().optional(), teachersCreateGroups: z.boolean().optional() })
+  .meta({ title: "CommunicationSettings", description: "Diretores de turma publicam para as suas turmas; alunos (com conta) escrevem aos professores; a equipa escreve entre si; professores criam grupos." });
 const categoryBody = z.object({ name: z.string().max(120), archived: z.boolean().optional() }).meta({ title: "AnnouncementCategory" });
 const inboxQuery = new ZodValidationPipe(z.object({ categoria: z.uuid().optional(), q: z.string().max(120).optional(), porLer: z.enum(["1", "0"]).optional(), pagina: z.coerce.number().int().min(1).max(1000).optional() }));
 const listQuery = new ZodValidationPipe(z.object({ estado: z.enum(STATUSES).optional(), categoria: z.uuid().optional(), q: z.string().max(120).optional(), pagina: z.coerce.number().int().min(1).max(1000).optional() }));
@@ -200,7 +202,7 @@ export class AnnouncementsController {
   @Put("settings")
   @ApiOperation({ summary: "Guardar a configuração (os diretores de turma podem publicar para as suas turmas)" })
   @ApiBody({ schema: openApi(settingsBody) })
-  async saveSettings(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(settingsBody)) body: { classDirectorsPublish: boolean }) {
+  async saveSettings(@CurrentTenant() t: TenantContext, @CurrentUser() u: SchoolAccess, @Body(new ZodValidationPipe(settingsBody)) body: z.infer<typeof settingsBody>) {
     return unwrap(await this.announcements.saveSettings(this.repo(t), await this.viewer(t, u), body), COMMUNICATION_HTTP);
   }
 

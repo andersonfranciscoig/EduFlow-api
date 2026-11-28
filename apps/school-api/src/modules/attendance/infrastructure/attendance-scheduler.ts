@@ -4,7 +4,9 @@ import type { Env } from "../../../config/env";
 import { TenantConnections } from "../../../tenancy/tenant-connections";
 import { TenantDirectory } from "../../../tenancy/tenant-directory";
 import { Announcements } from "../../communication/application/Announcements";
+import { Conversations } from "../../communication/application/Conversations";
 import { PrismaAnnouncementsRepository } from "../../communication/infrastructure/prisma-announcements";
+import { PrismaConversationsRepository } from "../../communication/infrastructure/prisma-conversations";
 import { ExamNotices } from "../../exams/application/ExamNotices";
 import { notifyFamily } from "../../family/infrastructure/family-notify";
 import { PrismaExamsRepository } from "../../exams/infrastructure/prisma-exams";
@@ -52,6 +54,7 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
     private readonly payments: Payments,
     private readonly reminders: Reminders,
     private readonly announcements: Announcements,
+    private readonly conversations: Conversations,
   ) {}
 
   onApplicationBootstrap() {
@@ -149,11 +152,18 @@ export class AttendanceScheduler implements OnApplicationBootstrap, OnModuleDest
       const [ready] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('announcements') IS NOT NULL AS ok`;
       if (!ready?.ok) return;
       const tenant = { slug: entry.slug, name: entry.schoolName };
-      const n = await this.announcements.publishDue(PrismaAnnouncementsRepository.for(db), {
+      const notices = {
         staff: this.notifier.for(db, tenant),
-        family: (accountId, m) => notifyFamily(db, { accountId, kind: m.kind, title: m.title, body: m.body, link: m.link, now: new Date() }),
-      });
+        family: (accountId: string, m: { kind: string; title: string; body: string | null; link: string }) => notifyFamily(db, { accountId, kind: m.kind, title: m.title, body: m.body, link: m.link, now: new Date() }),
+      };
+      const n = await this.announcements.publishDue(PrismaAnnouncementsRepository.for(db), notices);
       if (n) this.logger.log(`${slug}: ${n} aviso(s) agendado(s) publicado(s)`);
+      // os grupos ligados a turmas, classes e departamentos acompanham as mudanças do colégio
+      const [groups] = await db.$queryRaw<{ ok: boolean }[]>`SELECT to_regclass('conversations') IS NOT NULL AS ok`;
+      if (groups?.ok) {
+        const g = await this.conversations.syncAll(PrismaConversationsRepository.for(db), notices);
+        if (g) this.logger.log(`${slug}: ${g} grupo(s) de conversa sincronizado(s)`);
+      }
     } catch (e) {
       this.logger.warn(`avisos agendados falharam em ${slug}: ${(e as Error).message}`);
     }

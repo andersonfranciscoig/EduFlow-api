@@ -20,7 +20,7 @@ import {
   TARGET_LABELS,
   type Target,
 } from "../domain/announcements";
-import type { Actor, AnnouncementRow, PrismaAnnouncementsRepository, RecipientKind } from "../infrastructure/prisma-announcements";
+import type { Actor, AnnouncementRow, CommunicationSettings, PrismaAnnouncementsRepository, RecipientKind } from "../infrastructure/prisma-announcements";
 
 type R<T> = Promise<Result<T, CommunicationError>>;
 type Repo = PrismaAnnouncementsRepository;
@@ -441,11 +441,19 @@ export class Announcements {
   async settingsView(repo: Repo, v: StaffViewer) {
     if (!has(v, P.settings)) return fail(communicationError("FORBIDDEN", "Configurar a comunicação exige a permissão de configurar a comunicação."));
     const [s, categories] = await Promise.all([repo.settings(), repo.categories(true)]);
-    return ok({ classDirectorsPublish: s.classDirectorsPublish, updatedBy: s.updatedByName, updatedAt: iso(s.updatedAt), categories });
+    return ok({ classDirectorsPublish: s.classDirectorsPublish, studentsMessage: s.studentsMessage, staffMessage: s.staffMessage, teachersCreateGroups: s.teachersCreateGroups, updatedBy: s.updatedByName, updatedAt: iso(s.updatedAt), categories });
   }
-  async saveSettings(repo: Repo, v: StaffViewer, s: { classDirectorsPublish: boolean }): R<{ saved: true }> {
+  /** Guarda o que vier (o resto fica como está). */
+  async saveSettings(repo: Repo, v: StaffViewer, s: Partial<CommunicationSettings>): R<{ saved: true }> {
     if (!has(v, P.settings)) return fail(communicationError("FORBIDDEN", "Configurar a comunicação exige a permissão de configurar a comunicação."));
-    await repo.saveSettings(s, { id: v.userId, name: v.name }, this.clock.now());
+    const cur = await repo.settings();
+    const next: CommunicationSettings = {
+      classDirectorsPublish: s.classDirectorsPublish ?? cur.classDirectorsPublish,
+      studentsMessage: s.studentsMessage ?? cur.studentsMessage,
+      staffMessage: s.staffMessage ?? cur.staffMessage,
+      teachersCreateGroups: s.teachersCreateGroups ?? cur.teachersCreateGroups,
+    };
+    await repo.saveSettings(next, { id: v.userId, name: v.name }, this.clock.now());
     return ok({ saved: true as const });
   }
   async saveCategory(repo: Repo, v: StaffViewer, id: string | null, input: { name: string; archived?: boolean }): R<{ id: string }> {
